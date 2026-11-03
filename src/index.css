@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-cinzel: 'Cinzel', serif;
+    --font-cinzel-dec: 'Cinzel Decorative', cursive;
+    --font-medieval: 'MedievalSharp', cursive;
+    --font-inter: 'Inter', sans-serif;
+  }
+
+  body {
+    font-family: var(--font-inter);
+    background-color: #0b090e;
+    color: #e5ddd0;
+  }
+
+  h1, h2, h3, .font-cinzel {
+    font-family: var(--font-cinzel);
+  }
+
+  .font-medieval {
+    font-family: var(--font-medieval);
+  }
+
+  .font-cinzel-dec {
+    font-family: var(--font-cinzel-dec);
+  }
+}
+
+/* Custom dark tavern scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #120f18;
+}
+::-webkit-scrollbar-thumb {
+  background: #382c46;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b45309;
+}
+
+/* Atmospheric effects */
+.tavern-wood-panel {
+  background: linear-gradient(180deg, rgba(32, 24, 38, 0.95) 0%, rgba(18, 14, 22, 0.98) 100%);
+  border: 1px solid rgba(180, 83, 9, 0.25);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(251, 191, 36, 0.1);
+}
+
+.tavern-wood-panel-hover {
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.tavern-wood-panel-hover:hover {
+  border-color: rgba(245, 158, 11, 0.5);
+  transform: translateY(-2px);
+  box-shadow: 0 15px 35px -10px rgba(217, 119, 6, 0.25), inset 0 1px 0 rgba(251, 191, 36, 0.2);
+}
+
+.gold-glow {
+  text-shadow: 0 0 15px rgba(245, 158, 11, 0.6);
+}
+
+.parchment-box {
+  background: radial-gradient(circle at 50% 50%, #1e1925 0%, #130f1a 100%);
+  border: 1px solid rgba(217, 119, 6, 0.3);
+}
+
+/* Torch ember flicker */
+@keyframes flameFlicker {
+  0%, 100% { opacity: 0.9; transform: scale(1); filter: drop-shadow(0 0 20px rgba(245, 158, 11, 0.4)); }
+  25% { opacity: 0.82; transform: scale(0.99) translateY(1px); filter: drop-shadow(0 0 16px rgba(234, 88, 12, 0.35)); }
+  50% { opacity: 0.96; transform: scale(1.02) translateY(-1px); filter: drop-shadow(0 0 25px rgba(245, 158, 11, 0.5)); }
+  75% { opacity: 0.88; transform: scale(1.01); filter: drop-shadow(0 0 18px rgba(217, 119, 6, 0.4)); }
+}
+
+.torch-glow {
+  animation: flameFlicker 3s infinite ease-in-out;
+}
+
+/* Dice roll animation */
+@keyframes diceSpin {
+  0% { transform: rotate(0deg) scale(0.85); }
+  50% { transform: rotate(360deg) scale(1.15); }
+  100% { transform: rotate(720deg) scale(1); }
+}
+
+.animate-dice-roll {
+  animation: diceSpin 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
