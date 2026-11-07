@@ -12,6 +12,8 @@ import {
   importCampaignsFromJson, 
   createNewCampaign 
 } from '../utils/campaignStorage';
+import { getLastBackupAt } from '../utils/backupReminder';
+import { formatLastPlayed } from '../utils/saveSlots';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from '../data/gameData';
 
 export default function CampaignsModal({ 
@@ -27,6 +29,7 @@ export default function CampaignsModal({
   const [newCharId, setNewCharId] = useState(PRESET_CHARACTERS[0].id);
   const [newTitle, setNewTitle] = useState('');
   const fileInputRef = useRef(null);
+  const [lastBackupAt, setLastBackupAt] = useState(null);
 
   // Load campaigns whenever modal opens
   useEffect(() => {
@@ -34,6 +37,7 @@ export default function CampaignsModal({
       refreshCampaigns();
       setIsCreatingNew(false);
       setNotification(null);
+      setLastBackupAt(getLastBackupAt());
     }
   }, [isOpen]);
 
@@ -73,6 +77,7 @@ export default function CampaignsModal({
   const handleExportSingle = (campaign, e) => {
     e.stopPropagation();
     exportCampaignAsJson(campaign.id);
+    setLastBackupAt(getLastBackupAt());
     showNotification(`Archivo exportado: ${campaign.title}.json`);
   };
 
@@ -200,7 +205,10 @@ export default function CampaignsModal({
           <div className="flex items-center gap-2">
             {campaigns.length > 0 && (
               <button
-                onClick={exportAllCampaignsAsJson}
+                onClick={() => {
+                  exportAllCampaignsAsJson();
+                  setLastBackupAt(getLastBackupAt());
+                }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-emerald-400 transition-colors"
                 title="Descargar una copia de seguridad de todas tus partidas"
               >
@@ -477,6 +485,11 @@ export default function CampaignsModal({
         {/* Modal Footer info note */}
         <div className="p-4 bg-[#110e17] border-t border-stone-800 text-center text-xs text-stone-500 font-mono">
           <span>🔒 Privacidad 100% local: las partidas se almacenan en el navegador. Usa "Exportar JSON" para crear copias o llevarlas a otro dispositivo.</span>
+          <span className={`block mt-1 ${lastBackupAt ? 'text-stone-400' : 'text-amber-500/80'}`}>
+            {lastBackupAt
+              ? `Última copia de seguridad: ${formatLastPlayed(lastBackupAt).toLowerCase()}`
+              : 'Aún no has hecho ninguna copia de seguridad.'}
+          </span>
         </div>
 
       </div>

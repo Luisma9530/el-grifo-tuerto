@@ -14,6 +14,7 @@ import SettingsModal from './components/SettingsModal';
 import GeminiConnectModal from './components/GeminiConnectModal';
 import CampaignsModal from './components/CampaignsModal';
 import WorldSavesModal from './components/WorldSavesModal';
+import BackupReminder from './components/BackupReminder';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from './data/gameData';
 import { getStoredGeminiKeys } from './utils/gameEngine';
 import { 
@@ -158,6 +159,9 @@ export default function App() {
             onEnterTavern={handleStartGame}
             onOpenInvite={() => setIsInviteOpen(true)}
           />
+
+          {/* Only on the landing page, so it never interrupts a game */}
+          <BackupReminder refreshKey={`${campaignsCount}-${currentView}`} />
         </>
       ) : (
         <TavernApp

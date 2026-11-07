@@ -1,6 +1,8 @@
 // Persistent Campaign Management for El Grifo Tuerto
 // Handles multiple campaigns in localStorage, auto-saving, JSON export, and JSON import.
 
+import { markCampaignsExported } from './backupReminder';
+
 const CAMPAIGNS_STORAGE_KEY = 'tavern_saved_campaigns';
 const ACTIVE_CAMPAIGN_ID_KEY = 'tavern_active_campaign_id';
 
@@ -214,6 +216,7 @@ export function exportCampaignAsJson(id) {
     `campana_${sanitizeFileName(campaign.title)}_${new Date().toISOString().slice(0, 10)}.json`,
     JSON.stringify(exportPayload, null, 2)
   );
+  markCampaignsExported([campaign.id]);
 }
 
 /**
@@ -239,6 +242,7 @@ export function exportAllCampaignsAsJson() {
     `grifo_tuerto_todas_las_campanas_${new Date().toISOString().slice(0, 10)}.json`,
     JSON.stringify(exportPayload, null, 2)
   );
+  markCampaignsExported(campaigns.map(c => c.id));
 }
 
 /**
