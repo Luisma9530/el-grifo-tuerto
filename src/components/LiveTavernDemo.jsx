@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Send, Dice5, Sparkles, RefreshCw, Volume2, ShieldAlert } from 'lucide-react';
-import { rollDie, rollCheckWithStat } from '../utils/gameEngine';
+import { rollDie } from '../utils/gameEngine';
 import { tavernAudio } from '../utils/audio';
 
 export default function LiveTavernDemo({ onEnterFullTavern }) {

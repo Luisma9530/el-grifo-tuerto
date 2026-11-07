@@ -177,7 +177,9 @@ class TavernAudioEngine {
         try {
           this.ambienceNode.source.stop();
           this.ambienceNode.source.disconnect();
-        } catch (e) {}
+        } catch {
+          // source may already be stopped
+        }
         this.ambienceNode = null;
       }
       this.isAmbiencePlaying = false;

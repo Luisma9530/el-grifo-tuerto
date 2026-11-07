@@ -1,8 +1,8 @@
 import React from 'react';
-import { Dice5, Users, Sparkles, Shield, ArrowRight, Flame } from 'lucide-react';
+import { Dice5, Users, Sparkles, Shield, ArrowRight, Flame, BookOpen } from 'lucide-react';
 import { TAVERN_STATS } from '../data/gameData';
 
-export default function Hero({ onStartGame, onScrollToWorlds }) {
+export default function Hero({ onStartGame, onScrollToWorlds, onOpenCampaigns, campaignsCount = 0 }) {
   return (
     <section className="relative overflow-hidden pt-12 pb-20 lg:pt-16 lg:pb-28">
       {/* Background radial ambient lights */}
@@ -42,6 +42,16 @@ export default function Hero({ onStartGame, onScrollToWorlds }) {
             <Dice5 className="w-6 h-6 animate-spin-slow" />
             <span>Pasa a la Taberna — Jugar Gratis</span>
           </button>
+
+          {campaignsCount > 0 && (
+            <button
+              onClick={onOpenCampaigns}
+              className="w-full sm:w-auto px-7 py-4 rounded-xl bg-stone-900/90 border border-amber-500/60 hover:border-amber-400 text-amber-300 font-cinzel font-bold text-base hover:bg-stone-850 active:scale-95 transition-all flex items-center justify-center gap-2.5 shadow-lg shadow-amber-900/20"
+            >
+              <BookOpen className="w-5 h-5 text-amber-400" />
+              <span>Grimorio de Campañas ({campaignsCount})</span>
+            </button>
+          )}
 
           <button
             onClick={onScrollToWorlds}

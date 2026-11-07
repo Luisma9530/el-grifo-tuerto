@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "node ./node_modules/vite/bin/vite.js",
     "build": "node ./node_modules/vite/bin/vite.js build",
-    "preview": "node ./node_modules/vite/bin/vite.js preview"
+    "preview": "node ./node_modules/vite/bin/vite.js preview",
+    "lint": "node ./node_modules/eslint/bin/eslint.js .",
+    "test": "node ./node_modules/vitest/vitest.mjs run"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -16,11 +18,18 @@
     "tailwind-merge": "^3.0.1"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.0.6",
+    "@eslint/js": "^9.39.5",
+    "@tailwindcss/vite": "^4.3.5",
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
     "@vitejs/plugin-react": "^4.3.4",
-    "tailwindcss": "^4.0.6",
-    "vite": "^6.1.0"
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.14.0",
+    "jsdom": "^26.1.0",
+    "tailwindcss": "^4.3.5",
+    "vite": "^6.1.0",
+    "vitest": "^4.1.11"
   }
 }

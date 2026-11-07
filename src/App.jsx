@@ -12,8 +12,18 @@ import WorldForgeModal from './components/WorldForgeModal';
 import CharacterCreatorModal from './components/CharacterCreatorModal';
 import SettingsModal from './components/SettingsModal';
 import GeminiConnectModal from './components/GeminiConnectModal';
+import CampaignsModal from './components/CampaignsModal';
+import WorldSavesModal from './components/WorldSavesModal';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from './data/gameData';
 import { getStoredGeminiKeys } from './utils/gameEngine';
+import { 
+  getAllCampaigns, 
+  getActiveCampaignId, 
+  getCampaignById, 
+  createNewCampaign,
+  deleteCampaign,
+  setActiveCampaignId
+} from './utils/campaignStorage';
 
 export default function App() {
   const [currentView, setCurrentView] = useState('landing'); // 'landing' | 'app'
@@ -21,26 +31,85 @@ export default function App() {
   const [activeCharacter, setActiveCharacter] = useState(PRESET_CHARACTERS[0]);
   const [geminiKeys, setGeminiKeys] = useState(() => getStoredGeminiKeys());
   
+  // Persistent Campaign State
+  const [activeCampaign, setActiveCampaign] = useState(() => {
+    const activeId = getActiveCampaignId();
+    return activeId ? getCampaignById(activeId) : null;
+  });
+  const [campaignsCount, setCampaignsCount] = useState(() => getAllCampaigns().length);
+
   // Modals state
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [isWorldForgeOpen, setIsWorldForgeOpen] = useState(false);
   const [isCharacterCreatorOpen, setIsCharacterCreatorOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isGeminiConnectOpen, setIsGeminiConnectOpen] = useState(false);
+  const [isCampaignsOpen, setIsCampaignsOpen] = useState(false);
+  const [worldSavesTarget, setWorldSavesTarget] = useState(null); // world whose save slots are shown
 
+  const refreshCampaignsCount = () => {
+    setCampaignsCount(getAllCampaigns().length);
+  };
+
+  // Choosing a world opens its save slots instead of starting right away
   const handleSelectWorld = (world) => {
+    setWorldSavesTarget(world);
+  };
+
+  const handleStartNewInWorld = (world) => {
+    setWorldSavesTarget(null);
     setActiveWorld(world);
+    const newCamp = createNewCampaign({
+      world,
+      character: activeCharacter,
+      title: `${activeCharacter.name} — ${world.name}`
+    });
+    setActiveCampaign(newCamp);
+    refreshCampaignsCount();
     setCurrentView('app');
   };
 
   const handleCreateCustomWorld = (customWorld) => {
     setActiveWorld(customWorld);
+    const newCamp = createNewCampaign({
+      world: customWorld,
+      character: activeCharacter,
+      title: `${activeCharacter.name} — ${customWorld.name}`
+    });
+    setActiveCampaign(newCamp);
+    refreshCampaignsCount();
+    setCurrentView('app');
+  };
+
+  const handleSelectCampaign = (campaign) => {
+    setActiveCampaign(campaign);
+    if (campaign.world) setActiveWorld(campaign.world);
+    if (campaign.character) setActiveCharacter(campaign.character);
+    refreshCampaignsCount();
+    setCurrentView('app');
+  };
+
+  const handleStartGame = () => {
+    // If we have an active campaign, resume it; otherwise use activeWorld & activeCharacter
+    const activeId = getActiveCampaignId();
+    if (activeId) {
+      const camp = getCampaignById(activeId);
+      if (camp) {
+        setActiveCampaign(camp);
+        if (camp.world) setActiveWorld(camp.world);
+        if (camp.character) setActiveCharacter(camp.character);
+      }
+    }
     setCurrentView('app');
   };
 
   const handleClearProgress = () => {
-    localStorage.removeItem('tavern_gemini_key');
-    localStorage.removeItem('tavern_gemini_keys');
+    // "Reiniciar Progreso" resets the current chronicle: drop the active campaign
+    // (other saved campaigns in the Grimorio are kept).
+    // Gemini API keys are intentionally kept.
+    const activeId = getActiveCampaignId() || activeCampaign?.id;
+    if (activeId) deleteCampaign(activeId);
+    setActiveCampaignId(null);
     window.location.reload();
   };
 
@@ -55,20 +124,24 @@ export default function App() {
             onOpenInvite={() => setIsInviteOpen(true)}
             onOpenWorldForge={() => setIsWorldForgeOpen(true)}
             onOpenGeminiConnect={() => setIsGeminiConnectOpen(true)}
+            onOpenCampaigns={() => setIsCampaignsOpen(true)}
+            campaignsCount={campaignsCount}
             keysCount={geminiKeys.length}
           />
 
           <main className="flex-1">
             <Hero
-              onStartGame={() => setCurrentView('app')}
+              onStartGame={handleStartGame}
               onScrollToWorlds={() => {
                 const el = document.getElementById('worlds');
                 el?.scrollIntoView({ behavior: 'smooth' });
               }}
+              onOpenCampaigns={() => setIsCampaignsOpen(true)}
+              campaignsCount={campaignsCount}
             />
 
             <LiveTavernDemo
-              onEnterFullTavern={() => setCurrentView('app')}
+              onEnterFullTavern={handleStartGame}
             />
 
             <Features />
@@ -82,24 +155,52 @@ export default function App() {
           </main>
 
           <Footer
-            onEnterTavern={() => setCurrentView('app')}
+            onEnterTavern={handleStartGame}
             onOpenInvite={() => setIsInviteOpen(true)}
           />
         </>
       ) : (
         <TavernApp
+          activeCampaign={activeCampaign}
           activeWorld={activeWorld}
           activeCharacter={activeCharacter}
-          onBackToLanding={() => setCurrentView('landing')}
+          onBackToLanding={() => {
+            refreshCampaignsCount();
+            setCurrentView('landing');
+          }}
           onOpenInvite={() => setIsInviteOpen(true)}
           onOpenCharacterCreator={() => setIsCharacterCreatorOpen(true)}
-          onOpenWorldForge={() => setIsWorldForgeOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenGeminiConnect={() => setIsGeminiConnectOpen(true)}
+          onOpenCampaigns={() => setIsCampaignsOpen(true)}
         />
       )}
 
       {/* Global Modals */}
+      <WorldSavesModal
+        isOpen={!!worldSavesTarget}
+        world={worldSavesTarget}
+        onClose={() => {
+          setWorldSavesTarget(null);
+          refreshCampaignsCount();
+        }}
+        onLoadCampaign={(campaign) => {
+          setWorldSavesTarget(null);
+          handleSelectCampaign(campaign);
+        }}
+        onCreateNew={() => handleStartNewInWorld(worldSavesTarget)}
+      />
+
+      <CampaignsModal
+        isOpen={isCampaignsOpen}
+        onClose={() => {
+          setIsCampaignsOpen(false);
+          refreshCampaignsCount();
+        }}
+        activeCampaignId={activeCampaign?.id}
+        onSelectCampaign={handleSelectCampaign}
+      />
+
       <InviteModal
         isOpen={isInviteOpen}
         onClose={() => setIsInviteOpen(false)}
@@ -127,6 +228,10 @@ export default function App() {
         onOpenGeminiConnect={() => {
           setIsSettingsOpen(false);
           setIsGeminiConnectOpen(true);
+        }}
+        onOpenCampaigns={() => {
+          setIsSettingsOpen(false);
+          setIsCampaignsOpen(true);
         }}
       />
 

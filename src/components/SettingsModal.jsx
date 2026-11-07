@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Key, Volume2, Trash2, Check, Sparkles } from 'lucide-react';
+import { X, Key, Volume2, Trash2, Check, Sparkles, BookOpen } from 'lucide-react';
 
-export default function SettingsModal({ isOpen, onClose, onClearData, onOpenGeminiConnect }) {
+export default function SettingsModal({ isOpen, onClose, onClearData, onOpenGeminiConnect, onOpenCampaigns }) {
   const [apiKey, setApiKey] = useState('');
   const [saved, setSaved] = useState(false);
 
@@ -94,6 +94,33 @@ export default function SettingsModal({ isOpen, onClose, onClearData, onOpenGemi
           )}
         </div>
 
+        {/* Campaigns Manager */}
+        {onOpenCampaigns && (
+          <div className="p-4 rounded-xl bg-[#1a1522] border border-amber-900/30 mb-6">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-amber-400" />
+                <h4 className="font-cinzel text-sm font-bold text-stone-100">
+                  Grimorio de Campañas
+                </h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenCampaigns();
+                }}
+                className="px-3 py-1.5 rounded-lg bg-amber-600/90 hover:bg-amber-500 text-stone-950 font-bold text-xs flex items-center gap-1.5 transition-colors"
+              >
+                <span>Abrir Gestor</span>
+              </button>
+            </div>
+            <p className="text-xs text-stone-400 leading-relaxed">
+              Gestiona todas tus partidas guardadas, exporta copias en formato .json o importa aventuras de otros dispositivos.
+            </p>
+          </div>
+        )}
+
         {/* Reset Cache / Data */}
         <div className="p-4 rounded-xl bg-red-950/20 border border-red-900/30 mb-6">
           <div className="flex items-center gap-2 mb-1">
@@ -103,7 +130,7 @@ export default function SettingsModal({ isOpen, onClose, onClearData, onOpenGemi
             </h4>
           </div>
           <p className="text-xs text-stone-400 mb-3">
-            Borra los mensajes guardados y reinicia tu personaje y mapa al estado inicial del mundo.
+            Borra la partida activa (crónica, personaje y mapa). Tus claves de Gemini y el resto de partidas del Grimorio se conservan.
           </p>
           <button
             onClick={() => {

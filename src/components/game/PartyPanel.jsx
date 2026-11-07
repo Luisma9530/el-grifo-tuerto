@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Heart, Shield, Coins, Users, Backpack, Coffee, Plus, Sparkles } from 'lucide-react';
-import { getModifier, rollCheckWithStat } from '../../utils/gameEngine';
+import { getModifier } from '../../utils/gameEngine';
 import { TAVERN_MENU } from '../../data/gameData';
 import { tavernAudio } from '../../utils/audio';
 

@@ -8,7 +8,7 @@ export default function DiceRollerTray({ onSendRollToChat }) {
   const [lastRoll, setLastRoll] = useState(null);
   const [modifier, setModifier] = useState(0);
   const [isRolling, setIsRolling] = useState(false);
-  const [history, setHistory] = useState([]);
+  const [, setHistory] = useState([]);
 
   const diceTypes = [
     { sides: 4, label: 'd4', shape: '▲' },

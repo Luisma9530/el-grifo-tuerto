@@ -1,8 +1,17 @@
 import React, { useState } from 'react';
-import { Volume2, VolumeX, Users, Flame, Dice5, Sparkles, Compass } from 'lucide-react';
+import { Volume2, VolumeX, Users, Flame, Dice5, Sparkles, Compass, BookOpen } from 'lucide-react';
 import { tavernAudio } from '../utils/audio';
 
-export default function Navbar({ currentView, setView, onOpenInvite, onOpenWorldForge, onOpenGeminiConnect, keysCount = 0 }) {
+export default function Navbar({ 
+  currentView, 
+  setView, 
+  onOpenInvite, 
+  onOpenWorldForge, 
+  onOpenGeminiConnect, 
+  onOpenCampaigns,
+  campaignsCount = 0,
+  keysCount = 0 
+}) {
   const [isAudioActive, setIsAudioActive] = useState(false);
 
   const toggleSound = () => {
@@ -70,10 +79,36 @@ export default function Navbar({ currentView, setView, onOpenInvite, onOpenWorld
             <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
             Forja de Mundos
           </button>
+          <button 
+            onClick={onOpenCampaigns}
+            className="hover:text-amber-400 transition-colors text-stone-300 flex items-center gap-1.5"
+          >
+            <BookOpen className="w-4 h-4 text-amber-500" />
+            <span>Mis Campañas</span>
+            {campaignsCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                {campaignsCount}
+              </span>
+            )}
+          </button>
         </nav>
 
         {/* Action Controls */}
         <div className="flex items-center gap-3">
+          {/* Quick Campaigns button for mobile & desktop */}
+          <button
+            onClick={onOpenCampaigns}
+            className="p-2 sm:px-3 sm:py-2 rounded-lg bg-stone-900/90 border border-amber-900/40 hover:border-amber-600/60 text-stone-200 text-xs font-semibold flex items-center gap-1.5 transition-all"
+            title="Abrir Grimorio de Campañas guardadas"
+          >
+            <BookOpen className="w-4 h-4 text-amber-400" />
+            <span className="hidden sm:inline">Campañas</span>
+            {campaignsCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300">
+                {campaignsCount}
+              </span>
+            )}
+          </button>
           {/* Audio Ambience Toggle */}
           <button
             onClick={toggleSound}

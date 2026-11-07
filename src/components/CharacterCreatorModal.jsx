@@ -211,7 +211,7 @@ export default function CharacterCreatorModal({ isOpen, onClose, onSaveCharacter
                 { key: 'int', label: 'INT', desc: 'Inteligencia' },
                 { key: 'sab', label: 'SAB', desc: 'Sabiduría' },
                 { key: 'car', label: 'CAR', desc: 'Carisma' }
-              ].map(({ key, label, desc }) => (
+              ].map(({ key, label }) => (
                 <div key={key} className="p-2 rounded-lg bg-[#181320] border border-stone-800">
                   <div className="text-[10px] text-stone-400 font-mono">{label}</div>
                   <input
