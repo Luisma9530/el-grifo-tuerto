@@ -58,6 +58,74 @@ describe('rollCheckWithStat', () => {
   });
 });
 
+describe('generateDMResponse (Gemini)', () => {
+  const geminiReply = payload => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }] })
+  });
+  const payload = { narracion: 'Duncan ríe.', usaTirada: true, danio: 2, curacion: 0, oro: 5, opciones: ['Seguir'] };
+
+  it('rolls the d20 itself, sends it to the model and reports it when used', async () => {
+    forceD20(17);
+    const fetchMock = vi.fn().mockResolvedValue(geminiReply(payload));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await generateDMResponse({ playerAction: 'Ataco', character, world, apiKeys: ['clave-de-prueba-123'] });
+
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toContain('gemini-flash-latest');
+    expect(url).not.toContain('clave-de-prueba-123'); // key goes in a header, not the URL
+    expect(options.headers['x-goog-api-key']).toBe('clave-de-prueba-123');
+    const body = JSON.parse(options.body);
+    expect(body.contents[0].parts[0].text).toContain('ha salido: 17');
+    expect(body.generationConfig.responseMimeType).toBe('application/json');
+
+    expect(res).toMatchObject({
+      text: 'Duncan ríe.', source: 'gemini', damageTaken: 2, healing: 0, goldEarned: 5,
+      roll: { sides: 20, value: 17 }, suggestedActions: ['Seguir']
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it('does not show a die when the model ignored the roll or the player rolled', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(geminiReply({ ...payload, usaTirada: false })));
+    const ignored = await generateDMResponse({ playerAction: 'Saludo', character, world, apiKeys: ['clave-de-prueba-123'] });
+    expect(ignored.roll).toBeNull();
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(geminiReply(payload)));
+    const playerRoll = { rawRoll: 9, modifier: 3, total: 12, dc: 12, success: true, statName: 'Destreza' };
+    const checked = await generateDMResponse({ playerAction: 'x', character, world, apiKeys: ['clave-de-prueba-123'], playerRoll });
+    expect(checked.roll).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it('retries in plain-text mode if the structured request is rejected', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 400, json: async () => ({}) })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ candidates: [{ content: { parts: [{ text: 'Duncan gruñe.\nOPCIONES: Beber | Salir' }] } }] })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await generateDMResponse({ playerAction: 'x', character, world, apiKeys: ['clave-de-prueba-123'] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).generationConfig).toBeUndefined();
+    expect(res).toMatchObject({ text: 'Duncan gruñe.', source: 'gemini', suggestedActions: ['Beber', 'Salir'] });
+    vi.unstubAllGlobals();
+  });
+
+  it('falls back to the procedural engine when every key fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 429, json: async () => ({}) }));
+    const res = await generateDMResponse({ playerAction: 'Saludo al tabernero', character, world, apiKeys: ['clave-de-prueba-123'] });
+    expect(res.source).toBeUndefined();
+    expect(res.text.length).toBeGreaterThan(20);
+    vi.unstubAllGlobals();
+  });
+});
+
 describe('generateDMResponse (procedural engine, no API keys)', () => {
   it('reports the roll Duncan made when the narration mentions it', async () => {
     forceD20(15);

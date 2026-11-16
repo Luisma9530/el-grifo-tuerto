@@ -1,5 +1,6 @@
 // Core RPG & Story Game Engine for El Grifo Tuerto
 import { tavernAudio } from './audio';
+import { buildDMPrompt, parseDMReply, DM_RESPONSE_SCHEMA } from './dmPrompt';
 
 // Helper to calculate D&D stat modifier from score (e.g. 16 -> +3, 10 -> 0, 8 -> -1)
 export function getModifier(score) {
@@ -121,6 +122,37 @@ export async function testGeminiKey(key) {
   }
 }
 
+async function postGemini(key, prompt, generationConfig) {
+  return fetch(GEMINI_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      ...(generationConfig ? { generationConfig } : {})
+    })
+  });
+}
+
+// Ask Gemini for Duncan's reply. Requests structured JSON (narration + damage, gold,
+// whether the d20 was used); if the model rejects that request format (HTTP 400),
+// retries once with the plain-text format.
+// Returns { ok: true, text } or { ok: false, status }.
+async function askGemini(key, context) {
+  let response = await postGemini(key, buildDMPrompt({ ...context, structured: true }), {
+    responseMimeType: 'application/json',
+    responseSchema: DM_RESPONSE_SCHEMA
+  });
+
+  if (response.status === 400) {
+    response = await postGemini(key, buildDMPrompt({ ...context, structured: false }), null);
+  }
+  if (!response.ok) return { ok: false, status: response.status };
+
+  const data = await response.json();
+  const text = data.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('') || '';
+  return { ok: true, text };
+}
+
 // Module-level rotation pointer for Round-Robin multi-player token pool
 let currentKeyRotationIndex = 0;
 
@@ -148,82 +180,37 @@ export async function generateDMResponse({ playerAction, character, world, histo
   // If we have one or more Gemini keys in the pool, attempt generation with Round-Robin & Fallback
   if (pool.length > 0) {
     const startIndex = currentKeyRotationIndex % pool.length;
-    
-    // Format recent chat history into clear narrative context to preserve 100% of the storyline across key swaps
-    const recentHistoryText = (history || [])
-      .slice(-6)
-      .map(m => `${m.sender === 'player' ? (character.name || 'Aventurero') : 'Maese Duncan (DM)'}: ${m.text}`)
-      .join('\n\n');
+
+    // The die is rolled here, not by the AI: Duncan must use this number when the
+    // action needs a roll, and the UI shows the 3D die if he did.
+    const d20 = playerRoll ? playerRoll.rawRoll : rollDie(20, { silent: true });
 
     for (let attempt = 0; attempt < pool.length; attempt++) {
       const activeIdx = (startIndex + attempt) % pool.length;
       const keyToUse = pool[activeIdx];
 
       try {
-        const response = await fetch(GEMINI_ENDPOINT, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': keyToUse },
-          body: JSON.stringify({
-            contents: [
-              {
-                role: 'user',
-                parts: [{
-                  text: `Eres "Maese Duncan", el veterano, tosco, ingenioso y carismático tabernero tuerto y Dungeon Master de la taberna "El Grifo Tuerto".
-Estás dirigiendo una partida de rol estilo D&D 5e en el mundo: "${world.name}" (${world.genre}).
-El jugador encarna a ${character.name}, un ${character.race} ${character.class} (HP: ${character.hp}/${character.maxHp}, Oro: ${character.gold} monedas).
+        const reply = await askGemini(keyToUse, { playerAction, character, world, history, d20, playerRoll });
 
-Crónica previa de la historia (manten la coherencia con estos eventos):
-"""
-${recentHistoryText || 'Inicio de la aventura en la taberna.'}
-"""
-
-El jugador acaba de realizar la siguiente acción:
-"${playerAction}"
-
-Instrucciones:
-1. Responde con tu inconfundible voz de Maese Duncan (con toques de humor negro, sabiduría de taberna, descripciones vívidas y consecuencias palpables).
-2. Determina el resultado de su acción respetando los hechos previos. Si requirió una tirada o acción peligrosa, narra el éxito o contratiempo.
-3. Si sufre daño o gana algo, indícalo de forma dramática pero breve.
-4. Concluye planteando un dilema inmediato o preguntando qué hará ahora.
-5. Al final de tu respuesta, en una línea separada que empiece con "OPCIONES:", proporciona 3 o 4 sugerencias breves de acción separadas por una pleca "|". Por ejemplo: OPCIONES: Sacar el arma | Negociar con el tabernero | Escabullirse por la puerta trasera.
-Mantén la respuesta en español, entre 2 y 4 párrafos inmersivos.`
-                }]
-              }
-            ]
-          })
-        });
-
-        if (response.ok) {
-          // Advance rotation index for the next player action
-          currentKeyRotationIndex = (activeIdx + 1) % pool.length;
-
-          const data = await response.json();
-          const fullText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (fullText) {
-            let text = fullText;
-            let suggestedActions = [];
-            if (text.includes('OPCIONES:')) {
-              const parts = text.split('OPCIONES:');
-              text = parts[0].trim();
-              suggestedActions = parts[1].split('|').map(s => s.trim()).filter(Boolean);
-            }
+        if (reply.ok) {
+          const parsed = parseDMReply(reply.text, character);
+          if (parsed) {
+            // Advance rotation index for the next player action
+            currentKeyRotationIndex = (activeIdx + 1) % pool.length;
             return {
-              text,
-              suggestedActions: suggestedActions.length > 0 ? suggestedActions : [
-                'Inspeccionar los alrededores',
-                'Hablar con Duncan sobre el asunto',
-                'Preparar un arma',
-                'Buscar una salida oculta'
-              ],
-              damageTaken: 0,
-              goldEarned: 0,
+              text: parsed.text,
+              suggestedActions: parsed.suggestedActions,
+              damageTaken: parsed.damageTaken,
+              healing: parsed.healing,
+              goldEarned: parsed.goldEarned,
+              roll: parsed.usedRoll && !playerRoll ? { sides: 20, value: d20 } : null,
               source: 'gemini',
               keyIndex: activeIdx,
               totalKeys: pool.length
             };
           }
         } else {
-          console.warn(`[Duncan Engine] Clave ${activeIdx + 1}/${pool.length} devolvió HTTP ${response.status}. Rotando a la siguiente clave del grupo...`);
+          console.warn(`[Duncan Engine] Clave ${activeIdx + 1}/${pool.length} devolvió HTTP ${reply.status}. Rotando a la siguiente clave del grupo...`);
         }
       } catch (e) {
         console.warn(`[Duncan Engine] Error de conexión con clave ${activeIdx + 1}:`, e);
@@ -441,6 +428,7 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     text,
     suggestedActions,
     damageTaken,
+    healing: 0,
     goldEarned,
     // Only when Duncan's own roll is mentioned in the narration
     roll: !playerRoll && text.includes('🎲') ? { sides: 20, value: rollResult } : null

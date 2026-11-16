@@ -227,12 +227,15 @@ export default function TavernApp({
         await animateRoll({ ...response.roll, label: 'Tirada de Maese Duncan' });
       }
 
-      // Apply damage or gold consequences
-      if (response.damageTaken > 0 || response.goldEarned > 0) {
+      // Apply the consequences of the scene to the character sheet
+      const damage = response.damageTaken || 0;
+      const healing = response.healing || 0;
+      const goldChange = response.goldEarned || 0;
+      if (damage || healing || goldChange) {
         setCharacter(prev => ({
           ...prev,
-          hp: Math.max(0, prev.hp - response.damageTaken),
-          gold: prev.gold + response.goldEarned
+          hp: Math.min(prev.maxHp, Math.max(0, prev.hp - damage + healing)),
+          gold: Math.max(0, prev.gold + goldChange)
         }));
       }
 
