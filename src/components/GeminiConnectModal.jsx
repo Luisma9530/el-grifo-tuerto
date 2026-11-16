@@ -311,21 +311,14 @@ export default function GeminiConnectModal({ isOpen, onClose, onKeysUpdated }) {
                   </div>
                 </div>
 
-                {/* Capacity Meter */}
-                <div className="mt-4 pt-3 border-t border-amber-950/60 grid grid-cols-3 gap-2 text-center text-xs">
-                  <div className="p-2 rounded bg-stone-900/60 border border-stone-800">
-                    <div className="text-[10px] text-stone-400 font-mono">CLAVES ACTIVAS</div>
-                    <div className="text-base font-bold text-amber-300">{keysList.length}</div>
-                  </div>
-                  <div className="p-2 rounded bg-stone-900/60 border border-stone-800">
-                    <div className="text-[10px] text-stone-400 font-mono">LÍMITE POR MINUTO</div>
-                    <div className="text-base font-bold text-emerald-400">{totalRPM} req/min</div>
-                  </div>
-                  <div className="p-2 rounded bg-stone-900/60 border border-stone-800">
-                    <div className="text-[10px] text-stone-400 font-mono">CUOTA TOTAL DÍA</div>
-                    <div className="text-base font-bold text-cyan-400">{totalDaily} req</div>
-                  </div>
+                {/* Pool summary (real limits are set by Google and change over time) */}
+                <div className="mt-4 pt-3 border-t border-amber-950/60 flex items-center justify-between gap-3 text-xs">
+                  <span className="text-[10px] text-stone-400 font-mono">CLAVES ACTIVAS</span>
+                  <span className="text-base font-bold text-amber-300">{keysList.length}</span>
                 </div>
+                <p className="mt-2 text-[11px] text-stone-500">
+                  Con varias claves, la taberna las va alternando para repartir la cuota gratuita de cada una.
+                </p>
               </div>
 
               {/* Add Key to Pool */}
