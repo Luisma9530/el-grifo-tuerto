@@ -10,6 +10,7 @@ import {
   backgroundSkills, speciesSkillOptions, classSkillOptions, isExtraFeatAllowed, randomName
 } from '../../utils/characterBuilder';
 import { tavernAudio } from '../../utils/audio';
+import { spellRows, slotsLeft } from '../../utils/spellcasting';
 
 // ---------------------------------------------------------------------------
 // Small shared pieces
@@ -63,7 +64,7 @@ function Chip({ selected, disabled, onClick, children, title }) {
   );
 }
 
-function Panel({ title, children, className = '' }) {
+export function Panel({ title, children, className = '' }) {
   return (
     <div className={`rounded-xl bg-[#14101a] border border-amber-900/30 p-4 ${className}`}>
       {title && <h4 className="text-[11px] font-mono uppercase tracking-wider text-stone-400 mb-2">{title}</h4>}
@@ -72,7 +73,7 @@ function Panel({ title, children, className = '' }) {
   );
 }
 
-function StepIntro({ title, children }) {
+export function StepIntro({ title, children }) {
   return (
     <div className="mb-5">
       <h3 className="font-cinzel text-xl sm:text-2xl font-bold text-stone-100">{title}</h3>
@@ -758,6 +759,31 @@ export function StepSummary({ character, world }) {
             <div><dt className="text-stone-500">Rasgos de especie</dt><dd className="text-stone-200">{character.traits.join(', ')}</dd></div>
           </dl>
         </Panel>
+
+        {character.spellcasting && (
+          <Panel title="Magia" className="md:col-span-2">
+            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
+              {character.spellcasting.slots && (
+                <div>
+                  <dt className="text-stone-500">Espacios de conjuro de nivel 1</dt>
+                  <dd className="text-stone-200">
+                    {slotsLeft(character)}{character.spellcasting.slots.recovery === 'short' ? ' (se recupera con un descanso corto)' : ''}
+                  </dd>
+                </div>
+              )}
+              <div>
+                <dt className="text-stone-500">Trucos</dt>
+                <dd className="text-stone-200">{spellRows(character).filter(s => s.level === 0).map(s => s.name).join(', ') || '—'}</dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-stone-500">Conjuros de nivel 1</dt>
+                <dd className="text-stone-200">
+                  {spellRows(character).filter(s => s.level === 1).map(s => `${s.name}${s.entry.prepared ? '' : ' (sin preparar)'}`).join(', ') || '—'}
+                </dd>
+              </div>
+            </dl>
+          </Panel>
+        )}
 
         <Panel title="Equipo">
           <ul className="space-y-1 text-xs">

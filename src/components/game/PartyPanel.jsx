@@ -1,17 +1,22 @@
 import React, { useState } from 'react';
-import { Heart, Shield, Coins, Backpack, Coffee, Sparkles } from 'lucide-react';
+import { Heart, Shield, Coins, Backpack, Coffee, Sparkles, Wand2 } from 'lucide-react';
 import { getModifier, getModifierNumber } from '../../utils/gameEngine';
 import { skillRows, proficiencyBonus, formatModifier } from '../../utils/characterBuilder';
 import { TAVERN_MENU } from '../../data/gameData';
 import { tavernAudio } from '../../utils/audio';
+import SpellsTab, { RestButtons } from './SpellsTab';
 
 export default function PartyPanel({
   character,
   onUpdateCharacter,
   onOrderDrink,
-  onRollCheck
+  onRollCheck,
+  onCastSpell,
+  onRest,
+  busy = false
 }) {
-  const [activeTab, setActiveTab] = useState('sheet'); // 'sheet' | 'inventory' | 'menu'
+  const [activeTab, setActiveTab] = useState('sheet'); // 'sheet' | 'spells' | 'inventory' | 'menu'
+  const hasMagic = Boolean(character.spellcasting);
   const hpPercent = Math.max(0, Math.min(100, Math.round((character.hp / character.maxHp) * 100)));
 
   const handleUseItem = (item) => {
@@ -121,6 +126,19 @@ export default function PartyPanel({
         >
           <span>Atributos</span>
         </button>
+        {hasMagic && (
+          <button
+            onClick={() => setActiveTab('spells')}
+            className={`flex-1 py-2.5 flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
+              activeTab === 'spells'
+                ? 'border-purple-400 text-purple-200 bg-purple-500/10 font-semibold'
+                : 'border-transparent text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            <Wand2 className="w-3.5 h-3.5" />
+            <span>Conjuros</span>
+          </button>
+        )}
         <button
           onClick={() => setActiveTab('inventory')}
           className={`flex-1 py-2.5 flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
@@ -130,7 +148,7 @@ export default function PartyPanel({
           }`}
         >
           <Backpack className="w-3.5 h-3.5" />
-          <span>Mochila ({character.inventory?.length || 0})</span>
+          <span>Mochila</span>
         </button>
         <button
           onClick={() => setActiveTab('menu')}
@@ -141,7 +159,7 @@ export default function PartyPanel({
           }`}
         >
           <Coffee className="w-3.5 h-3.5" />
-          <span>Barra Taberna</span>
+          <span>Taberna</span>
         </button>
       </div>
 
@@ -250,6 +268,11 @@ export default function PartyPanel({
           </div>
         )}
 
+        {/* SPELLS TAB */}
+        {activeTab === 'spells' && hasMagic && (
+          <SpellsTab character={character} onCastSpell={onCastSpell} onRest={onRest} busy={busy} />
+        )}
+
         {/* INVENTORY TAB */}
         {activeTab === 'inventory' && (
           <div className="space-y-2.5">
@@ -292,6 +315,8 @@ export default function PartyPanel({
         {/* TAVERN BAR / MENU TAB */}
         {activeTab === 'menu' && (
           <div className="space-y-2.5">
+            <RestButtons character={character} onRest={onRest} busy={busy} />
+
             <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block">
               Bebidas & Viandas de Maese Duncan:
             </span>

@@ -1,7 +1,8 @@
 // Prompt and reply handling for the AI Dungeon Master (Gemini).
 // Pure functions: no network, no storage.
 
-import { SKILLS } from '../data/srd';
+import { SKILLS, ABILITIES } from '../data/srd';
+import { spellRows, slotsLeft } from './spellcasting';
 
 const HISTORY_MESSAGES = 12;
 const HISTORY_CHARS_PER_MESSAGE = 700;
@@ -62,6 +63,15 @@ function describeBuild(character) {
   if (traits.length > 0) lines.push(`- Rasgos y dotes: ${traits.join(', ')}.`);
   if (character.backstory) lines.push(`- Historia: ${String(character.backstory).slice(0, 500)}`);
 
+  const spells = spellRows(character).filter(row => !row.blocked || row.blocked === 'Sin espacios de conjuro');
+  if (spells.length > 0) {
+    const cantrips = spells.filter(s => s.level === 0).map(s => s.name);
+    const prepared = spells.filter(s => s.level > 0).map(s => s.name);
+    const slots = character.spellcasting.slots;
+    lines.push(`- Magia: ${slots ? `le quedan ${slotsLeft(character)} de ${slots.max} espacios de conjuro de nivel 1. ` : ''}${
+      cantrips.length ? `Trucos: ${cantrips.join(', ')}. ` : ''}${prepared.length ? `Conjuros: ${prepared.join(', ')}.` : ''}`.trim());
+  }
+
   return lines.length > 0 ? `\n${lines.join('\n')}` : '';
 }
 
@@ -82,13 +92,27 @@ function formatHistory(history, characterName) {
  * @param {number} params.d20            die already rolled by the game (1-20)
  * @param {object} [params.playerRoll]   ability check rolled by the player, if any
  * @param {boolean} [params.structured]  ask for JSON (true) or the legacy "OPCIONES:" text format
+ * @param {object} [params.spellCast]    spell the player just cast (see castSpell), if any
+ * @param {string} [params.rest]         'long' | 'short' when the action is a rest
+ * @param {boolean} [params.effectsApplied]  the game already changed HP / gold for this action
  */
-export function buildDMPrompt({ playerAction, character, world, history, d20, playerRoll = null, structured = true }) {
+export function buildDMPrompt({
+  playerAction, character, world, history, d20, playerRoll = null, structured = true,
+  spellCast = null, rest = null, effectsApplied = false
+}) {
   const name = character.name || 'Aventurero';
   const location = world.mapNodes?.find(n => n.status === 'current')?.name || world.initialLocation;
   const inventory = (character.inventory || []).map(i => i.name).filter(Boolean).join(', ');
 
-  const diceRules = playerRoll
+  const enemySave = spellCast && !spellCast.attack && spellCast.spell.kind === 'save';
+  const noRoll = Boolean(rest) || (spellCast && !spellCast.attack && !enemySave);
+  const saveAbility = enemySave ? ABILITIES.find(a => a.id === spellCast.spell.save)?.name : '';
+
+  const diceRules = noRoll
+    ? 'Esta acción no necesita ninguna tirada: no menciones dados y marca "usaTirada" como false.'
+    : enemySave
+    ? `El jugador ha lanzado un conjuro que obliga a su objetivo a hacer una tirada de salvación. El d20 ya lanzado (${d20}) es la tirada de salvación de ${saveAbility} del OBJETIVO: súmale un modificador razonable para esa criatura (entre -1 y +4) y compárala con la CD ${spellCast.saveDC}. Si la iguala o supera, resiste el conjuro (o recibe la mitad del daño si el conjuro lo indica); si no, sufre el efecto completo. Menciónala así: [🎲 Salvación de ${saveAbility} del objetivo D20: ${d20} + mod = total vs CD ${spellCast.saveDC}] y marca "usaTirada" como true. No hagas ninguna otra tirada.`
+    : playerRoll
     ? `El jugador ya ha hecho una tirada de ${playerRoll.statName || 'habilidad'}: d20 = ${playerRoll.rawRoll}, total ${playerRoll.total} contra CD ${playerRoll.dc} → ${
         playerRoll.isNat20 ? 'ÉXITO CRÍTICO' : playerRoll.isNat1 ? 'PIFIA' : playerRoll.success ? 'ÉXITO' : 'FALLO'
       }. Narra exactamente ese resultado; no hagas ni menciones ninguna otra tirada.`
@@ -131,7 +155,7 @@ Instrucciones:
 1. Responde con tu inconfundible voz de Maese Duncan (humor negro, sabiduría de taberna, descripciones vívidas y consecuencias palpables).
 2. Respeta los hechos previos, la ficha y la historia del personaje (su clase, especie, trasfondo y rasgos deben notarse en la narración): no puede gastar oro que no tiene, y con pocos puntos de golpe el peligro es real.
 3. Si sufre daño, se cura, gana o gasta oro, indícalo de forma dramática pero breve.
-4. Concluye planteando un dilema inmediato o preguntando qué hará ahora.
+4. Concluye planteando un dilema inmediato o preguntando qué hará ahora.${effectsApplied ? '\n5. Los cambios de puntos de golpe, oro y espacios de conjuro de ESTA acción ya están aplicados en la ficha: devuelve "danio" 0, "curacion" 0 y "oro" 0, salvo que ocurra algo más aparte de lo que el jugador describe.' : ''}
 
 ${format}`;
 }

@@ -5,7 +5,8 @@ import StoryStream from './game/StoryStream';
 import WorldMapPanel from './game/WorldMapPanel';
 import DiceRollerTray from './game/DiceRollerTray';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from '../data/gameData';
-import { generateDMResponse, rollCheck, getStoredGeminiKeys } from '../utils/gameEngine';
+import { generateDMResponse, rollCheck, rollDie, getStoredGeminiKeys } from '../utils/gameEngine';
+import { castSpell, describeCast, longRest, shortRest, LONG_REST_COST } from '../utils/spellcasting';
 import { 
   saveCampaign, 
   createNewCampaign, 
@@ -196,7 +197,11 @@ export default function TavernApp({
   // Main Action Dispatcher
   // `sheet`: pass the just-updated character when the caller changed it in this same tick
   // (state updates are not visible here until the next render)
-  const handleSendAction = async (actionText, { playerRoll = null, sheet = character } = {}) => {
+  // `spellCast` / `rest`: what the action was, so the Dungeon Master narrates it properly
+  // `effectsApplied`: HP / gold for this action were already changed here (drinks, rests, healing)
+  const handleSendAction = async (actionText, {
+    playerRoll = null, sheet = character, spellCast = null, rest = null, effectsApplied = false
+  } = {}) => {
     if (!actionText || isGenerating) return;
 
     // Add player's action to messages
@@ -221,18 +226,23 @@ export default function TavernApp({
         world,
         history: newMsgList,
         apiKeys: currentKeys,
-        playerRoll
+        playerRoll,
+        spellCast,
+        rest,
+        effectsApplied
       });
 
       // Duncan rolled behind the screen: show the die before his narration
       if (response.roll) {
-        await animateRoll({ ...response.roll, label: 'Tirada de acción' });
+        const isEnemySave = spellCast?.spell.kind === 'save';
+        await animateRoll({ ...response.roll, label: isEnemySave ? 'Salvación del objetivo' : 'Tirada de acción' });
       }
 
       // Apply the consequences of the scene to the character sheet
+      // When the game already applied this action's healing and gold, the narrator can only add damage
       const damage = response.damageTaken || 0;
-      const healing = response.healing || 0;
-      const goldChange = response.goldEarned || 0;
+      const healing = effectsApplied ? 0 : response.healing || 0;
+      const goldChange = effectsApplied ? 0 : response.goldEarned || 0;
       const effects = { damage, healing, goldChange };
       const outcome = applySceneOutcome(sheet, effects);
       if (damage || healing || goldChange) {
@@ -301,6 +311,96 @@ export default function TavernApp({
     }
   };
 
+  const pushSystemMessage = (text) => {
+    setMessages(prev => [
+      ...prev,
+      { sender: 'system', text, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+    ]);
+  };
+
+  // Casting a spell from the sheet: roll its dice, spend the slot and tell the Dungeon Master
+  const handleCastSpell = async (spellId, target = '') => {
+    if (isGenerating || isRollingCheckRef.current) return;
+
+    const result = castSpell(character, spellId, sides => rollDie(sides, { silent: true }));
+    if (!result.ok) {
+      pushSystemMessage(`✨ ${result.error}`);
+      return;
+    }
+
+    isRollingCheckRef.current = true;
+    try {
+      const { cast } = result;
+      const { spell } = cast;
+      const SPELL_ATTACK_DC = 12;
+      const toDice = roll => roll.dice.map(value => ({ sides: roll.sides, value }));
+
+      let playerRoll = null;
+      if (cast.attack) {
+        const { raw, total, isNat20, isNat1 } = cast.attack;
+        const success = isNat20 || (!isNat1 && total >= SPELL_ATTACK_DC);
+        await animateRoll({
+          sides: 20, value: raw, modifier: cast.attackBonus, dc: SPELL_ATTACK_DC, success,
+          label: `${spell.name} · ataque`
+        });
+        playerRoll = {
+          rawRoll: raw, modifier: cast.attackBonus, total, dc: SPELL_ATTACK_DC, success, isNat20, isNat1,
+          statName: `ataque de conjuro (${spell.name})`
+        };
+        if (success && cast.damage) {
+          await animateRoll({ dice: toDice(cast.damage), modifier: cast.damage.bonus, label: `${spell.name} · daño` });
+        }
+      } else if (cast.damage) {
+        await animateRoll({ dice: toDice(cast.damage), modifier: cast.damage.bonus, label: `${spell.name} · daño` });
+      } else if (cast.heal) {
+        await animateRoll({ dice: toDice(cast.heal), modifier: cast.heal.bonus, label: `${spell.name} · curación` });
+      }
+
+      setCharacter(result.character);
+      setMobileTab('story');
+      handleSendAction(describeCast(cast, { target, dc: SPELL_ATTACK_DC }), {
+        sheet: result.character,
+        playerRoll,
+        spellCast: cast,
+        effectsApplied: Boolean(cast.heal)
+      });
+    } finally {
+      isRollingCheckRef.current = false;
+    }
+  };
+
+  // Short rest (an hour by the fire) or long rest (a night in a room, for a price)
+  const handleRest = (kind) => {
+    if (isGenerating || isRollingCheckRef.current) return;
+
+    if (kind === 'long') {
+      if (character.gold < LONG_REST_COST) {
+        pushSystemMessage(`🛏️ Necesitas ${LONG_REST_COST} monedas de oro para una habitación.`);
+        return;
+      }
+      const rested = { ...longRest(character), gold: character.gold - LONG_REST_COST };
+      setCharacter(rested);
+      setMobileTab('story');
+      handleSendAction(
+        `Pago ${LONG_REST_COST} monedas de oro por una habitación y hago un descanso largo hasta el amanecer. Recupero todos mis puntos de golpe${rested.spellcasting ? ' y mi magia' : ''}.`,
+        { sheet: rested, rest: 'long', effectsApplied: true }
+      );
+      return;
+    }
+
+    const { character: rested, healed, die, slotsRecovered } = shortRest(character, sides => rollDie(sides, { silent: true }));
+    const gains = [
+      healed > 0 && `gasto mi dado de golpe (d${character.hitDie}: ${die}) y recupero ${healed} puntos de golpe`,
+      slotsRecovered && 'recupero mi magia de pacto'
+    ].filter(Boolean);
+    setCharacter(rested);
+    setMobileTab('story');
+    handleSendAction(
+      `Hago un descanso corto de una hora junto al fuego${gains.length ? `: ${gains.join(' y ')}` : ''}.`,
+      { sheet: rested, rest: 'short', effectsApplied: true }
+    );
+  };
+
   // When ordering a drink from Duncan's tavern menu
   const handleOrderDrink = (drink) => {
     if (character.gold < drink.cost) return;
@@ -312,7 +412,7 @@ export default function TavernApp({
     };
     setCharacter(updated);
 
-    handleSendAction(`Pido a Maese Duncan un/a "${drink.name}" (${drink.cost} po). ${drink.effect}`, { sheet: updated });
+    handleSendAction(`Pido a Maese Duncan un/a "${drink.name}" (${drink.cost} po). ${drink.effect}`, { sheet: updated, effectsApplied: true });
   };
 
   // When traveling to another node on the world map
@@ -499,6 +599,9 @@ export default function TavernApp({
             onUpdateCharacter={setCharacter}
             onOrderDrink={handleOrderDrink}
             onRollCheck={handleRollCheck}
+            onCastSpell={handleCastSpell}
+            onRest={handleRest}
+            busy={isGenerating}
           />
         </div>
 

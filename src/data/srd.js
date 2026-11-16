@@ -466,7 +466,7 @@ export const SPECIES = [
       label: 'Linaje gnomo',
       choices: [
         { id: 'forest', name: 'Gnomo del Bosque', desc: 'Conoces Ilusión Menor y puedes hablar con animales.' },
-        { id: 'rock', name: 'Gnomo de las Rocas', desc: 'Conoces Reparar y Prestidigitación, y construyes pequeños artilugios.' }
+        { id: 'rock', name: 'Gnomo de las Rocas', desc: 'Conoces Remendar y Prestidigitación, y construyes pequeños artilugios.' }
       ]
     }
   },

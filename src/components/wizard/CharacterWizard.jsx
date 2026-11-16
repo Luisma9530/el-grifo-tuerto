@@ -4,18 +4,21 @@ import {
   emptyDraft, sanitizeDraft, stepIssues, buildCharacter, randomDraft, finalScores,
   getClass, getBackground, getSpecies, abilityModifier, formatModifier, computeArmorClass, computeMaxHp
 } from '../../utils/characterBuilder';
+import { needsSpellChoices } from '../../utils/spellcasting';
 import { ABILITIES } from '../../data/srd';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
 import {
   StepClass, StepBackground, StepSpecies, StepAbilities, StepSkills, StepIdentity, StepSummary
 } from './WizardSteps';
+import StepSpells from './StepSpells';
 
-const STEP_LIST = [
+const ALL_STEPS = [
   { id: 'class', label: 'Clase', Component: StepClass },
   { id: 'background', label: 'Trasfondo', Component: StepBackground },
   { id: 'species', label: 'Especie', Component: StepSpecies },
   { id: 'abilities', label: 'Características', Component: StepAbilities },
   { id: 'skills', label: 'Competencias', Component: StepSkills },
+  { id: 'spells', label: 'Conjuros', Component: StepSpells },
   { id: 'identity', label: 'Identidad', Component: StepIdentity },
   { id: 'summary', label: 'Resumen', Component: null }
 ];
@@ -82,12 +85,19 @@ function Preview({ draft }) {
  */
 export default function CharacterWizard({ world, onComplete, onCancel }) {
   const [draft, setDraft] = useState(emptyDraft);
-  const [stepIndex, setStepIndex] = useState(0);
+  const [stepId, setStepId] = useState('class');
   const [showIssues, setShowIssues] = useState(false);
   const scrollRef = useRef(null);
 
+  // The spells step only exists for heroes with magic to choose
+  const steps = useMemo(
+    () => ALL_STEPS.filter(s => s.id !== 'spells' || needsSpellChoices(draft)),
+    [draft]
+  );
+  const stepIndex = Math.max(0, steps.findIndex(s => s.id === stepId));
+  const step = steps[stepIndex];
+
   const issues = useMemo(() => stepIssues(draft), [draft]);
-  const step = STEP_LIST[stepIndex];
   const isSummary = step.id === 'summary';
   const allIssues = Object.values(issues).flat();
   const currentIssues = isSummary ? allIssues : issues[step.id];
@@ -113,8 +123,8 @@ export default function CharacterWizard({ world, onComplete, onCancel }) {
     return sanitizeDraft(next);
   });
 
-  const goTo = index => {
-    setStepIndex(index);
+  const goTo = id => {
+    setStepId(id);
     setShowIssues(false);
     scrollRef.current?.scrollTo({ top: 0 });
   };
@@ -125,19 +135,19 @@ export default function CharacterWizard({ world, onComplete, onCancel }) {
       return;
     }
     if (isSummary) onComplete(character);
-    else goTo(stepIndex + 1);
+    else goTo(steps[stepIndex + 1].id);
   };
 
   const handleRandom = () => {
     const hasChoices = draft.classId || draft.backgroundId || draft.speciesId;
     if (hasChoices && !window.confirm('¿Generar un héroe al azar? Sustituirá lo que has elegido hasta ahora.')) return;
     setDraft(randomDraft());
-    goTo(STEP_LIST.length - 1);
+    goTo('summary');
   };
 
   // The summary can't be opened until every earlier step is complete
-  const firstIncomplete = STEP_LIST.findIndex(s => s.id !== 'summary' && issues[s.id].length > 0);
-  const canOpen = index => STEP_LIST[index].id !== 'summary' || firstIncomplete === -1;
+  const complete = allIssues.length === 0;
+  const canOpen = s => s.id !== 'summary' || complete;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[#0b090e] text-stone-200" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
@@ -172,15 +182,16 @@ export default function CharacterWizard({ world, onComplete, onCancel }) {
 
         {/* Steps */}
         <nav className="mt-3 flex gap-1.5 overflow-x-auto pb-1" aria-label="Pasos de la creación">
-          {STEP_LIST.map((s, index) => {
-            const done = s.id === 'summary' ? firstIncomplete === -1 : issues[s.id].length === 0;
-            const active = index === stepIndex;
-            const enabled = canOpen(index);
+          {steps.map((s, index) => {
+            const isLast = s.id === 'summary';
+            const done = !isLast && issues[s.id].length === 0;
+            const active = s.id === step.id;
+            const enabled = canOpen(s);
             return (
               <button
                 key={s.id}
                 type="button"
-                onClick={() => enabled && goTo(index)}
+                onClick={() => enabled && goTo(s.id)}
                 disabled={!enabled}
                 aria-current={active ? 'step' : undefined}
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap border transition-colors ${
@@ -192,9 +203,9 @@ export default function CharacterWizard({ world, onComplete, onCancel }) {
                 }`}
               >
                 <span className={`w-4 h-4 rounded-full text-[10px] flex items-center justify-center font-mono ${
-                  done && s.id !== 'summary' ? 'bg-emerald-600 text-stone-950' : 'bg-stone-800 text-stone-400'
+                  done ? 'bg-emerald-600 text-stone-950' : 'bg-stone-800 text-stone-400'
                 }`}>
-                  {done && s.id !== 'summary' ? <Check className="w-3 h-3" /> : index + 1}
+                  {done ? <Check className="w-3 h-3" /> : index + 1}
                 </span>
                 {s.label}
               </button>
@@ -220,7 +231,7 @@ export default function CharacterWizard({ world, onComplete, onCancel }) {
         <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
           <button
             type="button"
-            onClick={() => (stepIndex === 0 ? handleCancel() : goTo(stepIndex - 1))}
+            onClick={() => (stepIndex === 0 ? handleCancel() : goTo(steps[stepIndex - 1].id))}
             className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 border border-stone-700 text-sm text-stone-200 flex items-center gap-1.5"
           >
             <ArrowLeft className="w-4 h-4" /> {stepIndex === 0 ? 'Cancelar' : 'Atrás'}

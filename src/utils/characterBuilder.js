@@ -7,6 +7,7 @@ import {
   STANDARD_ARRAY, POINT_BUY_BUDGET, POINT_BUY_COST, MAX_ABILITY_SCORE, LEVEL_1_PROFICIENCY_BONUS,
   BASE_LANGUAGE, LANGUAGE_CHOICES
 } from '../data/srd';
+import { sanitizeSpells, spellIssues, buildSpellcasting, randomSpellChoices } from './spellcasting';
 
 const ABILITY_IDS = ABILITIES.map(a => a.id);
 
@@ -49,6 +50,7 @@ export function emptyDraft() {
     bonus: { mode: 'twoOne', plus2: null, plus1: null },
     classSkills: [],
     speciesSkills: [],
+    spells: {}, // spell choices per source: see spellcasting.js
     name: '',
     avatar: AVATARS[0],
     alignment: '',
@@ -171,6 +173,8 @@ export function sanitizeDraft(draft) {
   const classChoice = classSkillOptions(next);
   next.classSkills = next.classSkills.filter(id => classChoice.options.includes(id)).slice(0, classChoice.count);
 
+  next.spells = sanitizeSpells(next);
+
   return next;
 }
 
@@ -191,7 +195,7 @@ export function isExtraFeatAllowed(draft, featId) {
   return featId !== backgroundFeat || featId === 'skilled';
 }
 
-export const STEPS = ['class', 'background', 'species', 'abilities', 'skills', 'identity'];
+export const STEPS = ['class', 'background', 'species', 'abilities', 'skills', 'spells', 'identity'];
 
 /**
  * What is still missing or wrong in each step, as messages for the player.
@@ -246,6 +250,9 @@ export function stepIssues(draft) {
     && new Set(draft.classSkills).size === draft.classSkills.length
     && draft.classSkills.every(id => classChoice.options.includes(id));
   if (cls && !classPicksValid) issues.skills.push(`Elige ${classChoice.count} habilidades de tu clase.`);
+
+  // Spells (nothing to choose for heroes without magic)
+  issues.spells.push(...spellIssues(draft));
 
   // Identity
   const name = draft.name.trim();
@@ -348,6 +355,10 @@ export function buildCharacter(draft, { id = `hero_${Date.now()}` } = {}) {
       ...(option ? [`${species.options.label}: ${option.name}`] : [])
     ],
 
+    // null for heroes without magic
+    spellcasting: buildSpellcasting(draft, stats),
+    hitDiceUsed: 0,
+
     gold: cls.gold + background.gold,
     inventory,
     backstory
@@ -431,6 +442,7 @@ export function randomDraft(rng = Math.random) {
   draft.speciesSkills = pickSeveral(speciesChoice.options, speciesChoice.count, rng);
   const classChoice = classSkillOptions(draft);
   draft.classSkills = pickSeveral(classChoice.options, classChoice.count, rng);
+  draft.spells = randomSpellChoices(draft, rng);
 
   return draft;
 }

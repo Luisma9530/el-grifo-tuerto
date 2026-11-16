@@ -60,6 +60,22 @@ describe('simulateThrow', () => {
     }
   });
 
+  it.each([3, 4, 5])('throws %i dice at once (damage rolls) without losing any', count => {
+    const rng = seeded(21);
+    for (const bounds of [WIDE, TALL]) {
+      for (let i = 0; i < 6; i++) {
+        const sim = simulateThrow(Array(count).fill('d6'), bounds, rng);
+        expect(sim.ok).toBe(true);
+        expect(sim.tops).toHaveLength(count);
+        const last = sim.frames[sim.frames.length - 1];
+        for (let d = 0; d < count; d++) {
+          expect(Math.abs(last[d * 7])).toBeLessThan(bounds.halfW);
+          expect(Math.abs(last[d * 7 + 2])).toBeLessThan(bounds.halfD);
+        }
+      }
+    }
+  });
+
   it('records frames at 60 fps and impacts for sound effects', () => {
     const sim = simulateThrow(['d6'], WIDE, seeded(5));
     expect(FRAME_DT).toBeCloseTo(1 / 60, 6);

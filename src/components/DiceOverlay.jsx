@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { registerDiceStage, getRollOutcome, playOutcomeSound } from '../dice3d/controller';
+import { registerDiceStage, playOutcomeSound } from '../dice3d/controller';
 import { tavernAudio } from '../utils/audio';
 
 const HOLD_MS = { normal: 1500, crit: 2300, fumble: 2300 };
@@ -97,7 +97,7 @@ export default function DiceOverlay() {
     if (active.phase === 'gone') return true;
 
     active.phase = 'result';
-    const outcome = getRollOutcome(roll.sides, roll.value);
+    const { outcome } = roll;
     engine.highlight(outcome);
     playOutcomeSound(outcome);
     setView({ phase: 'result', roll, outcome, anchor: engine.getAnchor() });
@@ -167,7 +167,7 @@ export default function DiceOverlay() {
         >
           <div className={`animate-dice-result px-6 py-3 rounded-2xl bg-[#120e18]/90 border-2 ${styles.ring} text-center shadow-2xl shadow-black/70 backdrop-blur-sm`}>
             <div className="text-[11px] uppercase tracking-widest text-stone-400 font-mono whitespace-nowrap">
-              {roll.label ? `${roll.label} · d${roll.sides}` : `d${roll.sides}`}
+              {roll.label ? `${roll.label} · ${roll.notation}` : roll.notation}
             </div>
             <div
               className={`font-cinzel font-black text-6xl leading-none my-1 ${styles.number}`}
@@ -198,7 +198,7 @@ export default function DiceOverlay() {
 
       {/* Announce the result to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
-        {result && `${roll.label || `Tirada de d${roll.sides}`}: ${result.total}${result.breakdown ? ` (${result.breakdown})` : ''}${result.verdict ? `. ${result.verdict}` : ''}`}
+        {result && `${roll.label || `Tirada de ${roll.notation}`}: ${result.total}${result.breakdown ? ` (${result.breakdown})` : ''}${result.verdict ? `. ${result.verdict}` : ''}`}
       </div>
     </div>
   );

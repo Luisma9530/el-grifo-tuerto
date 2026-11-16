@@ -346,7 +346,7 @@ export async function createDiceEngine(canvas) {
 
     /**
      * Throw the dice for a roll and animate them.
-     * @param {{sides: number, value: number}} roll
+     * @param {{dice: {sides: number, value: number}[]}} roll  normalized by animateRoll()
      * @param {{onImpact?: (strength: number) => void}} [options]
      * @returns {{ done: Promise<void>, skip: () => void, duration: number }} duration in seconds
      */
@@ -354,7 +354,7 @@ export async function createDiceEngine(canvas) {
       finishPlayback();
       clearDice();
 
-      const plan = planDice(roll.sides, roll.value);
+      const plan = roll.dice.flatMap(die => planDice(die.sides, die.value));
       const sim = simulateThrow(plan.map(p => p.kind), bounds);
 
       meshes = plan.map((p, i) => {

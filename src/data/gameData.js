@@ -226,6 +226,10 @@ export const FAQS = [
     a: 'Cada campaña empieza creando a tu héroe paso a paso con las reglas de D&D 2024: clase, trasfondo, especie, características (conjunto estándar, compra de puntos o tirando dados), competencias e identidad. Si tienes prisa, el botón "Héroe al azar" te genera uno completo que puedes retocar. Todos empiezan en nivel 1.'
   },
   {
+    q: '¿Cómo funciona la magia?',
+    a: 'Los lanzadores de conjuros eligen sus trucos y conjuros de nivel 1 al crear el personaje. En la pestaña "Conjuros" de la ficha los lanzas con un clic: el juego tira el ataque, el daño o la curación con los dados 3D y Maese Duncan narra el resultado. Los trucos son ilimitados; los conjuros gastan espacios, que recuperas descansando en la posada.'
+  },
+  {
     q: '¿Necesito saber las reglas de D&D 5ª Edición para jugar?',
     a: '¡Para nada! Tú solo escribes o eliges qué quieres que haga tu personaje con tus propias palabras. El juego tira los dados, aplica los modificadores de tu ficha y Maese Duncan narra lo que ocurre.'
   },

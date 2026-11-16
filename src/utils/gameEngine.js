@@ -2,6 +2,7 @@
 import { tavernAudio } from './audio';
 import { buildDMPrompt, parseDMReply, DM_RESPONSE_SCHEMA } from './dmPrompt';
 import { requestGemini } from './geminiClient';
+import { narrateSpell, narrateRest } from './spellNarration';
 
 // Helper to calculate D&D stat modifier from score (e.g. 16 -> +3, 10 -> 0, 8 -> -1)
 export function getModifier(score) {
@@ -139,7 +140,16 @@ let currentKeyRotationIndex = 0;
 // The procedural engine then uses it instead of rolling behind the screen.
 // The response may include `roll: { sides, value }` when Duncan rolled a die whose
 // result is mentioned in the text, so the UI can show it before the narration.
-export async function generateDMResponse({ playerAction, character, world, history = [], apiKey = null, apiKeys = [], playerRoll = null }) {
+// `spellCast` (optional): a spell just cast by the player (see castSpell in spellcasting.js).
+// `rest` (optional): 'long' | 'short' when the action is a rest.
+// `effectsApplied`: the caller already changed HP / gold for this action (drinks, rests, healing).
+export async function generateDMResponse({
+  playerAction, character, world, history = [], apiKey = null, apiKeys = [], playerRoll = null,
+  spellCast = null, rest = null, effectsApplied = false
+}) {
+  // Rests and spells without an attack or a saving throw involve no d20 at all
+  const needsNoRoll = Boolean(rest) || (spellCast && !spellCast.attack && spellCast.spell.kind !== 'save');
+
   // Build active keys pool (from params or persistent storage)
   let pool = [];
   if (Array.isArray(apiKeys) && apiKeys.length > 0) {
@@ -170,7 +180,7 @@ export async function generateDMResponse({ playerAction, character, world, histo
       const keyToUse = pool[activeIdx];
 
       try {
-        const reply = await askGemini(keyToUse, { playerAction, character, world, history, d20, playerRoll });
+        const reply = await askGemini(keyToUse, { playerAction, character, world, history, d20, playerRoll, spellCast, rest, effectsApplied });
 
         if (reply.ok) {
           const parsed = parseDMReply(reply.text, character);
@@ -183,7 +193,7 @@ export async function generateDMResponse({ playerAction, character, world, histo
               damageTaken: parsed.damageTaken,
               healing: parsed.healing,
               goldEarned: parsed.goldEarned,
-              roll: parsed.usedRoll && !playerRoll ? { sides: 20, value: d20 } : null,
+              roll: parsed.usedRoll && !playerRoll && !needsNoRoll ? { sides: 20, value: d20 } : null,
               source: 'gemini',
               keyIndex: activeIdx,
               totalKeys: pool.length
@@ -219,8 +229,15 @@ export async function generateDMResponse({ playerAction, character, world, histo
   let damageTaken = 0;
   let goldEarned = 0;
 
+  // Rests and spells have their own narration
+  if (rest) {
+    ({ text, suggestedActions } = narrateRest(rest, character));
+  } else if (spellCast) {
+    ({ text, suggestedActions } = narrateSpell(spellCast, { character, enemyRoll: rollResult }));
+  }
+
   // The player rolled an ability check from the character sheet: narrate its outcome
-  if (playerRoll) {
+  else if (playerRoll) {
     const stat = playerRoll.statName || 'habilidad';
     const rollTag = `[🎲 ${stat} D20: **${playerRoll.rawRoll}** = ${playerRoll.total} vs CD ${playerRoll.dc}]`;
     if (isCrit) {

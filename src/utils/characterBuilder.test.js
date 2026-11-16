@@ -158,7 +158,7 @@ describe('validation', () => {
   });
 
   it('accepts a complete draft', () => {
-    expect(stepIssues(fighterDraft())).toEqual({ class: [], background: [], species: [], abilities: [], skills: [], identity: [] });
+    expect(stepIssues(fighterDraft())).toEqual({ class: [], background: [], species: [], abilities: [], skills: [], spells: [], identity: [] });
   });
 
   it('rejects ability scores that break the chosen method', () => {
@@ -269,7 +269,7 @@ describe('randomDraft', () => {
     const seen = new Set();
     for (let i = 0; i < 400; i++) {
       const draft = randomDraft(rng);
-      expect(stepIssues(draft)).toEqual({ class: [], background: [], species: [], abilities: [], skills: [], identity: [] });
+      expect(stepIssues(draft)).toEqual({ class: [], background: [], species: [], abilities: [], skills: [], spells: [], identity: [] });
       const hero = buildCharacter(draft);
       expect(hero.maxHp).toBeGreaterThan(0);
       expect(hero.ac).toBeGreaterThanOrEqual(9);
