@@ -22,11 +22,10 @@ export function rollDie(sides = 20, { silent = false } = {}) {
   return val;
 }
 
-// Roll a full D&D check with a character stat modifier
-export function rollCheckWithStat(statValue, statName = 'Tirada', dc = 12, { silent = false } = {}) {
+// Roll a d20 check with any modifier (ability, or skill with proficiency) against a DC
+export function rollCheck({ modifier = 0, statName = 'Tirada', dc = 12, silent = false } = {}) {
   const rawRoll = rollDie(20, { silent });
-  const mod = getModifierNumber(statValue);
-  const total = rawRoll + mod;
+  const total = rawRoll + modifier;
 
   const isNat20 = rawRoll === 20;
   const isNat1 = rawRoll === 1;
@@ -42,7 +41,7 @@ export function rollCheckWithStat(statValue, statName = 'Tirada', dc = 12, { sil
 
   return {
     rawRoll,
-    modifier: mod,
+    modifier,
     total,
     dc,
     statName,
@@ -50,6 +49,11 @@ export function rollCheckWithStat(statValue, statName = 'Tirada', dc = 12, { sil
     isNat20,
     isNat1
   };
+}
+
+// Roll a check with a character's ability score
+export function rollCheckWithStat(statValue, statName = 'Tirada', dc = 12, { silent = false } = {}) {
+  return rollCheck({ modifier: getModifierNumber(statValue), statName, dc, silent });
 }
 
 // Storage and Key Pooling helpers for BYOK (Bring Your Own Key) Multi-Player setup

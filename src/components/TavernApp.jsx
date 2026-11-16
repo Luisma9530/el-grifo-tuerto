@@ -5,7 +5,7 @@ import StoryStream from './game/StoryStream';
 import WorldMapPanel from './game/WorldMapPanel';
 import DiceRollerTray from './game/DiceRollerTray';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from '../data/gameData';
-import { generateDMResponse, rollCheckWithStat, getStoredGeminiKeys } from '../utils/gameEngine';
+import { generateDMResponse, rollCheck, getStoredGeminiKeys } from '../utils/gameEngine';
 import { 
   saveCampaign, 
   createNewCampaign, 
@@ -25,7 +25,6 @@ export default function TavernApp({
   activeCharacter = PRESET_CHARACTERS[0],
   onBackToLanding,
   onOpenInvite,
-  onOpenCharacterCreator,
   onOpenSettings,
   onOpenGeminiConnect,
   onOpenCampaigns
@@ -279,23 +278,23 @@ export default function TavernApp({
     }
   };
 
-  // When rolling a stat check directly from character sheet
-  const handleRollStatCheck = async (statVal, statName) => {
+  // When rolling an ability or skill check from the character sheet
+  const handleRollCheck = async ({ label, modifier }) => {
     if (isGenerating || isRollingCheckRef.current) return;
     isRollingCheckRef.current = true;
 
     try {
-      const check = rollCheckWithStat(statVal, statName, undefined, { silent: true });
+      const check = rollCheck({ modifier, statName: label, silent: true });
       await animateRoll({
         sides: 20,
         value: check.rawRoll,
         modifier: check.modifier,
         dc: check.dc,
         success: check.success,
-        label: `Tirada de ${statName}`
+        label: `Tirada de ${label}`
       });
 
-      const textDesc = `Realizo una tirada de ${statName} [🎲 D20: ${check.rawRoll} (${check.modifier >= 0 ? `+${check.modifier}` : check.modifier}) = ${check.total} vs CD ${check.dc}].`;
+      const textDesc = `Realizo una tirada de ${label} [🎲 D20: ${check.rawRoll} (${check.modifier >= 0 ? `+${check.modifier}` : check.modifier}) = ${check.total} vs CD ${check.dc}].`;
       handleSendAction(textDesc, { playerRoll: check });
     } finally {
       isRollingCheckRef.current = false;
@@ -394,27 +393,11 @@ export default function TavernApp({
           )}
         </div>
 
-        {/* Center: Character Quick Switcher */}
-        <div className="hidden md:flex items-center gap-2">
-          <span className="text-[11px] font-mono text-stone-400">Héroe:</span>
-          <select
-            value={character.id}
-            onChange={(e) => {
-              const selectedChar = PRESET_CHARACTERS.find(c => c.id === e.target.value);
-              if (selectedChar) setCharacter(selectedChar);
-            }}
-            className="bg-[#1a1523] border border-stone-800 text-stone-200 rounded-lg px-2.5 py-1 text-xs font-medium focus:outline-none"
-          >
-            {PRESET_CHARACTERS.map(c => (
-              <option key={c.id} value={c.id}>{c.avatar} {c.name} ({c.class})</option>
-            ))}
-          </select>
-          <button
-            onClick={onOpenCharacterCreator}
-            className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline underline-offset-2 ml-1"
-          >
-            + Crear
-          </button>
+        {/* Center: the campaign's hero */}
+        <div className="hidden md:flex items-center gap-2 min-w-0 text-xs text-stone-300">
+          <span className="text-base leading-none">{character.avatar || '🛡️'}</span>
+          <span className="font-cinzel font-bold text-stone-100 truncate max-w-[180px]">{character.name}</span>
+          <span className="text-stone-500 truncate hidden lg:inline">{character.race} · {character.class}</span>
         </div>
 
         {/* Right Utility Buttons */}
@@ -515,8 +498,7 @@ export default function TavernApp({
             character={character}
             onUpdateCharacter={setCharacter}
             onOrderDrink={handleOrderDrink}
-            onOpenCharacterModal={onOpenCharacterCreator}
-            onRollStatCheck={handleRollStatCheck}
+            onRollCheck={handleRollCheck}
           />
         </div>
 

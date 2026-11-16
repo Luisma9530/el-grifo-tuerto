@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Heart, Shield, Coins, Backpack, Coffee, Sparkles } from 'lucide-react';
-import { getModifier } from '../../utils/gameEngine';
+import { getModifier, getModifierNumber } from '../../utils/gameEngine';
+import { skillRows, proficiencyBonus, formatModifier } from '../../utils/characterBuilder';
 import { TAVERN_MENU } from '../../data/gameData';
 import { tavernAudio } from '../../utils/audio';
 
@@ -8,8 +9,7 @@ export default function PartyPanel({
   character,
   onUpdateCharacter,
   onOrderDrink,
-  onOpenCharacterModal,
-  onRollStatCheck
+  onRollCheck
 }) {
   const [activeTab, setActiveTab] = useState('sheet'); // 'sheet' | 'inventory' | 'menu'
   const hpPercent = Math.max(0, Math.min(100, Math.round((character.hp / character.maxHp) * 100)));
@@ -38,9 +38,7 @@ export default function PartyPanel({
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             <div 
-              onClick={onOpenCharacterModal}
-              title="Cambiar o personalizar personaje"
-              className="w-13 h-13 rounded-xl bg-amber-950/80 border-2 border-amber-500/50 flex items-center justify-center text-3xl shadow-inner cursor-pointer hover:border-amber-400 hover:scale-105 transition-all"
+              className="w-13 h-13 rounded-xl bg-amber-950/80 border-2 border-amber-500/50 flex items-center justify-center text-3xl shadow-inner"
             >
               {character.avatar || '🛡️'}
             </div>
@@ -53,16 +51,12 @@ export default function PartyPanel({
               <p className="text-xs text-amber-400 font-medium">
                 {character.race} • {character.class}
               </p>
+              {character.background && (
+                <p className="text-[11px] text-stone-400">{character.background}</p>
+              )}
             </div>
           </div>
 
-          <button
-            onClick={onOpenCharacterModal}
-            className="p-1.5 rounded-lg bg-stone-850 hover:bg-stone-800 text-stone-400 hover:text-amber-300 border border-stone-700 text-xs transition-colors"
-            title="Editar ficha"
-          >
-            Ficha
-          </button>
         </div>
 
         {/* Vital stats bars: HP, AC, Gold */}
@@ -172,7 +166,7 @@ export default function PartyPanel({
                 ].map(({ key, name, stat }) => (
                   <button
                     key={key}
-                    onClick={() => onRollStatCheck(stat, name)}
+                    onClick={() => onRollCheck({ label: name, modifier: getModifierNumber(stat) })}
                     className="p-2.5 rounded-xl bg-[#17131f] hover:bg-amber-950/40 border border-stone-800 hover:border-amber-600/50 flex items-center justify-between text-left transition-all group"
                   >
                     <div>
@@ -190,6 +184,59 @@ export default function PartyPanel({
                 ))}
               </div>
             </div>
+
+            {/* Skills: proficient ones add the proficiency bonus */}
+            <div>
+              <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block mb-2">
+                Habilidades (competencia +{proficiencyBonus(character)}):
+              </span>
+              <div className="rounded-xl border border-stone-800 overflow-hidden">
+                {skillRows(character).map((skill, index) => (
+                  <button
+                    key={skill.id}
+                    onClick={() => onRollCheck({ label: skill.name, modifier: skill.modifier })}
+                    title={`Tirar ${skill.name} (${skill.abilityShort})${skill.proficient ? ', con competencia' : ''}`}
+                    className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-amber-950/40 transition-colors group ${
+                      index % 2 ? 'bg-[#15111c]' : 'bg-[#17131f]'
+                    }`}
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full shrink-0 border ${
+                        skill.proficient ? 'bg-amber-400 border-amber-300' : 'border-stone-600'
+                      }`}
+                      aria-hidden="true"
+                    />
+                    <span className={`flex-1 truncate group-hover:text-amber-300 ${skill.proficient ? 'text-stone-100 font-medium' : 'text-stone-400'}`}>
+                      {skill.name}
+                    </span>
+                    <span className="text-[10px] font-mono text-stone-600">{skill.abilityShort}</span>
+                    <span className={`w-7 text-right font-mono font-bold ${skill.proficient ? 'text-amber-400' : 'text-stone-400'}`}>
+                      {formatModifier(skill.modifier)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Rules details for characters made with the creation wizard */}
+            {character.rulesVersion && (
+              <div className="p-3 rounded-xl bg-stone-900/60 border border-stone-800 space-y-1.5 text-[11px]">
+                <span className="text-[10px] font-mono uppercase text-stone-400 tracking-wider block mb-1">Rasgos y Competencias:</span>
+                {[
+                  ['Velocidad', character.speed === 35 ? '10,5 m' : '9 m'],
+                  ['Dotes', character.feats?.join(', ')],
+                  ['Clase', character.classFeatures?.join(', ')],
+                  ['Especie', character.traits?.join(', ')],
+                  ['Herramientas', character.tools?.join(', ')],
+                  ['Idiomas', character.languages?.join(', ')],
+                  ['Alineamiento', character.alignment]
+                ].filter(([, value]) => value).map(([label, value]) => (
+                  <p key={label} className="text-stone-300 leading-snug">
+                    <span className="text-stone-500">{label}:</span> {value}
+                  </p>
+                ))}
+              </div>
+            )}
 
             {/* Backstory snippet */}
             <div className="p-3 rounded-xl bg-stone-900/60 border border-stone-800">

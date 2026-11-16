@@ -55,6 +55,27 @@ describe('buildDMPrompt', () => {
   });
 });
 
+describe('buildDMPrompt with a wizard-made hero', () => {
+  it('describes background, proficient skills, traits and backstory', () => {
+    const hero = {
+      ...character, background: 'Criminal', alignment: 'Caótico Neutral', proficiencyBonus: 2,
+      skills: ['stealth', 'sleightOfHand'], classFeatures: ['Ataque Furtivo'], feats: ['Alerta'], traits: ['Trance'],
+      backstory: 'Le debe dinero a medio Oakhaven.'
+    };
+    const prompt = buildDMPrompt({ playerAction: 'x', character: hero, world, d20: 10 });
+    expect(prompt).toContain('Trasfondo: Criminal. Alineamiento: Caótico Neutral.');
+    expect(prompt).toContain('Competente (suma +2 en esas tiradas) en: Sigilo, Juego de Manos.');
+    expect(prompt).toContain('Rasgos y dotes: Ataque Furtivo, Alerta, Trance.');
+    expect(prompt).toContain('Historia: Le debe dinero a medio Oakhaven.');
+  });
+
+  it('adds nothing for characters from older saves', () => {
+    const prompt = buildDMPrompt({ playerAction: 'x', character: { ...character, backstory: undefined }, world, d20: 10 });
+    expect(prompt).not.toContain('Trasfondo:');
+    expect(prompt).not.toContain('Competente');
+  });
+});
+
 describe('parseDMReply', () => {
   const reply = extra => JSON.stringify({
     narracion: 'Duncan **asiente**.', usaTirada: true, danio: 3, curacion: 0, oro: -4, opciones: ['Huir', ' Luchar ', ''], ...extra

@@ -222,6 +222,10 @@ export const FAQS = [
     a: 'Sí, es gratis y no hay cuentas ni suscripciones. Abres la página y juegas. Tus partidas se guardan en tu propio navegador.'
   },
   {
+    q: '¿Cómo se crea el personaje?',
+    a: 'Cada campaña empieza creando a tu héroe paso a paso con las reglas de D&D 2024: clase, trasfondo, especie, características (conjunto estándar, compra de puntos o tirando dados), competencias e identidad. Si tienes prisa, el botón "Héroe al azar" te genera uno completo que puedes retocar. Todos empiezan en nivel 1.'
+  },
+  {
     q: '¿Necesito saber las reglas de D&D 5ª Edición para jugar?',
     a: '¡Para nada! Tú solo escribes o eliges qué quieres que haga tu personaje con tus propias palabras. El juego tira los dados, aplica los modificadores de tu ficha y Maese Duncan narra lo que ocurre.'
   },

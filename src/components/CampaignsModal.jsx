@@ -10,25 +10,24 @@ import {
   duplicateCampaign, 
   exportCampaignAsJson, 
   exportAllCampaignsAsJson, 
-  importCampaignsFromJson, 
-  createNewCampaign 
+  importCampaignsFromJson
 } from '../utils/campaignStorage';
 import { getLastBackupAt } from '../utils/backupReminder';
 import { formatLastPlayed } from '../utils/saveSlots';
-import { PRESET_WORLDS, PRESET_CHARACTERS } from '../data/gameData';
+import { PRESET_WORLDS } from '../data/gameData';
 
 export default function CampaignsModal({ 
   isOpen, 
   onClose, 
   activeCampaignId, 
-  onSelectCampaign
+  onSelectCampaign,
+  onStartNewCampaign
 }) {
   useEscapeKey(isOpen, onClose);
   const [campaigns, setCampaigns] = useState([]);
   const [notification, setNotification] = useState(null);
   const [isCreatingNew, setIsCreatingNew] = useState(false);
   const [newWorldId, setNewWorldId] = useState(PRESET_WORLDS[0].id);
-  const [newCharId, setNewCharId] = useState(PRESET_CHARACTERS[0].id);
   const [newTitle, setNewTitle] = useState('');
   const fileInputRef = useRef(null);
   const [lastBackupAt, setLastBackupAt] = useState(null);
@@ -113,26 +112,12 @@ export default function CampaignsModal({
     e.target.value = '';
   };
 
-  // Handle Create New Campaign from Modal
+  // A new campaign continues in the character creation wizard
   const handleConfirmCreate = (e) => {
     e.preventDefault();
     const chosenWorld = PRESET_WORLDS.find(w => w.id === newWorldId) || PRESET_WORLDS[0];
-    const chosenChar = PRESET_CHARACTERS.find(c => c.id === newCharId) || PRESET_CHARACTERS[0];
-
-    const campaign = createNewCampaign({
-      world: chosenWorld,
-      character: chosenChar,
-      title: newTitle.trim() || `${chosenChar.name} — ${chosenWorld.name}`
-    });
-
-    if (campaign) {
-      refreshCampaigns();
-      setIsCreatingNew(false);
-      if (onSelectCampaign) {
-        onSelectCampaign(campaign);
-        onClose();
-      }
-    }
+    setIsCreatingNew(false);
+    onStartNewCampaign?.(chosenWorld, newTitle.trim());
   };
 
   return (
@@ -273,43 +258,26 @@ export default function CampaignsModal({
                   />
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Select World */}
-                  <div>
-                    <label className="block text-xs font-mono text-stone-400 mb-1">
-                      MUNDO / AMBIENTACIÓN:
-                    </label>
-                    <select
-                      value={newWorldId}
-                      onChange={(e) => setNewWorldId(e.target.value)}
-                      className="w-full bg-[#120f18] border border-stone-700 rounded-lg px-3 py-2 text-xs text-amber-200 font-cinzel font-bold focus:outline-none focus:border-amber-500"
-                    >
-                      {PRESET_WORLDS.map(w => (
-                        <option key={w.id} value={w.id}>
-                          {w.name} ({w.genre})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Select Character */}
-                  <div>
-                    <label className="block text-xs font-mono text-stone-400 mb-1">
-                      HÉROE INICIAL:
-                    </label>
-                    <select
-                      value={newCharId}
-                      onChange={(e) => setNewCharId(e.target.value)}
-                      className="w-full bg-[#120f18] border border-stone-700 rounded-lg px-3 py-2 text-xs text-stone-200 font-medium focus:outline-none focus:border-amber-500"
-                    >
-                      {PRESET_CHARACTERS.map(c => (
-                        <option key={c.id} value={c.id}>
-                          {c.avatar} {c.name} — {c.class}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                <div>
+                  <label className="block text-xs font-mono text-stone-400 mb-1">
+                    MUNDO / AMBIENTACIÓN:
+                  </label>
+                  <select
+                    value={newWorldId}
+                    onChange={(e) => setNewWorldId(e.target.value)}
+                    className="w-full bg-[#120f18] border border-stone-700 rounded-lg px-3 py-2 text-xs text-amber-200 font-cinzel font-bold focus:outline-none focus:border-amber-500"
+                  >
+                    {PRESET_WORLDS.map(w => (
+                      <option key={w.id} value={w.id}>
+                        {w.name} ({w.genre})
+                      </option>
+                    ))}
+                  </select>
                 </div>
+
+                <p className="text-xs text-stone-400">
+                  A continuación crearás a tu héroe: clase, trasfondo, especie y características.
+                </p>
 
                 <div className="pt-2 flex justify-end gap-3">
                   <button
@@ -323,7 +291,7 @@ export default function CampaignsModal({
                     type="submit"
                     className="px-5 py-2 rounded-lg bg-gradient-to-r from-amber-600 to-amber-500 hover:brightness-110 text-stone-950 font-bold text-xs shadow-lg shadow-amber-600/30"
                   >
-                    Comenzar Partida
+                    Crear Héroe
                   </button>
                 </div>
               </form>

@@ -1,6 +1,8 @@
 // Prompt and reply handling for the AI Dungeon Master (Gemini).
 // Pure functions: no network, no storage.
 
+import { SKILLS } from '../data/srd';
+
 const HISTORY_MESSAGES = 12;
 const HISTORY_CHARS_PER_MESSAGE = 700;
 
@@ -40,6 +42,29 @@ function describeStats(stats) {
     .join(', ');
 }
 
+/** Extra sheet lines for heroes made with the creation wizard (older saves have none of this). */
+function describeBuild(character) {
+  const lines = [];
+  const origin = [
+    character.background && `Trasfondo: ${character.background}`,
+    character.alignment && `Alineamiento: ${character.alignment}`
+  ].filter(Boolean).join('. ');
+  if (origin) lines.push(`- ${origin}.`);
+
+  const skills = (character.skills || [])
+    .map(id => SKILLS.find(s => s.id === id)?.name)
+    .filter(Boolean);
+  if (skills.length > 0) {
+    lines.push(`- Competente (suma +${character.proficiencyBonus || 2} en esas tiradas) en: ${skills.join(', ')}.`);
+  }
+
+  const traits = [...(character.classFeatures || []), ...(character.feats || []), ...(character.traits || [])];
+  if (traits.length > 0) lines.push(`- Rasgos y dotes: ${traits.join(', ')}.`);
+  if (character.backstory) lines.push(`- Historia: ${String(character.backstory).slice(0, 500)}`);
+
+  return lines.length > 0 ? `\n${lines.join('\n')}` : '';
+}
+
 function formatHistory(history, characterName) {
   return (history || [])
     .slice(-HISTORY_MESSAGES)
@@ -68,7 +93,7 @@ export function buildDMPrompt({ playerAction, character, world, history, d20, pl
         playerRoll.isNat20 ? 'ÉXITO CRÍTICO' : playerRoll.isNat1 ? 'PIFIA' : playerRoll.success ? 'ÉXITO' : 'FALLO'
       }. Narra exactamente ese resultado; no hagas ni menciones ninguna otra tirada.`
     : `El dado de 20 caras YA se ha lanzado para esta acción y ha salido: ${d20}${d20 === 20 ? ' (crítico natural)' : d20 === 1 ? ' (pifia natural)' : ''}.
-- Si la acción tiene riesgo o un resultado incierto (combate, sigilo, persuadir, trepar, magia...), DEBES resolverla con ESE número: súmale el modificador del atributo adecuado y compáralo con una Clase de Dificultad razonable (8 fácil, 12 normal, 16 difícil). Un 20 natural siempre es un éxito espectacular y un 1 natural siempre un desastre. Menciona la tirada en la narración así: [🎲 Atributo D20: ${d20} + mod = total vs CD X].
+- Si la acción tiene riesgo o un resultado incierto (combate, sigilo, persuadir, trepar, magia...), DEBES resolverla con ESE número: súmale el modificador del atributo adecuado (más su bonificador de competencia si usa una habilidad en la que es competente) y compáralo con una Clase de Dificultad razonable (8 fácil, 12 normal, 16 difícil). Un 20 natural siempre es un éxito espectacular y un 1 natural siempre un desastre. Menciona la tirada en la narración así: [🎲 Atributo D20: ${d20} + mod = total vs CD X].
 - Si la acción no necesita tirada (conversar, pedir una bebida, mirar algo evidente), ignora el dado y no lo menciones.
 - Nunca inventes una tirada distinta ni tires más dados.`;
 
@@ -89,7 +114,7 @@ Estás dirigiendo una partida de rol estilo D&D 5e en el mundo: "${world.name}" 
 
 Personaje del jugador: ${name}, ${character.race || ''} ${character.class || ''}.
 - Puntos de golpe: ${character.hp}/${character.maxHp}. Armadura (CA): ${character.ac ?? '?'}. Oro: ${character.gold} monedas.
-- Atributos: ${describeStats(character.stats)}.${inventory ? `\n- Inventario: ${inventory}.` : ''}
+- Atributos: ${describeStats(character.stats)}.${inventory ? `\n- Inventario: ${inventory}.` : ''}${describeBuild(character)}
 
 Crónica previa de la historia (mantén la coherencia con estos eventos):
 """
@@ -104,7 +129,7 @@ ${diceRules}
 
 Instrucciones:
 1. Responde con tu inconfundible voz de Maese Duncan (humor negro, sabiduría de taberna, descripciones vívidas y consecuencias palpables).
-2. Respeta los hechos previos y el estado del personaje: no puede gastar oro que no tiene, y con pocos puntos de golpe el peligro es real.
+2. Respeta los hechos previos, la ficha y la historia del personaje (su clase, especie, trasfondo y rasgos deben notarse en la narración): no puede gastar oro que no tiene, y con pocos puntos de golpe el peligro es real.
 3. Si sufre daño, se cura, gana o gasta oro, indícalo de forma dramática pero breve.
 4. Concluye planteando un dilema inmediato o preguntando qué hará ahora.
 
