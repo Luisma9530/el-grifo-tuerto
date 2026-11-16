@@ -1,6 +1,7 @@
 // Core RPG & Story Game Engine for El Grifo Tuerto
 import { tavernAudio } from './audio';
 import { buildDMPrompt, parseDMReply, DM_RESPONSE_SCHEMA } from './dmPrompt';
+import { requestGemini } from './geminiClient';
 
 // Helper to calculate D&D stat modifier from score (e.g. 16 -> +3, 10 -> 0, 8 -> -1)
 export function getModifier(score) {
@@ -86,72 +87,44 @@ export function saveStoredGeminiKeys(keyList) {
   }
 }
 
-// Google retires Gemini models regularly (gemini-1.5-flash was shut down in
-// September 2025). The "-latest" alias always points to the current Flash model,
-// so the game keeps working without code changes.
-export const GEMINI_MODEL = 'gemini-flash-latest';
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
-
 // Live connection test against Google Gemini API
 export async function testGeminiKey(key) {
-  try {
-    const response = await fetch(GEMINI_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key.trim() },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: 'Di en una sola frase breve y con acento de tabernero: "¡Por las barbas de mi abuelo, conexión verificada en la taberna!"' }]
-          }
-        ]
-      })
-    });
-
-    if (!response.ok) {
-      const errJson = await response.json().catch(() => ({}));
-      const msg = errJson.error?.message || `Código HTTP ${response.status}`;
-      return { success: false, error: msg };
-    }
-
-    const data = await response.json();
-    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '¡Conexión verificada con éxito!';
-    return { success: true, reply };
-  } catch (err) {
-    return { success: false, error: err.message || 'Error de red al conectar con Google' };
-  }
-}
-
-async function postGemini(key, prompt, generationConfig) {
-  return fetch(GEMINI_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      ...(generationConfig ? { generationConfig } : {})
-    })
+  const result = await requestGemini(key.trim(), {
+    prompt: 'Di en una sola frase breve y con acento de tabernero: "¡Por las barbas de mi abuelo, conexión verificada en la taberna!"'
   });
+  if (result.ok) return { success: true, reply: result.text.trim() || '¡Conexión verificada con éxito!' };
+
+  // An overloaded service says nothing about the key: don't reject a good key for that
+  if (result.reason === 'overloaded' || result.reason === 'network') {
+    return {
+      success: false,
+      error: 'Google Gemini está saturado o no responde en este momento. La clave puede ser correcta: espera un minuto y vuelve a intentarlo.'
+    };
+  }
+  return { success: false, error: result.error };
 }
 
 // Ask Gemini for Duncan's reply. Requests structured JSON (narration + damage, gold,
-// whether the d20 was used); if the model rejects that request format (HTTP 400),
-// retries once with the plain-text format.
-// Returns { ok: true, text } or { ok: false, status }.
+// whether the d20 was used); if the model rejects that request format, retries
+// once with the plain-text format.
+// Returns { ok: true, text } or { ok: false, status, reason }.
 async function askGemini(key, context) {
-  let response = await postGemini(key, buildDMPrompt({ ...context, structured: true }), {
-    responseMimeType: 'application/json',
-    responseSchema: DM_RESPONSE_SCHEMA
+  const structured = await requestGemini(key, {
+    prompt: buildDMPrompt({ ...context, structured: true }),
+    generationConfig: { responseMimeType: 'application/json', responseSchema: DM_RESPONSE_SCHEMA }
   });
+  if (structured.ok || structured.reason !== 'bad-request') return structured;
 
-  if (response.status === 400) {
-    response = await postGemini(key, buildDMPrompt({ ...context, structured: false }), null);
-  }
-  if (!response.ok) return { ok: false, status: response.status };
-
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('') || '';
-  return { ok: true, text };
+  return requestGemini(key, { prompt: buildDMPrompt({ ...context, structured: false }) });
 }
+
+const AI_FAILURE_NOTICES = {
+  overloaded: 'Gemini está saturado ahora mismo: Duncan improvisa con el motor local en este turno.',
+  network: 'No hay conexión con Gemini: Duncan improvisa con el motor local en este turno.',
+  quota: 'Has alcanzado el límite gratuito de Gemini: Duncan sigue con el motor local hasta que se renueve.',
+  key: 'Tu clave de Gemini no es válida o ha sido revocada: revísala en "Conectar IA". Duncan usa el motor local.',
+  'bad-request': 'Gemini rechazó la petición: Duncan improvisa con el motor local en este turno.'
+};
 
 // Module-level rotation pointer for Round-Robin multi-player token pool
 let currentKeyRotationIndex = 0;
@@ -176,6 +149,9 @@ export async function generateDMResponse({ playerAction, character, world, histo
 
   // Deduplicate and filter valid keys
   pool = [...new Set(pool.filter(k => k && k.trim().length > 10))];
+
+  // Why the AI could not answer (null if it was not tried): shown to the player
+  let aiFailure = null;
 
   // If we have one or more Gemini keys in the pool, attempt generation with Round-Robin & Fallback
   if (pool.length > 0) {
@@ -209,15 +185,20 @@ export async function generateDMResponse({ playerAction, character, world, histo
               totalKeys: pool.length
             };
           }
+          aiFailure = 'overloaded'; // answered, but with nothing usable
         } else {
-          console.warn(`[Duncan Engine] Clave ${activeIdx + 1}/${pool.length} devolvió HTTP ${reply.status}. Rotando a la siguiente clave del grupo...`);
+          aiFailure = reply.reason;
+          console.warn(`[Duncan Engine] Clave ${activeIdx + 1}/${pool.length} falló (${reply.reason}, HTTP ${reply.status}).`);
+          // Google's side is saturated or unreachable: the other keys won't fare better
+          if (reply.reason === 'overloaded' || reply.reason === 'network') break;
         }
       } catch (e) {
+        aiFailure = 'network';
         console.warn(`[Duncan Engine] Error de conexión con clave ${activeIdx + 1}:`, e);
       }
     }
 
-    console.warn('[Duncan Engine] Todas las claves de Gemini en el pool alcanzaron límite o fallaron. Activando motor procedural de respaldo.');
+    console.warn('[Duncan Engine] Gemini no está disponible ahora. Activando motor procedural de respaldo.');
   }
 
   // Built-in intelligent procedural Maese Duncan engine
@@ -430,6 +411,8 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     damageTaken,
     healing: 0,
     goldEarned,
+    // Set when Gemini keys exist but the AI could not answer this turn
+    notice: aiFailure ? AI_FAILURE_NOTICES[aiFailure] || AI_FAILURE_NOTICES.overloaded : null,
     // Only when Duncan's own roll is mentioned in the narration
     roll: !playerRoll && text.includes('🎲') ? { sides: 20, value: rollResult } : null
   };

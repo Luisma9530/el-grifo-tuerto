@@ -227,7 +227,7 @@ export default function TavernApp({
 
       // Duncan rolled behind the screen: show the die before his narration
       if (response.roll) {
-        await animateRoll({ ...response.roll, label: 'Tirada de Maese Duncan' });
+        await animateRoll({ ...response.roll, label: 'Tirada de acción' });
       }
 
       // Apply the consequences of the scene to the character sheet
@@ -250,6 +250,7 @@ export default function TavernApp({
           sender: 'duncan',
           text: response.text,
           source: response.source,
+          notice: response.notice || undefined,
           keyIndex: response.keyIndex,
           totalKeys: response.totalKeys,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })

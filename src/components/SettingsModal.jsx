@@ -81,7 +81,7 @@ export default function SettingsModal({ isOpen, onClose, onClearData, onOpenGemi
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder="AIzaSy..."
+              placeholder="Pega aquí tu clave de API"
               className="flex-1 bg-[#120f18] border border-stone-700 rounded-lg px-3 py-2 text-xs text-stone-100 font-mono focus:outline-none focus:border-amber-500"
             />
             <button

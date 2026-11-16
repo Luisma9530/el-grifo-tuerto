@@ -134,6 +134,13 @@ export default function StoryStream({
                 </div>
               )}
 
+              {/* Why the AI did not answer this turn (local engine used instead) */}
+              {msg.notice && (
+                <div className="mb-2 px-2.5 py-1.5 rounded-lg bg-amber-950/40 border border-amber-800/40 text-[11px] font-sans text-amber-300/90">
+                  ⚠️ {msg.notice}
+                </div>
+              )}
+
               {/* Text content */}
               <div className="whitespace-pre-line">
                 <RichText text={msg.text} />

@@ -28,7 +28,7 @@ export default function GeminiConnectModal({ isOpen, onClose, onKeysUpdated }) {
       setTestStatus({
         loading: false,
         success: false,
-        msg: 'La clave de API debe tener al menos 20 caracteres (suele empezar por AIzaSy...).'
+        msg: 'La clave de API debe tener al menos 20 caracteres.'
       });
       return;
     }
@@ -77,8 +77,6 @@ export default function GeminiConnectModal({ isOpen, onClose, onKeysUpdated }) {
     }
   };
 
-  const totalRPM = Math.max(15, keysList.length * 15);
-  const totalDaily = Math.max(1500, keysList.length * 1500);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
@@ -159,8 +157,8 @@ export default function GeminiConnectModal({ isOpen, onClose, onKeysUpdated }) {
                 </span>
                 <p className="text-[11px] text-stone-400 font-normal">
                   {keysList.length > 0
-                    ? `Capacidad combinada: ~${totalRPM} peticiones/min y ${totalDaily} al día sin coste.`
-                    : 'Conecta tu cuenta para desbloquear respuestas infinitas con Gemini 1.5 Flash.'}
+                    ? 'El uso gratuito depende de los límites que fije Google. Si se agotan o Gemini se satura, Duncan sigue con el motor local.'
+                    : 'Conecta tu cuenta gratuita de Google para que Duncan narre con Gemini.'}
                 </p>
               </div>
             </div>
@@ -256,7 +254,7 @@ export default function GeminiConnectModal({ isOpen, onClose, onKeysUpdated }) {
                       type="password"
                       value={newKeyInput}
                       onChange={(e) => setNewKeyInput(e.target.value)}
-                      placeholder="AIzaSy..."
+                      placeholder="Pega aquí tu clave de API"
                       className="w-full bg-[#100d16] border border-stone-700 rounded-lg px-3 py-2 text-xs text-stone-100 font-mono focus:outline-none focus:border-amber-500"
                     />
                   </div>
