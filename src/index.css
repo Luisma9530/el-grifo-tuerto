@@ -87,6 +87,17 @@
   100% { transform: rotate(720deg) scale(1); }
 }
 
+/* 3D dice result banner */
+@keyframes diceResultPop {
+  0% { opacity: 0; transform: translateY(12px) scale(0.7); }
+  60% { opacity: 1; transform: translateY(-2px) scale(1.06); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.animate-dice-result {
+  animation: diceResultPop 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+}
+
 .animate-dice-roll {
   animation: diceSpin 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }

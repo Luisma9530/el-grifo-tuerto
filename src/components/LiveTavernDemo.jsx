@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Send, Dice5, Sparkles, RefreshCw, Volume2, ShieldAlert } from 'lucide-react';
 import { rollDie } from '../utils/gameEngine';
+import { animateRoll } from '../dice3d/controller';
+import RichText from './RichText';
 import { tavernAudio } from '../utils/audio';
 
 export default function LiveTavernDemo({ onEnterFullTavern }) {
@@ -25,59 +27,59 @@ export default function LiveTavernDemo({ onEnterFullTavern }) {
     setInputAction('');
   };
 
-  const executeAction = (action) => {
+  const executeAction = async (action) => {
+    if (isRolling) return;
     setIsRolling(true);
-    const dieResult = rollDie(20);
+    const dieResult = rollDie(20, { silent: true });
+
+    // 3D die (plays its own sounds, including critical / fumble stingers)
+    await animateRoll({ sides: 20, value: dieResult });
+
     setLastRoll(dieResult);
+    setIsRolling(false);
+    let duncanReaction = '';
 
-    setTimeout(() => {
-      setIsRolling(false);
-      let duncanReaction = '';
-
-      if (action.includes('cerveza') || action.includes('fuerte')) {
-        tavernAudio.playTankardClink();
-        duncanReaction = `—*¡Esa es la actitud!* (Duncan desliza un tarro de bronce con líquido borboteante que quema la vista). *Esto lo destilaron en las minas enanas de Karak. Si sobrevives al primer trago, tu tirada D20 fue un ${dieResult}. Tienes agallas, forastero.*`;
-      } else if (action.includes('daga') || action.includes('amenazar')) {
-        if (dieResult >= 12) {
-          duncanReaction = `[🎲 D20: **${dieResult}** - Intimidación pasable] 
+    if (action.includes('cerveza') || action.includes('fuerte')) {
+      tavernAudio.playTankardClink();
+      duncanReaction = `—*¡Esa es la actitud!* (Duncan desliza un tarro de bronce con líquido borboteante que quema la vista). *Esto lo destilaron en las minas enanas de Karak. Si sobrevives al primer trago, tu tirada D20 fue un ${dieResult}. Tienes agallas, forastero.*`;
+    } else if (action.includes('daga') || action.includes('amenazar')) {
+      if (dieResult >= 12) {
+        duncanReaction = `[🎲 D20: **${dieResult}** - Intimidación pasable] 
 Duncan ni parpadea, pero dos guardaespaldas en la esquina tocan las empuñaduras de sus garrotes.
 —*Tranquilo con ese hierro, filo-fácil. El último que amenazó esta barra acabó sirviendo de abono para las calabazas del huerto. Guarda eso o llama a tus amigos.*`;
-        } else {
-          tavernAudio.playCritFail();
-          duncanReaction = `[🎲 D20: **${dieResult}** - Pifia social] 
+      } else {
+        tavernAudio.playCritFail();
+        duncanReaction = `[🎲 D20: **${dieResult}** - Pifia social] 
 Duncan agarra una jarra de peltre vacía y la estampa contra la madera con un sonido que hace callar a la taberna entera.
 —*¿Amenazarme a MÍ con ese tenedor de mantequilla? Muchacho, te hace falta más nivel y menos orgullo. Te perdono la vida solo porque pagas la próxima ronda.*`;
-        }
-      } else if (action.includes('encapuchado') || action.includes('fondo')) {
-        duncanReaction = `[🎲 D20: **${dieResult}** - Percepción]
+      }
+    } else if (action.includes('encapuchado') || action.includes('fondo')) {
+      duncanReaction = `[🎲 D20: **${dieResult}** - Percepción]
 Duncan se inclina sobre la barra y murmura entre dientes:
 —*No mires directamente, idiota. Lleva el blasón del Círculo de la Niebla. Dicen que ofrece 50 monedas de oro por llevar un paquete sellado al viejo molino... aunque nadie que haya aceptado el trabajo ha vuelto a por el desayuno.*`;
-      } else {
-        // Generic action
-        if (dieResult === 20) {
-          tavernAudio.playCritSuccess();
-          duncanReaction = `[🎲 D20: **20 ¡ÉXITO CRÍTICO!** 🔥]
+    } else {
+      // Generic action
+      if (dieResult === 20) {
+        duncanReaction = `[🎲 D20: **20 ¡ÉXITO CRÍTICO!** 🔥]
 —*¡Diablos benditos!* (La pipa de Duncan casi se le cae de la boca mientras todos en la taberna contienen el aliento). *No veía a nadie ejecutar eso con tanta maestría desde los tiempos de la Gran Cruzada. Tienes mi respeto, chaval.*`;
-        } else if (dieResult === 1) {
-          tavernAudio.playCritFail();
-          duncanReaction = `[🎲 D20: **1 ¡PIFIA TOTAL!** 💀]
+      } else if (dieResult === 1) {
+        duncanReaction = `[🎲 D20: **1 ¡PIFIA TOTAL!** 💀]
 Un resbalón épico contra el suelo encerado con grasa animal. Duncan se limpia una lágrima de la risa.
 —*¡Por favor, que alguien le dé a este aventurero un casco antes de que se abra la cabeza con su propia sombra!*`;
-        } else if (dieResult >= 10) {
-          duncanReaction = `[🎲 D20: **${dieResult}** - Éxito estándar]
+      } else if (dieResult >= 10) {
+        duncanReaction = `[🎲 D20: **${dieResult}** - Éxito estándar]
 —*Aceptable. Se nota que no es tu primer día fuera de la muralla de la ciudad.* (Duncan asiente aprobando tu acción y vuelve a llenar su pipa con tabaco aromatizado). *En la aventura completa podrás usar tus propios hechizos y dados.*`;
-        } else {
-          duncanReaction = `[🎲 D20: **${dieResult}** - Fallo menor]
+      } else {
+        duncanReaction = `[🎲 D20: **${dieResult}** - Fallo menor]
 —*Casi, pero te faltó decisión. En el mundo real allá afuera, una tirada como esa te habría costado un escudo o un par de muelas.*`;
-        }
       }
+    }
 
-      setStoryFeed(prev => [
-        ...prev,
-        { sender: 'player', text: action },
-        { sender: 'duncan', text: duncanReaction }
-      ]);
-    }, 600);
+    setStoryFeed(prev => [
+      ...prev,
+      { sender: 'player', text: action },
+      { sender: 'duncan', text: duncanReaction }
+    ]);
   };
 
   return (
@@ -152,7 +154,7 @@ Un resbalón épico contra el suelo encerado con grasa animal. Duncan se limpia 
                       : 'bg-[#1b1723] text-stone-200 border border-amber-900/30 rounded-tl-none font-serif shadow-sm'
                   }`}
                 >
-                  <p className="whitespace-pre-line">{msg.text}</p>
+                  <p className="whitespace-pre-line"><RichText text={msg.text} /></p>
                 </div>
               </div>
             ))}

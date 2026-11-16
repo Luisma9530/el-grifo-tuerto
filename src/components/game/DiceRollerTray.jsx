@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Dice5, Sparkles, Skull, ChevronUp, ChevronDown, RotateCcw } from 'lucide-react';
 import { rollDie } from '../../utils/gameEngine';
-import { tavernAudio } from '../../utils/audio';
+import { animateRoll } from '../../dice3d/controller';
 
 export default function DiceRollerTray({ onSendRollToChat }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -20,39 +20,35 @@ export default function DiceRollerTray({ onSendRollToChat }) {
     { sides: 100, label: 'd100', shape: '%' }
   ];
 
-  const handleRoll = (sides) => {
+  const handleRoll = async (sides) => {
+    if (isRolling) return;
     setIsRolling(true);
-    const raw = rollDie(sides);
+    const raw = rollDie(sides, { silent: true });
 
-    setTimeout(() => {
-      setIsRolling(false);
-      const total = raw + modifier;
-      const isNat20 = sides === 20 && raw === 20;
-      const isNat1 = sides === 20 && raw === 1;
+    // 3D dice (or a short pause with sound if they are unavailable / turned off)
+    await animateRoll({ sides, value: raw, modifier });
 
-      if (isNat20) {
-        tavernAudio.playCritSuccess();
-      } else if (isNat1) {
-        tavernAudio.playCritFail();
-      }
+    setIsRolling(false);
+    const total = raw + modifier;
+    const isNat20 = sides === 20 && raw === 20;
+    const isNat1 = sides === 20 && raw === 1;
 
-      const rollObj = {
-        sides,
-        raw,
-        modifier,
-        total,
-        isNat20,
-        isNat1,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-      };
+    const rollObj = {
+      sides,
+      raw,
+      modifier,
+      total,
+      isNat20,
+      isNat1,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    };
 
-      setLastRoll(rollObj);
-      setHistory(prev => [rollObj, ...prev.slice(0, 5)]);
+    setLastRoll(rollObj);
+    setHistory(prev => [rollObj, ...prev.slice(0, 5)]);
 
-      if (onSendRollToChat) {
-        onSendRollToChat(rollObj);
-      }
-    }, 450);
+    if (onSendRollToChat) {
+      onSendRollToChat(rollObj);
+    }
   };
 
   return (

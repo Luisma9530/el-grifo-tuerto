@@ -51,6 +51,31 @@ class TavernAudioEngine {
     }
   }
 
+  // Single clack of a die hitting the table, synced with the 3D dice physics.
+  // strength: impact speed from the simulation (roughly 1.5–40)
+  playDiceImpact(strength = 10) {
+    if (this.muted) return;
+    this.init();
+    if (!this.ctx) return;
+
+    const now = this.ctx.currentTime;
+    const level = Math.min(1, Math.max(0.08, strength / 30));
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(380 + Math.random() * 260 + level * 160, now);
+    osc.frequency.exponentialRampToValueAtTime(110, now + 0.045);
+
+    gain.gain.setValueAtTime(0.28 * level, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.06);
+  }
+
   // Natural 20 - Critical Hit Fanfare
   playCritSuccess() {
     if (this.muted) return;

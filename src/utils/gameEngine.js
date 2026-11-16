@@ -12,15 +12,17 @@ export function getModifierNumber(score) {
 }
 
 // Roll any polyhedral die (d4, d6, d8, d10, d12, d20, d100)
-export function rollDie(sides = 20) {
+// Pass { silent: true } when the roll will be shown with animateRoll(), which
+// plays its own sounds in sync with the 3D dice.
+export function rollDie(sides = 20, { silent = false } = {}) {
   const val = Math.floor(Math.random() * sides) + 1;
-  tavernAudio.playDiceRoll();
+  if (!silent) tavernAudio.playDiceRoll();
   return val;
 }
 
 // Roll a full D&D check with a character stat modifier
-export function rollCheckWithStat(statValue, statName = 'Tirada', dc = 12) {
-  const rawRoll = rollDie(20);
+export function rollCheckWithStat(statValue, statName = 'Tirada', dc = 12, { silent = false } = {}) {
+  const rawRoll = rollDie(20, { silent });
   const mod = getModifierNumber(statValue);
   const total = rawRoll + mod;
 
@@ -28,10 +30,12 @@ export function rollCheckWithStat(statValue, statName = 'Tirada', dc = 12) {
   const isNat1 = rawRoll === 1;
   const success = isNat20 ? true : isNat1 ? false : total >= dc;
 
-  if (isNat20) {
-    tavernAudio.playCritSuccess();
-  } else if (isNat1) {
-    tavernAudio.playCritFail();
+  if (!silent) {
+    if (isNat20) {
+      tavernAudio.playCritSuccess();
+    } else if (isNat1) {
+      tavernAudio.playCritFail();
+    }
   }
 
   return {
@@ -81,12 +85,18 @@ export function saveStoredGeminiKeys(keyList) {
   }
 }
 
+// Google retires Gemini models regularly (gemini-1.5-flash was shut down in
+// September 2025). The "-latest" alias always points to the current Flash model,
+// so the game keeps working without code changes.
+export const GEMINI_MODEL = 'gemini-flash-latest';
+const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
 // Live connection test against Google Gemini API
 export async function testGeminiKey(key) {
   try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key.trim()}`, {
+    const response = await fetch(GEMINI_ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key.trim() },
       body: JSON.stringify({
         contents: [
           {
@@ -116,7 +126,11 @@ let currentKeyRotationIndex = 0;
 
 // Procedural AI Story Master (Maese Duncan's brain)
 // Analyzes player natural language input, character, world and produces vivid narrative responses
-export async function generateDMResponse({ playerAction, character, world, history = [], apiKey = null, apiKeys = [] }) {
+// `playerRoll` (optional): a check the player already rolled, { rawRoll, total, success, isNat20, isNat1 }.
+// The procedural engine then uses it instead of rolling behind the screen.
+// The response may include `roll: { sides, value }` when Duncan rolled a die whose
+// result is mentioned in the text, so the UI can show it before the narration.
+export async function generateDMResponse({ playerAction, character, world, history = [], apiKey = null, apiKeys = [], playerRoll = null }) {
   // Build active keys pool (from params or persistent storage)
   let pool = [];
   if (Array.isArray(apiKeys) && apiKeys.length > 0) {
@@ -146,9 +160,9 @@ export async function generateDMResponse({ playerAction, character, world, histo
       const keyToUse = pool[activeIdx];
 
       try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${keyToUse}`, {
+        const response = await fetch(GEMINI_ENDPOINT, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': keyToUse },
           body: JSON.stringify({
             contents: [
               {
@@ -222,8 +236,9 @@ Mantén la respuesta en español, entre 2 y 4 párrafos inmersivos.`
   // Built-in intelligent procedural Maese Duncan engine
   // Simulates dice roll behind the screen and produces richly tailored contextual outputs
   const actionLower = playerAction.toLowerCase();
-  const rollResult = rollDie(20);
-  const isHighRoll = rollResult >= 12;
+  // Sounds for this roll are played by the dice animation (see `roll` in the result)
+  const rollResult = playerRoll ? playerRoll.rawRoll : rollDie(20, { silent: true });
+  const isHighRoll = playerRoll ? playerRoll.success : rollResult >= 12;
   const isCrit = rollResult === 20;
   const isCritFail = rollResult === 1;
 
@@ -232,10 +247,55 @@ Mantén la respuesta en español, entre 2 y 4 párrafos inmersivos.`
   let damageTaken = 0;
   let goldEarned = 0;
 
-  // Combat / Attack actions
-  if (actionLower.includes('atacar') || actionLower.includes('golpe') || actionLower.includes('espada') || actionLower.includes('disparar') || actionLower.includes('pelear') || actionLower.includes('puñetazo') || actionLower.includes('matar')) {
+  // The player rolled an ability check from the character sheet: narrate its outcome
+  if (playerRoll) {
+    const stat = playerRoll.statName || 'habilidad';
+    const rollTag = `[🎲 ${stat} D20: **${playerRoll.rawRoll}** = ${playerRoll.total} vs CD ${playerRoll.dc}]`;
     if (isCrit) {
-      tavernAudio.playCritSuccess();
+      goldEarned = 5;
+      text = `*(Maese Duncan deja de fregar la jarra y silba entre dientes)* ${rollTag} **¡CRÍTICO!**
+
+${character.name} lo borda: la prueba de ${stat} sale con tanta limpieza que hasta el gato de la taberna levanta la cabeza. Un parroquiano impresionado te desliza **5 monedas de oro** por el espectáculo.
+
+—*Así se hace, demonios. Con esa mano, lo que te propongas esta noche está a tu alcance. ¿Y bien, qué vas a hacer con tanta suerte?*`;
+    } else if (isCritFail) {
+      damageTaken = 2;
+      text = `*(Duncan se tapa el ojo bueno con la mano)* ${rollTag} **¡PIFIA!**
+
+La prueba de ${stat} se tuerce de la peor manera posible: tropiezas, tiras una bandeja y acabas en el suelo entre risotadas *(pierdes 2 HP y bastante dignidad)*.
+
+—*He visto borrachos caer con más elegancia. Levanta, sacúdete el serrín y dime qué plan tienes ahora, porque ese no ha colado.*`;
+    } else if (isHighRoll) {
+      text = `Maese Duncan asiente despacio, sin dejar de secar el mostrador ${rollTag} **(Éxito)**.
+
+Tu prueba de ${stat} sale como esperabas: superas el obstáculo y ganas algo de ventaja. Un par de cabezas se giran con un respeto recién estrenado.
+
+—*No está mal, ${character.name}. Has abierto camino; ahora aprovéchalo antes de que alguien se lo piense dos veces.*`;
+    } else {
+      text = `Duncan chasquea la lengua y niega con la cabeza ${rollTag} **(Fallo)**.
+
+La prueba de ${stat} no sale: te quedas corto por poco y la ocasión se te escapa entre los dedos. Nadie ha salido herido, pero ahora te vigilan más de cerca.
+
+—*Hoy no era tu día para eso, chaval. Prueba otra cosa... o invita a una ronda y aquí no ha pasado nada.*`;
+    }
+    suggestedActions = isHighRoll || isCrit
+      ? [
+          'Aprovechar la ventaja y seguir adelante',
+          'Preguntar a Duncan qué sabe del asunto',
+          'Examinar con calma lo que has descubierto',
+          'Brindar por la hazaña en la barra'
+        ]
+      : [
+          'Intentarlo de otra manera',
+          'Pedir ayuda a los parroquianos',
+          'Disimular y pedir una jarra',
+          'Preguntar a Duncan por otra opción'
+        ];
+  }
+
+  // Combat / Attack actions
+  else if (actionLower.includes('atacar') || actionLower.includes('golpe') || actionLower.includes('espada') || actionLower.includes('disparar') || actionLower.includes('pelear') || actionLower.includes('puñetazo') || actionLower.includes('matar')) {
+    if (isCrit) {
       text = `¡POR LAS BARBAS DE MI ABUELO! *(Maese Duncan salta tras la barra con una sonrisa torcida)*. 
 ${character.name} se mueve con una precisión escalofriante [🎲 Tirada D20: **20 ¡CRÍTICO!**]. 
 
@@ -250,7 +310,6 @@ Tu golpe conecta de lleno en el punto exacto: el enemigo retrocede tambaleándos
         'Interrogar a los testigos aterrorizados'
       ];
     } else if (isCritFail) {
-      tavernAudio.playCritFail();
       damageTaken = 4;
       text = `*Ouch.* Las botas se te resbalan en un charco de cerveza añeja y manteca derramada [🎲 Tirada D20: **1 ¡PIFIA!**]. 
 
@@ -382,6 +441,8 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     text,
     suggestedActions,
     damageTaken,
-    goldEarned
+    goldEarned,
+    // Only when Duncan's own roll is mentioned in the narration
+    roll: !playerRoll && text.includes('🎲') ? { sides: 20, value: rollResult } : null
   };
 }

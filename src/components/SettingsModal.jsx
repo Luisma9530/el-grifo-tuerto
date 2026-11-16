@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { X, Key, Volume2, Trash2, Check, Sparkles, BookOpen } from 'lucide-react';
+import { X, Key, Volume2, Trash2, Check, Sparkles, BookOpen, Dice5 } from 'lucide-react';
+import { is3DDiceEnabled, set3DDiceEnabled } from '../dice3d/controller';
 
 export default function SettingsModal({ isOpen, onClose, onClearData, onOpenGeminiConnect, onOpenCampaigns }) {
   const [apiKey, setApiKey] = useState('');
   const [saved, setSaved] = useState(false);
+  const [dice3D, setDice3D] = useState(() => is3DDiceEnabled());
 
   useEffect(() => {
     const stored = localStorage.getItem('tavern_gemini_key') || '';
@@ -21,7 +23,7 @@ export default function SettingsModal({ isOpen, onClose, onClearData, onOpenGemi
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="w-full max-w-lg rounded-2xl bg-[#141019] border-2 border-stone-700 p-6 sm:p-7 shadow-2xl relative">
+      <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl bg-[#141019] border-2 border-stone-700 p-6 sm:p-7 shadow-2xl relative">
         
         {/* Close */}
         <button
@@ -92,6 +94,30 @@ export default function SettingsModal({ isOpen, onClose, onClearData, onOpenGemi
               <span>Modo Gemini activado para respuestas en vivo.</span>
             </p>
           )}
+        </div>
+
+        {/* 3D dice */}
+        <div className="p-4 rounded-xl bg-[#1a1522] border border-amber-900/30 mb-6">
+          <label className="flex items-center justify-between gap-3 cursor-pointer">
+            <span className="flex items-center gap-2">
+              <Dice5 className="w-4 h-4 text-amber-400" />
+              <span className="font-cinzel text-sm font-bold text-stone-100">Dados en 3D</span>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={dice3D}
+              onChange={(e) => {
+                setDice3D(e.target.checked);
+                set3DDiceEnabled(e.target.checked);
+              }}
+              className="w-4 h-4 accent-amber-500 cursor-pointer"
+            />
+          </label>
+          <p className="text-xs text-stone-400 leading-relaxed mt-2">
+            Lanza dados con físicas reales que ruedan y rebotan por la pantalla. Desactívalo si tu dispositivo va justo
+            de potencia: las tiradas se resolverán al instante.
+          </p>
         </div>
 
         {/* Campaigns Manager */}

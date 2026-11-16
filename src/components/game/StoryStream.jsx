@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import RichText from '../RichText';
 import { Send, Dice5, Sparkles, Sword, Eye, MessageCircle, Flame, ShieldAlert } from 'lucide-react';
 
 export default function StoryStream({
@@ -135,7 +136,7 @@ export default function StoryStream({
 
               {/* Text content */}
               <div className="whitespace-pre-line">
-                {msg.text}
+                <RichText text={msg.text} />
               </div>
 
               {/* Status / Dice badges */}

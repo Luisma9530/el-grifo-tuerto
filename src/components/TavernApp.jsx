@@ -16,6 +16,7 @@ import {
   isQuotaError
 } from '../utils/campaignStorage';
 import { tavernAudio } from '../utils/audio';
+import { animateRoll, is3DDiceEnabled } from '../dice3d/controller';
 
 export default function TavernApp({
   activeCampaign = null,
@@ -98,6 +99,7 @@ export default function TavernApp({
   });
 
   const [saveStatus, setSaveStatus] = useState('saved'); // 'saved' | 'error' | 'quota'
+  const isRollingCheckRef = useRef(false); // a stat check die is on the table
 
   // Guards against double-creation under React.StrictMode (effects run twice in dev)
   const campaignInitRef = useRef(false);
@@ -105,6 +107,15 @@ export default function TavernApp({
   // (compare with the previous prop value; a "first run" flag breaks under StrictMode's double effects)
   const prevActiveCharacterRef = useRef(activeCharacter);
   const prevActiveWorldRef = useRef(activeWorld);
+
+  // Warm up the 3D dice engine in the background so the first roll starts instantly
+  useEffect(() => {
+    if (!is3DDiceEnabled()) return undefined;
+    const timer = setTimeout(() => {
+      import('../dice3d/engine').catch(() => {});
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Ensure campaign is initialized and stored
   useEffect(() => {
@@ -183,7 +194,7 @@ export default function TavernApp({
   };
 
   // Main Action Dispatcher
-  const handleSendAction = async (actionText) => {
+  const handleSendAction = async (actionText, { playerRoll = null } = {}) => {
     if (!actionText || isGenerating) return;
 
     // Add player's action to messages
@@ -207,8 +218,14 @@ export default function TavernApp({
         character,
         world,
         history: newMsgList,
-        apiKeys: currentKeys
+        apiKeys: currentKeys,
+        playerRoll
       });
+
+      // Duncan rolled behind the screen: show the die before his narration
+      if (response.roll) {
+        await animateRoll({ ...response.roll, label: 'Tirada de Maese Duncan' });
+      }
 
       // Apply damage or gold consequences
       if (response.damageTaken > 0 || response.goldEarned > 0) {
@@ -242,11 +259,26 @@ export default function TavernApp({
   };
 
   // When rolling a stat check directly from character sheet
-  const handleRollStatCheck = (statVal, statName) => {
-    const check = rollCheckWithStat(statVal, statName);
-    const textDesc = `Realizo una tirada de ${statName} [🎲 D20: ${check.rawRoll} (${check.modifier >= 0 ? `+${check.modifier}` : check.modifier}) = ${check.total} vs CD ${check.dc}].`;
+  const handleRollStatCheck = async (statVal, statName) => {
+    if (isGenerating || isRollingCheckRef.current) return;
+    isRollingCheckRef.current = true;
 
-    handleSendAction(textDesc);
+    try {
+      const check = rollCheckWithStat(statVal, statName, undefined, { silent: true });
+      await animateRoll({
+        sides: 20,
+        value: check.rawRoll,
+        modifier: check.modifier,
+        dc: check.dc,
+        success: check.success,
+        label: `Tirada de ${statName}`
+      });
+
+      const textDesc = `Realizo una tirada de ${statName} [🎲 D20: ${check.rawRoll} (${check.modifier >= 0 ? `+${check.modifier}` : check.modifier}) = ${check.total} vs CD ${check.dc}].`;
+      handleSendAction(textDesc, { playerRoll: check });
+    } finally {
+      isRollingCheckRef.current = false;
+    }
   };
 
   // When ordering a drink from Duncan's tavern menu
@@ -425,7 +457,7 @@ export default function TavernApp({
       </header>
 
       {/* Mobile Tab switcher (visible only on small screens) */}
-      <div className="md:hidden flex border-b border-amber-950/60 bg-[#14101c] text-xs font-semibold">
+      <div className="lg:hidden flex border-b border-amber-950/60 bg-[#14101c] text-xs font-semibold">
         <button
           onClick={() => setMobileTab('story')}
           className={`flex-1 py-2 text-center border-b-2 ${
@@ -456,7 +488,7 @@ export default function TavernApp({
       <div className="flex-1 flex overflow-hidden relative">
         
         {/* Left Column: Party & Sheet (300px on desktop) */}
-        <div className={`w-full md:w-80 lg:w-88 shrink-0 ${mobileTab === 'party' ? 'block' : 'hidden md:block'}`}>
+        <div className={`w-full lg:w-72 xl:w-80 2xl:w-88 shrink-0 ${mobileTab === 'party' ? 'block' : 'hidden lg:block'}`}>
           <PartyPanel
             character={character}
             onUpdateCharacter={setCharacter}
@@ -468,7 +500,7 @@ export default function TavernApp({
         </div>
 
         {/* Center Column: Story Stream (Flexible width) */}
-        <div className={`flex-1 flex flex-col h-full overflow-hidden ${mobileTab === 'story' ? 'block' : 'hidden md:flex'}`}>
+        <div className={`flex-1 min-w-0 flex-col h-full overflow-hidden ${mobileTab === 'story' ? 'flex' : 'hidden lg:flex'}`}>
           <StoryStream
             messages={messages}
             isGenerating={isGenerating}
@@ -482,7 +514,7 @@ export default function TavernApp({
         </div>
 
         {/* Right Column: World Map & Factions (300px on desktop) */}
-        <div className={`w-full md:w-80 lg:w-88 shrink-0 ${mobileTab === 'map' ? 'block' : 'hidden md:block'}`}>
+        <div className={`w-full lg:w-72 xl:w-80 2xl:w-88 shrink-0 ${mobileTab === 'map' ? 'block' : 'hidden lg:block'}`}>
           <WorldMapPanel
             world={world}
             onTravelToNode={handleTravelToNode}

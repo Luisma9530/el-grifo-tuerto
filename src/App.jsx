@@ -15,6 +15,7 @@ import GeminiConnectModal from './components/GeminiConnectModal';
 import CampaignsModal from './components/CampaignsModal';
 import WorldSavesModal from './components/WorldSavesModal';
 import BackupReminder from './components/BackupReminder';
+import DiceOverlay from './components/DiceOverlay';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from './data/gameData';
 import { getStoredGeminiKeys } from './utils/gameEngine';
 import { 
@@ -179,6 +180,9 @@ export default function App() {
           onOpenCampaigns={() => setIsCampaignsOpen(true)}
         />
       )}
+
+      {/* 3D dice stage (above everything, only visible while rolling) */}
+      <DiceOverlay />
 
       {/* Global Modals */}
       <WorldSavesModal
