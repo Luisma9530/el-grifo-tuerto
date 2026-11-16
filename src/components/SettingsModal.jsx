@@ -1,11 +1,15 @@
 import React, { useState, useEffect } from 'react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import { X, Key, Volume2, Trash2, Check, Sparkles, BookOpen, Dice5 } from 'lucide-react';
 import { is3DDiceEnabled, set3DDiceEnabled } from '../dice3d/controller';
+import { tavernAudio } from '../utils/audio';
 
 export default function SettingsModal({ isOpen, onClose, onClearData, onOpenGeminiConnect, onOpenCampaigns }) {
+  useEscapeKey(isOpen, onClose);
   const [apiKey, setApiKey] = useState('');
   const [saved, setSaved] = useState(false);
   const [dice3D, setDice3D] = useState(() => is3DDiceEnabled());
+  const [sfxOn, setSfxOn] = useState(() => !tavernAudio.muted);
 
   useEffect(() => {
     const stored = localStorage.getItem('tavern_gemini_key') || '';
@@ -117,6 +121,26 @@ export default function SettingsModal({ isOpen, onClose, onClearData, onOpenGemi
           <p className="text-xs text-stone-400 leading-relaxed mt-2">
             Lanza dados con físicas reales que ruedan y rebotan por la pantalla. Desactívalo si tu dispositivo va justo
             de potencia: las tiradas se resolverán al instante.
+          </p>
+
+          <label className="flex items-center justify-between gap-3 cursor-pointer mt-4 pt-4 border-t border-stone-800">
+            <span className="flex items-center gap-2">
+              <Volume2 className="w-4 h-4 text-amber-400" />
+              <span className="font-cinzel text-sm font-bold text-stone-100">Efectos de sonido</span>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={sfxOn}
+              onChange={(e) => {
+                setSfxOn(e.target.checked);
+                tavernAudio.setMuted(!e.target.checked);
+              }}
+              className="w-4 h-4 accent-amber-500 cursor-pointer"
+            />
+          </label>
+          <p className="text-xs text-stone-400 leading-relaxed mt-2">
+            Dados, fanfarrias de crítico y jarras. El ambiente de taberna se controla con su propio botón.
           </p>
         </div>
 

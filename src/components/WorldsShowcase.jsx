@@ -2,6 +2,9 @@ import React from 'react';
 import { Compass, Sparkles, Skull, Shield, Users, ArrowRight } from 'lucide-react';
 import { PRESET_WORLDS } from '../data/gameData';
 
+// Skipped when shortening a world name for its button ("La Ciudadela de Ceniza" -> "Ciudadela")
+const ARTICLES = ['el', 'la', 'los', 'las'];
+
 export default function WorldsShowcase({ onSelectWorld, onOpenWorldForge }) {
   return (
     <section id="worlds" className="py-20 bg-[#0a090d] relative">
@@ -86,7 +89,7 @@ export default function WorldsShowcase({ onSelectWorld, onOpenWorldForge }) {
                   onClick={() => onSelectWorld(world)}
                   className="w-full py-3 px-4 rounded-xl bg-amber-600/20 hover:bg-amber-600 border border-amber-500/40 hover:border-amber-400 text-amber-200 hover:text-stone-950 font-cinzel font-bold text-sm transition-all flex items-center justify-center gap-2 group-hover:bg-amber-600 group-hover:text-stone-950 shadow-md"
                 >
-                  <span>Entrar en {world.name.split(' ')[0]}</span>
+                  <span>Entrar en {world.name.split(' ').find(word => !ARTICLES.includes(word.toLowerCase())) || world.name}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>

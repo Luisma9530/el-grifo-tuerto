@@ -19,11 +19,11 @@ export default function Footer({ onEnterTavern, onOpenInvite }) {
               </span>
             </div>
             <p className="text-stone-300 text-sm max-w-sm leading-relaxed mb-4">
-              La plataforma de rol de mesa D&D asistida por IA donde las aventuras nunca se cancelan. Juega en solitario o con amigos 100% gratis con Maese Duncan.
+              Rol de mesa estilo D&D en solitario, con Maese Duncan como Dungeon Master. Las aventuras nunca se cancelan: gratis, sin registro y en tu navegador.
             </p>
             <div className="flex items-center gap-2 text-xs font-mono text-stone-400">
               <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              <span>Servidores activos — Latencia 18ms</span>
+              <span>Sin servidores: tus partidas se guardan en tu navegador</span>
             </div>
           </div>
 
@@ -40,7 +40,7 @@ export default function Footer({ onEnterTavern, onOpenInvite }) {
               </li>
               <li>
                 <button onClick={onOpenInvite} className="hover:text-amber-400 transition-colors">
-                  Invitar Amigos Gratis
+                  Compartir la Taberna
                 </button>
               </li>
               <li>
@@ -63,11 +63,11 @@ export default function Footer({ onEnterTavern, onOpenInvite }) {
               </div>
               <div className="p-2.5 rounded-lg bg-stone-900/80 border border-stone-800 flex items-center gap-2 text-stone-300">
                 <span>📱</span>
-                <span>iOS App Store (iPhone & iPad)</span>
+                <span>Móvil y tablet, desde el navegador</span>
               </div>
               <div className="p-2.5 rounded-lg bg-stone-900/80 border border-stone-800 flex items-center gap-2 text-stone-300">
-                <span>🤖</span>
-                <span>Android (Google Play)</span>
+                <span>🔓</span>
+                <span>Sin instalación ni registro</span>
               </div>
             </div>
           </div>

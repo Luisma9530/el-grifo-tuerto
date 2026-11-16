@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import { X, Dice5, Shield, Sparkles, User, RefreshCw } from 'lucide-react';
 import { getModifier, rollDie } from '../utils/gameEngine';
 
 export default function CharacterCreatorModal({ isOpen, onClose, onSaveCharacter }) {
+  useEscapeKey(isOpen, onClose);
   const [name, setName] = useState('');
   const [race, setRace] = useState('Humano');
   const [characterClass, setCharacterClass] = useState('Guerrero');

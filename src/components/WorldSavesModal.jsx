@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import { X, Plus, Heart, Shield, Coins, MapPin, Clock, ScrollText, Trash2, Play } from 'lucide-react';
 import { getAllCampaigns, deleteCampaign } from '../utils/campaignStorage';
 import { parseClassAndLevel, getCurrentLocation, formatLastPlayed, stripMarkdown } from '../utils/saveSlots';
@@ -8,6 +9,7 @@ import { parseClassAndLevel, getCurrentLocation, formatLastPlayed, stripMarkdown
  * lists that world's saved campaigns and an empty "+" slot to start a new one.
  */
 export default function WorldSavesModal({ isOpen, world, onClose, onLoadCampaign, onCreateNew }) {
+  useEscapeKey(isOpen, onClose);
   const [saves, setSaves] = useState([]);
 
   useEffect(() => {

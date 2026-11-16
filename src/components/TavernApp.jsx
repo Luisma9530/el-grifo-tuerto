@@ -17,6 +17,7 @@ import {
 } from '../utils/campaignStorage';
 import { tavernAudio } from '../utils/audio';
 import { animateRoll, is3DDiceEnabled } from '../dice3d/controller';
+import { applySceneOutcome } from '../utils/sceneOutcome';
 
 export default function TavernApp({
   activeCampaign = null,
@@ -194,7 +195,9 @@ export default function TavernApp({
   };
 
   // Main Action Dispatcher
-  const handleSendAction = async (actionText, { playerRoll = null } = {}) => {
+  // `sheet`: pass the just-updated character when the caller changed it in this same tick
+  // (state updates are not visible here until the next render)
+  const handleSendAction = async (actionText, { playerRoll = null, sheet = character } = {}) => {
     if (!actionText || isGenerating) return;
 
     // Add player's action to messages
@@ -215,7 +218,7 @@ export default function TavernApp({
 
       const response = await generateDMResponse({
         playerAction: actionText,
-        character,
+        character: sheet,
         world,
         history: newMsgList,
         apiKeys: currentKeys,
@@ -231,12 +234,14 @@ export default function TavernApp({
       const damage = response.damageTaken || 0;
       const healing = response.healing || 0;
       const goldChange = response.goldEarned || 0;
+      const effects = { damage, healing, goldChange };
+      const outcome = applySceneOutcome(sheet, effects);
       if (damage || healing || goldChange) {
-        setCharacter(prev => ({
-          ...prev,
-          hp: Math.min(prev.maxHp, Math.max(0, prev.hp - damage + healing)),
-          gold: Math.max(0, prev.gold + goldChange)
-        }));
+        // Recomputed from the latest state, in case the sheet changed while Duncan was thinking
+        setCharacter(prev => {
+          const next = applySceneOutcome(prev, effects);
+          return { ...prev, hp: next.hp, gold: next.gold };
+        });
       }
 
       setMessages(prev => [
@@ -250,6 +255,18 @@ export default function TavernApp({
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);
+
+      // Dropping to 0 HP: Duncan patches the hero up... at a price
+      if (outcome.knockedOut) {
+        setMessages(prev => [
+          ...prev,
+          {
+            sender: 'system',
+            text: `💀 ${sheet.name} cae inconsciente. Maese Duncan te arrastra junto a la chimenea y te remienda: despiertas con ${outcome.hp} HP${outcome.goldLost > 0 ? ` y ${outcome.goldLost} monedas de oro menos por los cuidados` : ''}.`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }
+        ]);
+      }
 
       if (response.suggestedActions) {
         setSuggestedActions(response.suggestedActions);
@@ -288,13 +305,14 @@ export default function TavernApp({
   const handleOrderDrink = (drink) => {
     if (character.gold < drink.cost) return;
 
-    setCharacter(prev => ({
-      ...prev,
-      gold: prev.gold - drink.cost,
-      hp: Math.min(prev.maxHp, prev.hp + 4)
-    }));
+    const updated = {
+      ...character,
+      gold: character.gold - drink.cost,
+      hp: Math.min(character.maxHp, character.hp + 4)
+    };
+    setCharacter(updated);
 
-    handleSendAction(`Pido a Maese Duncan un/a "${drink.name}" (${drink.cost} po). ${drink.effect}`);
+    handleSendAction(`Pido a Maese Duncan un/a "${drink.name}" (${drink.cost} po). ${drink.effect}`, { sheet: updated });
   };
 
   // When traveling to another node on the world map
@@ -438,13 +456,13 @@ export default function TavernApp({
             {isAudioActive ? <Volume2 className="w-4 h-4 text-amber-400" /> : <VolumeX className="w-4 h-4" />}
           </button>
 
-          {/* Invite friend button */}
+          {/* Share button */}
           <button
             onClick={onOpenInvite}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-stone-900 hover:bg-stone-850 border border-stone-800 text-stone-300 hover:text-amber-300 text-xs font-semibold transition-all"
           >
             <Users className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Invitar</span>
+            <span className="hidden sm:inline">Compartir</span>
           </button>
 
           {/* Settings button */}
@@ -496,7 +514,6 @@ export default function TavernApp({
             character={character}
             onUpdateCharacter={setCharacter}
             onOrderDrink={handleOrderDrink}
-            onOpenInvite={onOpenInvite}
             onOpenCharacterModal={onOpenCharacterCreator}
             onRollStatCheck={handleRollStatCheck}
           />

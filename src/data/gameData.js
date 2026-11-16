@@ -208,129 +208,37 @@ export const TAVERN_MENU = [
   { id: 'pipe', name: 'Tabaco de Pipa de Maese Duncan', cost: 4, icon: '🌿', effect: 'Baja el estrés del grupo y otorga inspiración de Duncan' }
 ];
 
+// Only facts that are true for this app (no accounts, no servers, no fees)
 export const TAVERN_STATS = [
-  { value: '285.000+', label: 'Aventureros Registrados' },
-  { value: '42.000+', label: 'Campañas Persistentes' },
-  { value: '4.9 / 5', label: 'Valoración de la Comunidad' },
+  { value: String(PRESET_WORLDS.length), label: 'Mundos Listos para Jugar' },
+  { value: '7', label: 'Dados Poliédricos en 3D' },
+  { value: '0 €', label: 'Gratis y Sin Registro' },
   { value: '0 seg', label: 'Tiempo de Espera para Empezar' }
-];
-
-export const PRICING_TIERS = [
-  {
-    id: 'free',
-    name: 'Vagabundo de Taberna',
-    price: '0€',
-    period: 'Gratis para siempre',
-    description: 'Perfecto para probar la taberna en solitario o unirte a la partida de un amigo.',
-    badge: null,
-    features: [
-      '50 turnos de historia al mes',
-      '1 campaña activa',
-      'Tirador de dados 3D con audio',
-      'Juega gratis con el link de un amigo',
-      'Acceso a mundos públicos',
-      'Guardado local en navegador'
-    ],
-    cta: 'Empezar Gratis',
-    popular: false
-  },
-  {
-    id: 'adventurer',
-    name: 'Aventurero Curtido',
-    price: '8€',
-    period: 'al mes',
-    description: 'Para jugadores frecuentes que quieren explorar varios mundos sin límites de campañas.',
-    badge: 'Popular para Solitarios',
-    features: [
-      '150 turnos de historia al mes',
-      'Campañas ilimitadas',
-      'Pase de Amigos (hasta 2 amigos gratis)',
-      'Audio ambiental inmersivo en vivo',
-      'Generador de personajes avanzado',
-      'Ficha de personaje exportable'
-    ],
-    cta: 'Elegir Aventurero',
-    popular: false
-  },
-  {
-    id: 'hero',
-    name: 'Héroe de la Taberna',
-    price: '15€',
-    period: 'al mes',
-    description: 'La experiencia definitiva de El Grifo Tuerto. Todo tu grupo juega gratis con tu enlace.',
-    badge: '⭐ El Favorito de la Mesa',
-    features: [
-      '200 turnos premium / ilimitado estándar',
-      'Pase de Mesa Completa (¡hasta 5 amigos juegan 100% GRATIS!)',
-      'Forja de Mundos personalizada con IA',
-      'Memoria persistente profunda para NPCs y facciones',
-      'Generación de mapas tácticos interactivos',
-      'Voz de Maese Duncan con respuestas avanzadas',
-      'Soporte prioritario y badge de Héroe'
-    ],
-    cta: 'Reclamar Pase de Héroe',
-    popular: true
-  },
-  {
-    id: 'dungeon-master',
-    name: 'Señor de la Mazmorra',
-    price: '29€',
-    period: 'al mes',
-    description: 'Para creadores de contenido, directores de juego y grupos de rol empedernidos.',
-    badge: 'Acceso Total',
-    features: [
-      'Turnos y memoria ilimitados',
-      'Multijugador masivo (hasta 8 jugadores)',
-      'Integración con tu propia API Key (Claude 3.5, GPT-4o, Gemini 2.0)',
-      'Exportación completa de crónicas a formato PDF y Markdown',
-      'Mundos privados y monetizables en la comunidad',
-      'Acceso beta a nuevas funciones y miniaturas 3D'
-    ],
-    cta: 'Convertirse en DM Supremo',
-    popular: false
-  }
-];
-
-export const TESTIMONIALS = [
-  {
-    name: 'Marcos R. (Veterano D&D 5e)',
-    avatar: '🧙‍♂️',
-    role: 'Jugador desde 2012',
-    comment: 'Trabajo a turnos y cuadrar una sesión de D&D con mis 4 amigos era imposible desde hacía 2 años. Con El Grifo Tuerto jugamos los martes a las 11 PM por Discord. Creamos la partida y todos entran gratis en 2 segundos.'
-  },
-  {
-    name: 'Elena "Valyria" G.',
-    avatar: '🗡️',
-    role: 'Rolera en solitario',
-    comment: 'La personalidad de Maese Duncan es oro puro. No es el típico bot soso y condescendiente; te vacila, te hace tirar salvaciones de destreza cuando se rompe una mesa y recuerda que le debes 3 monedas de plata de hace tres sesiones.'
-  },
-  {
-    name: 'David & Grupo "Los Cuervos"',
-    avatar: '🛡️',
-    role: 'Party de 5 aventureros',
-    comment: 'El sonido de los dados y la hoguera de fondo mientras la IA describe el combate hace que sientas que estás en una taberna de verdad. El mapa interactivo y el inventario hacen que no tengamos que pelear con hojas de cálculo.'
-  }
 ];
 
 export const FAQS = [
   {
-    q: '¿Cómo funciona la partida con amigos?',
-    a: 'Exactamente igual que en una mesa física: creas la partida y pulsas "Invitar Amigos". El sistema genera un código y enlace directo. Tus compañeros solo tienen que pinchar y ya están sentados a tu mesa con su personaje, ¡100% gratis y sin registros forzosos!'
+    q: '¿Es realmente gratis? ¿Hay que registrarse?',
+    a: 'Sí, es gratis y no hay cuentas ni suscripciones. Abres la página y juegas. Tus partidas se guardan en tu propio navegador.'
   },
   {
     q: '¿Necesito saber las reglas de D&D 5ª Edición para jugar?',
-    a: '¡Para nada! Maese Duncan se encarga de calcular los modificadores, las clases de dificultad (CD), las tiradas de salvación y el daño. Tú solo escribes o eliges qué quieres que haga tu personaje con tus propias palabras, como "Salto sobre la mesa y lanzo mi jarra al orco".'
+    a: '¡Para nada! Tú solo escribes o eliges qué quieres que haga tu personaje con tus propias palabras. El juego tira los dados, aplica los modificadores de tu ficha y Maese Duncan narra lo que ocurre.'
   },
   {
-    q: '¿Puedo jugar 100% en solitario?',
-    a: 'Sí, más del 60% de los jugadores entran a jugar en solitario para vivir aventuras rápidas cuando les apetece sin depender del horario de nadie más.'
+    q: '¿Dónde se guardan mis partidas? ¿Puedo perderlas?',
+    a: 'Se guardan automáticamente en este navegador. Si borras los datos de navegación o cambias de dispositivo, no estarán allí: por eso el Grimorio de Campañas te deja exportar tus partidas a un archivo .json e importarlas en cualquier otro navegador.'
+  },
+  {
+    q: '¿Puedo jugar con amigos?',
+    a: 'El Grifo Tuerto es una experiencia en solitario: cada jugador vive su propia aventura en su navegador. Puedes compartir la página con tus amigos, o exportar tu campaña y enviársela para que la continúen por su cuenta.'
   },
   {
     q: '¿Puedo crear mi propio mundo o usar ambientaciones sci-fi?',
-    a: '¡Totalmente! Además de los mundos oficiales (Oakhaven, Ciudadela de Ceniza, Callejón Neón 2099, Arrecife del Abismo), con la "Forja de Mundos" puedes definir cualquier género: cyberpunk, fantasía medieval, western sobrenatural o terror cósmico.'
+    a: `¡Totalmente! Además de los mundos incluidos (${PRESET_WORLDS.map(w => w.name).join(', ')}), con la "Forja de Mundos" puedes definir tu propia ambientación: cyberpunk, fantasía medieval, western sobrenatural, terror cósmico...`
   },
   {
-    q: '¿Puedo usar mi propia cuenta gratuita de Google Gemini?',
-    a: 'Sí. La plataforma incluye un motor narrativo interactivo listo para jugar sin configurar nada, pero si quieres exprimir al máximo modelos en tiempo real como Google Gemini, puedes introducir tu clave gratuita de Google AI Studio (o las de tus amigos para sumar tokens) y Maese Duncan narrará sin límites.'
+    q: '¿Qué diferencia hay entre el motor local y conectar Google Gemini?',
+    a: 'El motor local funciona sin configurar nada, con respuestas predefinidas según el tipo de acción. Si conectas tu propia clave gratuita de Google AI Studio, Maese Duncan pasa a narrar con IA: improvisa, recuerda la crónica reciente y aplica daño y oro a tu ficha. La clave se queda en tu navegador, y el uso gratuito depende de los límites que fije Google.'
   }
 ];

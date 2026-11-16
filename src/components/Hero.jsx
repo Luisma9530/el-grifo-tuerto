@@ -1,5 +1,5 @@
 import React from 'react';
-import { Dice5, Users, Sparkles, Shield, ArrowRight, Flame, BookOpen } from 'lucide-react';
+import { Dice5, Sparkles, Shield, ArrowRight, Flame, BookOpen } from 'lucide-react';
 import { TAVERN_STATS } from '../data/gameData';
 
 export default function Hero({ onStartGame, onScrollToWorlds, onOpenCampaigns, campaignsCount = 0 }) {
@@ -15,7 +15,7 @@ export default function Hero({ onStartGame, onScrollToWorlds, onOpenCampaigns, c
         {/* Top Announcement Badge */}
         <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-semibold mb-6 shadow-sm hover:border-emerald-500/50 transition-colors">
           <Flame className="w-4 h-4 text-emerald-400 animate-pulse" />
-          <span>¡100% Gratuito y Libre: Campañas con IA sin límites ni suscripciones!</span>
+          <span>100% gratuito: sin registro, sin suscripciones y con tus partidas guardadas</span>
           <span className="text-emerald-400">→</span>
         </div>
 
@@ -29,8 +29,8 @@ export default function Hero({ onStartGame, onScrollToWorlds, onOpenCampaigns, c
 
         {/* Subtitle */}
         <p className="mt-6 text-lg sm:text-xl text-stone-300 max-w-3xl mx-auto leading-relaxed">
-          Un Dungeon Master impulsado por IA con <span className="text-amber-300 font-medium">dientes de verdad</span> y memoria persistente. 
-          Juega campañas en solitario a las 11 de la noche o pasa <span className="text-amber-300 font-medium">un único enlace para que hasta 5 amigos jueguen 100% gratis</span>.
+          Un Dungeon Master con <span className="text-amber-300 font-medium">dientes de verdad</span> que siempre está tras la barra.
+          Juega campañas en solitario a las 11 de la noche, <span className="text-amber-300 font-medium">con dados 3D, ficha de personaje y partidas que se guardan solas</span>.
         </p>
 
         {/* Call to Actions */}
@@ -63,18 +63,18 @@ export default function Hero({ onStartGame, onScrollToWorlds, onOpenCampaigns, c
           </button>
         </div>
 
-        {/* Free friends notice */}
+        {/* No-account notice */}
         <div className="mt-5 flex items-center justify-center gap-2 text-xs sm:text-sm text-stone-400 font-medium">
-          <Users className="w-4 h-4 text-emerald-400" />
-          <span>Tus amigos no necesitan suscripción ni cuenta para unirse a tu mesa.</span>
+          <Shield className="w-4 h-4 text-emerald-400" />
+          <span>Sin cuenta ni instalación: todo se queda en tu navegador.</span>
         </div>
 
-        {/* Live Adventurers Activity Ticker */}
+        {/* Examples of what can happen in a game (illustrative, not a live feed) */}
         <div className="mt-12 max-w-4xl mx-auto rounded-xl bg-gradient-to-r from-stone-900/70 via-stone-900/90 to-stone-900/70 border border-amber-900/30 p-3 shadow-inner">
           <div className="flex items-center justify-between text-xs font-mono text-stone-400 overflow-x-auto gap-6 px-2">
             <div className="flex items-center gap-2 whitespace-nowrap">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-              <span className="text-stone-300 font-semibold">EN VIVO EN LA TABERNA:</span>
+              <span className="w-2 h-2 rounded-full bg-amber-400" />
+              <span className="text-stone-300 font-semibold">COSAS QUE PASAN EN LA TABERNA:</span>
             </div>
             <div className="flex items-center gap-8 whitespace-nowrap text-stone-400">
               <span>⚔️ <strong className="text-amber-300">Brog</strong> destrozó la puerta del calabozo en Oakhaven</span>

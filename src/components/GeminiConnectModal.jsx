@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import { X, Sparkles, Key, ExternalLink, ShieldCheck, Check, Trash2, Plus, Users, Zap, RefreshCw, AlertCircle, HelpCircle } from 'lucide-react';
 import { getStoredGeminiKeys, saveStoredGeminiKeys, testGeminiKey } from '../utils/gameEngine';
 
 export default function GeminiConnectModal({ isOpen, onClose, onKeysUpdated }) {
+  useEscapeKey(isOpen, onClose);
   const [keysList, setKeysList] = useState([]);
   const [newKeyInput, setNewKeyInput] = useState('');
   const [newKeyLabel, setNewKeyLabel] = useState('');

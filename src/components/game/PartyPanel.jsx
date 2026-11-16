@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Heart, Shield, Coins, Users, Backpack, Coffee, Plus, Sparkles } from 'lucide-react';
+import { Heart, Shield, Coins, Backpack, Coffee, Sparkles } from 'lucide-react';
 import { getModifier } from '../../utils/gameEngine';
 import { TAVERN_MENU } from '../../data/gameData';
 import { tavernAudio } from '../../utils/audio';
@@ -8,7 +8,6 @@ export default function PartyPanel({
   character,
   onUpdateCharacter,
   onOrderDrink,
-  onOpenInvite,
   onOpenCharacterModal,
   onRollStatCheck
 }) {
@@ -200,43 +199,6 @@ export default function PartyPanel({
               <p className="text-xs text-stone-300 italic font-serif leading-relaxed">
                 "{character.backstory}"
               </p>
-            </div>
-
-            {/* Party Members in Tavern */}
-            <div className="pt-2">
-              <div className="flex items-center justify-between text-xs mb-2">
-                <span className="font-mono text-stone-400 uppercase tracking-wider">
-                  Mesa de Aventureros:
-                </span>
-                <button
-                  onClick={onOpenInvite}
-                  className="text-amber-400 hover:text-amber-300 text-[11px] font-bold flex items-center gap-1"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>Invitar Amigo</span>
-                </button>
-              </div>
-
-              <div className="space-y-1.5">
-                <div className="p-2 rounded-lg bg-amber-950/30 border border-amber-600/40 flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <span>👑</span>
-                    <span className="font-semibold text-stone-200">{character.name} (Tú)</span>
-                  </div>
-                  <span className="text-[10px] text-emerald-400 font-mono">EN MESA</span>
-                </div>
-
-                <div 
-                  onClick={onOpenInvite}
-                  className="p-2 rounded-lg bg-stone-900/50 border border-dashed border-stone-800 hover:border-amber-600/40 flex items-center justify-between text-xs text-stone-400 cursor-pointer transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    <Users className="w-3.5 h-3.5 text-stone-400" />
-                    <span>+ Invitar amigo a la campaña (Gratis)</span>
-                  </div>
-                  <span className="text-[10px] text-amber-400 font-mono">5 HUECOS</span>
-                </div>
-              </div>
             </div>
           </div>
         )}

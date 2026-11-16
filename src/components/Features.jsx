@@ -1,5 +1,5 @@
 import React from 'react';
-import { Clock, Users, Brain, Dice5, Check, X, ShieldAlert, Sparkles } from 'lucide-react';
+import { Clock, Save, Brain, Dice5, Check, X, Sparkles } from 'lucide-react';
 
 export default function Features() {
   const featuresList = [
@@ -10,22 +10,22 @@ export default function Features() {
       desc: 'El mayor jefe final de cualquier grupo de rol nunca fue un dragón anciano; fue cuadrar un sábado por la tarde. Con Maese Duncan, tu Dungeon Master siempre está tras la barra, despierto y listo para narrar.'
     },
     {
-      icon: <Users className="w-6 h-6 text-emerald-400" />,
-      title: 'Tus Amigos Juegan 100% Gratis',
-      subtitle: 'Un solo enlace privado para toda la mesa',
-      desc: 'No obligues a tus colegas a pagar suscripciones. Si tú tienes una campaña, generas un enlace y tus amigos pueden sentarse en tu mesa con sus personajes de forma totalmente gratuita y libre.'
+      icon: <Save className="w-6 h-6 text-emerald-400" />,
+      title: 'Tus Partidas, Siempre a Mano',
+      subtitle: 'Guardado automático, sin cuentas',
+      desc: 'Cada campaña se guarda sola en tu navegador, con varias ranuras por mundo. Desde el Grimorio puedes duplicarlas, exportarlas a un archivo y llevártelas a otro dispositivo.'
     },
     {
       icon: <Brain className="w-6 h-6 text-purple-400" />,
-      title: 'Memoria y Consecuencias Reales',
-      subtitle: 'Los taberneros recuerdan tus deudas y tus crímenes',
-      desc: 'A diferencia de los chatbots genéricos que se olvidan de todo a los cinco turnos, el mundo de El Grifo Tuerto rastrea reputaciones con facciones, personajes secundarios y el rastro de consecuencias que dejas a tu paso.'
+      title: 'Consecuencias Reales',
+      subtitle: 'Tu ficha cambia con lo que haces',
+      desc: 'Los golpes duelen y el oro se gasta: la vida, el oro y la ubicación de tu personaje cambian con cada escena. Si conectas Google Gemini, Maese Duncan narra con IA teniendo delante tu ficha y la crónica reciente.'
     },
     {
       icon: <Dice5 className="w-6 h-6 text-amber-400" />,
-      title: 'Dados Físicos & Audio Inmersivo',
-      subtitle: 'Siente el traqueteo de los dados poliédricos',
-      desc: 'Tira d20, d12, d10, d8, d6 y d4 con cálculos automáticos de tus atributos de personaje. Escucha el crepitar de la leña y el tintineo de las jarras mientras la tensión sube en cada decisión.'
+      title: 'Dados 3D & Audio Inmersivo',
+      subtitle: 'Míralos rodar y rebotar por la pantalla',
+      desc: 'Tira d20, d12, d10, d8, d6, d4 y d100 en 3D con físicas reales y los modificadores de tu ficha ya aplicados. Escucha el crepitar de la leña y el tintineo de las jarras mientras la tensión sube en cada decisión.'
     }
   ];
 
@@ -105,18 +105,14 @@ export default function Features() {
                   <td className="py-3.5 px-4 text-emerald-400">24/7</td>
                 </tr>
                 <tr>
-                  <td className="py-3.5 px-4 font-medium text-stone-200">Amigos juegan gratis</td>
+                  <td className="py-3.5 px-4 font-medium text-stone-200">Precio y registro</td>
                   <td className="py-3.5 px-4 font-semibold text-emerald-400 bg-amber-500/5">
                     <span className="inline-flex items-center gap-1 text-emerald-400 font-bold">
-                      <Check className="w-4 h-4" /> 100% Gratuito y Libre
+                      <Check className="w-4 h-4" /> Gratis y sin cuenta
                     </span>
                   </td>
-                  <td className="py-3.5 px-4 text-stone-300">Sí (en mesa física)</td>
-                  <td className="py-3.5 px-4 text-red-400">
-                    <span className="inline-flex items-center gap-1 text-red-400">
-                      <X className="w-4 h-4" /> No (Solo para 1 usuario)
-                    </span>
-                  </td>
+                  <td className="py-3.5 px-4 text-stone-300">Manuales, dados y pizza</td>
+                  <td className="py-3.5 px-4 text-stone-400">Cuenta obligatoria</td>
                 </tr>
                 <tr>
                   <td className="py-3.5 px-4 font-medium text-stone-200">Dados & Fichas con D&D 5e</td>
@@ -128,7 +124,7 @@ export default function Features() {
                   <td className="py-3.5 px-4 text-stone-300">Manual en papel o Roll20</td>
                   <td className="py-3.5 px-4 text-red-400">
                     <span className="inline-flex items-center gap-1 text-red-400">
-                      <X className="w-4 h-4" /> Se inventa los números
+                      <X className="w-4 h-4" /> Suele inventarse las tiradas
                     </span>
                   </td>
                 </tr>
@@ -141,12 +137,12 @@ export default function Features() {
                   <td className="py-3.5 px-4 text-stone-400">Soso, servicial y complaciente</td>
                 </tr>
                 <tr>
-                  <td className="py-3.5 px-4 font-medium text-stone-200">Memoria de Campaña & Mapas</td>
+                  <td className="py-3.5 px-4 font-medium text-stone-200">Partida guardada & Mapa</td>
                   <td className="py-3.5 px-4 font-semibold text-emerald-400 bg-amber-500/5 rounded-b-lg">
-                    Persistente con nodos y facciones
+                    Guardado automático y exportable
                   </td>
                   <td className="py-3.5 px-4 text-stone-300">Cuadernos y notas del DM</td>
-                  <td className="py-3.5 px-4 text-red-400">Se pierde a los pocos turnos</td>
+                  <td className="py-3.5 px-4 text-stone-400">Sin ficha ni mapa</td>
                 </tr>
               </tbody>
             </table>

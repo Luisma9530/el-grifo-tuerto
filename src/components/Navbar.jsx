@@ -146,13 +146,13 @@ export default function Navbar({
             <span>{keysCount > 0 ? `Gemini (${keysCount})` : 'Conectar IA Gratis'}</span>
           </button>
 
-          {/* Invite party button */}
+          {/* Share button */}
           <button
             onClick={onOpenInvite}
             className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-lg bg-stone-900/90 border border-amber-900/40 text-stone-200 text-xs font-semibold hover:border-amber-600/60 hover:text-amber-300 transition-all"
           >
             <Users className="w-3.5 h-3.5 text-amber-500" />
-            <span>Invitar Amigos</span>
+            <span>Compartir</span>
           </button>
 
           {/* Play / Enter Tavern Button */}

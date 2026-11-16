@@ -1,12 +1,33 @@
 // Web Audio API Synthesizer for El Grifo Tuerto
 // Generates realistic dice rolling, tankard clinks, tavern fire crackle, and victory/fail sounds
 
+const SFX_MUTED_KEY = 'tavern_sfx_muted';
+
+function readMutedPreference() {
+  try {
+    return localStorage.getItem(SFX_MUTED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 class TavernAudioEngine {
   constructor() {
     this.ctx = null;
     this.ambienceNode = null;
     this.isAmbiencePlaying = false;
-    this.muted = false;
+    this.muted = readMutedPreference();
+  }
+
+  /** Turn sound effects (dice, fanfares, clinks) on or off; remembered across visits. */
+  setMuted(muted) {
+    this.muted = Boolean(muted);
+    try {
+      if (this.muted) localStorage.setItem(SFX_MUTED_KEY, '1');
+      else localStorage.removeItem(SFX_MUTED_KEY);
+    } catch {
+      // ignore: the preference just won't persist
+    }
   }
 
   init() {

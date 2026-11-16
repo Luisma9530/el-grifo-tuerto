@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import { 
   X, BookOpen, Plus, Download, Upload, Trash2, Copy, Play, 
   Clock, Shield, Coins, Sparkles, Check, AlertCircle, FileText 
@@ -22,6 +23,7 @@ export default function CampaignsModal({
   activeCampaignId, 
   onSelectCampaign
 }) {
+  useEscapeKey(isOpen, onClose);
   const [campaigns, setCampaigns] = useState([]);
   const [notification, setNotification] = useState(null);
   const [isCreatingNew, setIsCreatingNew] = useState(false);

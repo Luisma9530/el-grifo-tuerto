@@ -4,7 +4,7 @@ import Hero from './components/Hero';
 import LiveTavernDemo from './components/LiveTavernDemo';
 import Features from './components/Features';
 import WorldsShowcase from './components/WorldsShowcase';
-import Testimonials from './components/Testimonials';
+import Faq from './components/Faq';
 import Footer from './components/Footer';
 import TavernApp from './components/TavernApp';
 import InviteModal from './components/InviteModal';
@@ -153,7 +153,7 @@ export default function App() {
               onOpenWorldForge={() => setIsWorldForgeOpen(true)}
             />
 
-            <Testimonials />
+            <Faq />
           </main>
 
           <Footer
@@ -212,6 +212,7 @@ export default function App() {
       <InviteModal
         isOpen={isInviteOpen}
         onClose={() => setIsInviteOpen(false)}
+        onOpenCampaigns={() => setIsCampaignsOpen(true)}
       />
 
       <WorldForgeModal

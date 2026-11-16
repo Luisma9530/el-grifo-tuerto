@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import { X, Sparkles, Wand2, Compass } from 'lucide-react';
 
 export default function WorldForgeModal({ isOpen, onClose, onCreateWorld }) {
+  useEscapeKey(isOpen, onClose);
   const [name, setName] = useState('');
   const [genre, setGenre] = useState('Fantasía Oscura');
   const [difficulty, setDifficulty] = useState('Equilibrado');
