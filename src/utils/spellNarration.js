@@ -23,7 +23,7 @@ const AFTER_UTILITY = [
  * @param {object} context
  * @param {object} context.character
  * @param {number} context.enemyRoll  d20 rolled by the engine, used as the target's saving throw
- * @returns {{ text: string, suggestedActions: string[], usedEnemyRoll: boolean }}
+ * @returns {{ text: string, suggestedActions: string[], usedEnemyRoll: boolean, xp: number }}
  */
 export function narrateSpell(cast, { character, enemyRoll }) {
   const { spell } = cast;
@@ -41,7 +41,8 @@ export function narrateSpell(cast, { character, enemyRoll }) {
 
 —*¡Por las barbas de mi abuelo! Avisa antes de hacer eso bajo mi techo, que casi me chamuscas el bigote.*`,
         suggestedActions: AFTER_COMBAT,
-        usedEnemyRoll: false
+        usedEnemyRoll: false,
+        xp: 75
       };
     }
     if (!isNat1 && total >= 12) {
@@ -52,7 +53,8 @@ export function narrateSpell(cast, { character, enemyRoll }) {
 
 —*Bonito truco* —gruñe Duncan sin dejar de secar una jarra—. *Sigue en pie, pero ya no sonríe tanto.*`,
         suggestedActions: AFTER_COMBAT,
-        usedEnemyRoll: false
+        usedEnemyRoll: false,
+        xp: 40
       };
     }
     return {
@@ -62,7 +64,8 @@ El conjuro pasa de largo y deja una marca humeante en una viga del techo. Alguie
 
 —*Esa viga lleva ahí doscientos años, hechicero. Como me la tires abajo, la pagas tú.*`,
       suggestedActions: ['Intentarlo de nuevo', 'Cambiar de táctica y sacar un arma', 'Ponerte a cubierto', 'Disculparte por lo de la viga'],
-      usedEnemyRoll: false
+      usedEnemyRoll: false,
+      xp: 10
     };
   }
 
@@ -79,7 +82,8 @@ El objetivo aprieta los dientes y aguanta el envite del conjuro.${partial}
 
 —*Ese es duro de pelar* —comenta Duncan, apoyado en la barra—. *Vas a tener que esforzarte más.*`,
         suggestedActions: ['Insistir con otro conjuro', 'Cambiar de táctica', 'Negociar antes de que vaya a peor', 'Retroceder hacia la puerta'],
-        usedEnemyRoll: true
+        usedEnemyRoll: true,
+        xp: cast.damage && spell.half ? 25 : 10
       };
     }
     return {
@@ -89,7 +93,8 @@ ${cast.damage ? `El conjuro le alcanza de lleno y le causa ${dmg}.` : `El conjur
 
 —*Mira tú por dónde* —Duncan arquea la ceja de su ojo bueno—. *La magia también sirve para algo más que para encender pipas.*`,
       suggestedActions: AFTER_COMBAT,
-      usedEnemyRoll: true
+      usedEnemyRoll: true,
+      xp: 40
     };
   }
 
@@ -101,7 +106,8 @@ El objetivo retrocede tambaleándose, con la ropa humeante y los ojos como plato
 
 —*Eso no falla nunca, ¿eh?* —dice Duncan—. *Recuérdame que no juegue a los dardos contigo.*`,
       suggestedActions: AFTER_COMBAT,
-      usedEnemyRoll: false
+      usedEnemyRoll: false,
+      xp: 40
     };
   }
 
@@ -111,7 +117,8 @@ El objetivo retrocede tambaleándose, con la ropa humeante y los ojos como plato
 
 —*Eso me ahorra vendas* —refunfuña Duncan, casi decepcionado—. *Aunque un buen estofado cura lo mismo y sabe mejor.*`,
       suggestedActions: ['Volver a la acción con fuerzas renovadas', 'Pedir un estofado igualmente', 'Preguntar a Duncan por los rumores', 'Revisar tu equipo'],
-      usedEnemyRoll: false
+      usedEnemyRoll: false,
+      xp: 0
     };
   }
 
@@ -122,7 +129,8 @@ Un par de parroquianos se santiguan y otro pide que le rellenen la jarra «por s
 
 —*Mientras no me espantes a la clientela, aquí cada uno hace lo que quiere* —dice Duncan encogiéndose de hombros.`,
     suggestedActions: AFTER_UTILITY,
-    usedEnemyRoll: false
+    usedEnemyRoll: false,
+    xp: 5
   };
 }
 

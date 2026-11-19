@@ -5,6 +5,7 @@ import { skillRows, proficiencyBonus, formatModifier } from '../../utils/charact
 import { TAVERN_MENU } from '../../data/gameData';
 import { tavernAudio } from '../../utils/audio';
 import SpellsTab, { RestButtons } from './SpellsTab';
+import { xpProgress, canLevelUp, canAdvance } from '../../utils/leveling';
 
 export default function PartyPanel({
   character,
@@ -13,8 +14,11 @@ export default function PartyPanel({
   onRollCheck,
   onCastSpell,
   onRest,
+  onLevelUp,
   busy = false
 }) {
+  const progress = xpProgress(character);
+  const levelUpReady = canLevelUp(character);
   const [activeTab, setActiveTab] = useState('sheet'); // 'sheet' | 'spells' | 'inventory' | 'menu'
   const hasMagic = Boolean(character.spellcasting);
   const hpPercent = Math.max(0, Math.min(100, Math.round((character.hp / character.maxHp) * 100)));
@@ -56,8 +60,10 @@ export default function PartyPanel({
               <p className="text-xs text-amber-400 font-medium">
                 {character.race} • {character.class}
               </p>
-              {character.background && (
-                <p className="text-[11px] text-stone-400">{character.background}</p>
+              {(character.background || character.subclass) && (
+                <p className="text-[11px] text-stone-400">
+                  {[character.subclass, character.background].filter(Boolean).join(' · ')}
+                </p>
               )}
             </div>
           </div>
@@ -87,6 +93,34 @@ export default function PartyPanel({
                 style={{ width: `${hpPercent}%` }}
               />
             </div>
+          </div>
+
+          {/* Experience */}
+          <div>
+            <div className="flex items-center justify-between text-xs font-mono mb-1">
+              <span className="flex items-center gap-1 text-sky-300 font-semibold">
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Nivel {progress.level}</span>
+              </span>
+              <span className="text-stone-400">
+                {progress.next == null ? `${progress.xp} PX · nivel máximo` : `${progress.xp} / ${progress.next} PX`}
+              </span>
+            </div>
+            <div className="w-full h-1.5 rounded-full bg-stone-900 overflow-hidden border border-stone-800">
+              <div className="h-full rounded-full bg-gradient-to-r from-sky-600 to-sky-400 transition-all duration-500" style={{ width: `${progress.percent}%` }} />
+            </div>
+            {levelUpReady && (
+              <button
+                onClick={onLevelUp}
+                disabled={busy}
+                className="mt-2 w-full py-2 rounded-lg bg-gradient-to-r from-amber-600 to-amber-500 hover:brightness-110 text-stone-950 text-xs font-cinzel font-bold flex items-center justify-center gap-1.5 shadow-lg shadow-amber-900/40 animate-pulse disabled:opacity-50 disabled:animate-none"
+              >
+                <Sparkles className="w-3.5 h-3.5" /> ¡Subir a nivel {progress.level + 1}!
+              </button>
+            )}
+            {!canAdvance(character) && progress.next != null && progress.xp >= progress.next && (
+              <p className="mt-1 text-[10px] text-stone-500">Los héroes de partidas antiguas no pueden subir de nivel: crea uno nuevo para disfrutarlo.</p>
+            )}
           </div>
 
           {/* AC and Gold pill row */}

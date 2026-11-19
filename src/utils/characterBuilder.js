@@ -324,6 +324,8 @@ export function buildCharacter(draft, { id = `hero_${Date.now()}` } = {}) {
     name: draft.name.trim(),
     avatar: draft.avatar,
     level: 1,
+    xp: 0,
+    subclass: null,
     // Display strings used across the app (kept for compatibility with older saves)
     race: speciesDisplayName(species, draft.speciesOption),
     class: `${cls.name} (Nivel 1)`,

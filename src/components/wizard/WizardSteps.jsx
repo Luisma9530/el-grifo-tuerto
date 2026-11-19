@@ -10,7 +10,7 @@ import {
   backgroundSkills, speciesSkillOptions, classSkillOptions, isExtraFeatAllowed, randomName
 } from '../../utils/characterBuilder';
 import { tavernAudio } from '../../utils/audio';
-import { spellRows, slotsLeft } from '../../utils/spellcasting';
+import { spellRows, slotsLeft, slotRecovery } from '../../utils/spellcasting';
 
 // ---------------------------------------------------------------------------
 // Small shared pieces
@@ -767,7 +767,7 @@ export function StepSummary({ character, world }) {
                 <div>
                   <dt className="text-stone-500">Espacios de conjuro de nivel 1</dt>
                   <dd className="text-stone-200">
-                    {slotsLeft(character)}{character.spellcasting.slots.recovery === 'short' ? ' (se recupera con un descanso corto)' : ''}
+                    {slotsLeft(character)}{slotRecovery(character.spellcasting) === 'short' ? ' (se recupera con un descanso corto)' : ''}
                   </dd>
                 </div>
               )}

@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import { BedDouble, Flame, Sparkles } from 'lucide-react';
-import { spellRows, slotsLeft, spellSummary, hasHitDie, LONG_REST_COST } from '../../utils/spellcasting';
+import { spellRows, slotTable, slotRecovery, spellSummary, hasHitDie, hitDiceLeft, LONG_REST_COST } from '../../utils/spellcasting';
 import { formatModifier } from '../../utils/characterBuilder';
 
 /** Short and long rest buttons (shown in the spells tab and at the tavern bar). */
 export function RestButtons({ character, onRest, busy }) {
-  const slots = character.spellcasting?.slots;
+  const pactMagic = slotRecovery(character.spellcasting) === 'short';
   const shortRestHelps = (hasHitDie(character) && character.hp < character.maxHp)
-    || (slots?.recovery === 'short' && slots.used > 0);
+    || (pactMagic && slotTable(character.spellcasting).some(row => row.used > 0));
   const canAffordRoom = character.gold >= LONG_REST_COST;
 
   return (
@@ -18,7 +18,7 @@ export function RestButtons({ character, onRest, busy }) {
           onClick={() => onRest('short')}
           disabled={busy}
           title={shortRestHelps
-            ? 'Una hora de respiro: gastas tu dado de golpe para curarte' + (slots?.recovery === 'short' ? ' y recuperas tu magia de pacto' : '')
+            ? `Una hora de respiro: gastas un dado de golpe (te quedan ${hitDiceLeft(character)}) para curarte` + (pactMagic ? ' y recuperas tu magia de pacto' : '')
             : 'Una hora de respiro (ahora mismo no recuperarías nada)'}
           className="px-2.5 py-2 rounded-lg bg-[#1c1726] hover:bg-amber-950/40 border border-stone-700 hover:border-amber-600/50 disabled:opacity-40 text-xs text-stone-200 flex items-center justify-center gap-1.5 transition-colors"
         >
@@ -88,25 +88,36 @@ function SpellList({ title, rows, onCast, busy }) {
 export default function SpellsTab({ character, onCastSpell, onRest, busy }) {
   const [target, setTarget] = useState('');
   const rows = spellRows(character);
-  const slots = character.spellcasting?.slots;
-  const left = slotsLeft(character);
+  const slots = slotTable(character.spellcasting);
+  const recovery = slotRecovery(character.spellcasting);
   const cast = spellId => onCastSpell(spellId, target);
+  const levels = [...new Set(rows.filter(s => s.level > 0).map(s => s.level))].sort((a, b) => a - b);
 
   return (
     <div className="space-y-4">
-      {slots && (
-        <div className="p-3 rounded-xl bg-purple-950/20 border border-purple-900/40 flex items-center justify-between gap-3">
-          <div>
-            <span className="text-[10px] font-mono uppercase text-stone-400 tracking-wider block">Espacios de conjuro · nivel 1</span>
-            <span className="text-[11px] text-stone-400">
-              Se recuperan con un descanso {slots.recovery === 'short' ? 'corto' : 'largo'}
-            </span>
+      {slots.length > 0 && (
+        <div className="p-3 rounded-xl bg-purple-950/20 border border-purple-900/40">
+          <div className="flex items-baseline justify-between gap-2 mb-2">
+            <span className="text-[10px] font-mono uppercase text-stone-400 tracking-wider">Espacios de conjuro</span>
+            <span className="text-[11px] text-stone-400">Se recuperan con un descanso {recovery === 'short' ? 'corto' : 'largo'}</span>
           </div>
-          <div className="flex items-center gap-1.5" role="img" aria-label={`${left} de ${slots.max} espacios de conjuro disponibles`}>
-            {Array.from({ length: slots.max }, (_, i) => (
-              <Sparkles key={i} className={`w-5 h-5 ${i < left ? 'text-purple-300 fill-purple-400/40' : 'text-stone-700'}`} />
+          <div className="space-y-1.5">
+            {slots.map(row => (
+              <div key={row.level} className="flex items-center justify-between gap-3">
+                <span className="text-xs text-stone-300">Nivel {row.level}</span>
+                <div className="flex items-center gap-1" role="img" aria-label={`Nivel ${row.level}: ${row.left} de ${row.max} espacios disponibles`}>
+                  {Array.from({ length: row.max }, (_, i) => (
+                    <Sparkles key={i} className={`w-4 h-4 ${i < row.left ? 'text-purple-300 fill-purple-400/40' : 'text-stone-700'}`} />
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
+          {slots.length > 1 && (
+            <p className="text-[10px] text-stone-500 mt-2">
+              Un conjuro usa el espacio libre más bajo de su nivel o superior; con uno superior tira un dado más de daño o curación.
+            </p>
+          )}
         </div>
       )}
 
@@ -126,7 +137,9 @@ export default function SpellsTab({ character, onCastSpell, onRest, busy }) {
       </div>
 
       <SpellList title="Trucos (a voluntad):" rows={rows.filter(s => s.level === 0)} onCast={cast} busy={busy} />
-      <SpellList title="Conjuros de nivel 1:" rows={rows.filter(s => s.level === 1)} onCast={cast} busy={busy} />
+      {levels.map(level => (
+        <SpellList key={level} title={`Conjuros de nivel ${level}:`} rows={rows.filter(s => s.level === level)} onCast={cast} busy={busy} />
+      ))}
 
       <RestButtons character={character} onRest={onRest} busy={busy} />
     </div>

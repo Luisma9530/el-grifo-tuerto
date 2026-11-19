@@ -60,7 +60,7 @@ describe('simulateThrow', () => {
     }
   });
 
-  it.each([3, 4, 5])('throws %i dice at once (damage rolls) without losing any', count => {
+  it.each([3, 5, 8, 10])('throws %i dice at once (damage rolls) without losing any', count => {
     const rng = seeded(21);
     for (const bounds of [WIDE, TALL]) {
       for (let i = 0; i < 6; i++) {

@@ -146,6 +146,13 @@ export default function StoryStream({
                 <RichText text={msg.text} />
               </div>
 
+              {/* Experience gained in this scene */}
+              {msg.xp > 0 && (
+                <div className="mt-3 inline-flex items-center gap-1.5 mr-2 px-2.5 py-1 rounded-lg bg-sky-950/50 border border-sky-800/50 text-[11px] font-mono text-sky-300">
+                  <Sparkles className="w-3 h-3" /> +{msg.xp} PX
+                </div>
+              )}
+
               {/* Status / Dice badges */}
               {msg.roll && (
                 <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-stone-950 border border-amber-500/40 text-xs font-mono">

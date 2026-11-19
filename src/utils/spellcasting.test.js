@@ -55,7 +55,7 @@ describe('spell data', () => {
     const abilityIds = ABILITIES.map(a => a.id);
     expect(new Set(SPELLS.map(s => s.id)).size).toBe(SPELLS.length);
     SPELLS.forEach(spell => {
-      expect([0, 1]).toContain(spell.level);
+      expect([0, 1, 2, 3]).toContain(spell.level);
       spell.classes.forEach(c => expect(classIds).toContain(c));
       if (spell.damage) expect(parseDice(spell.damage)).not.toBeNull();
       if (spell.kind === 'attack' || spell.kind === 'auto') expect(spell.damage).toBeTruthy();
@@ -135,7 +135,7 @@ describe('choosing spells', () => {
   it('builds the spellcasting block of the sheet', () => {
     const hero = buildCharacter(wizardDraft());
     const { spellcasting } = hero;
-    expect(spellcasting.slots).toEqual({ max: 2, used: 0, recovery: 'long' });
+    expect(spellcasting.slots).toEqual({ recovery: 'long', levels: { 1: { max: 2, used: 0 } } });
     expect(spellcasting.known).toHaveLength(3 + 6 + 2 + 1 + 1);
     expect(spellcasting.known.find(k => k.id === 'mageArmor')).toMatchObject({ prepared: false, freeCast: false, ability: 'int' });
     expect(spellcasting.known.find(k => k.id === 'featherFall')).toMatchObject({ prepared: true, freeCast: true });
@@ -152,7 +152,7 @@ describe('choosing spells', () => {
   it('warlocks recover their single slot on a short rest', () => {
     const warlock = { ...emptyDraft(), classId: 'warlock', backgroundId: 'soldier', speciesId: 'orc' };
     const spells = randomSpellChoices(warlock, seeded(1));
-    expect(buildSpellcasting({ ...warlock, spells }, { car: 16 }).slots).toEqual({ max: 1, used: 0, recovery: 'short' });
+    expect(buildSpellcasting({ ...warlock, spells }, { car: 16 }).slots).toEqual({ recovery: 'short', levels: { 1: { max: 1, used: 0 } } });
   });
 
   it('random heroes always get valid spells', () => {
@@ -248,7 +248,7 @@ describe('casting', () => {
     expect(rows[0].level).toBe(0);
     expect(rows.find(r => r.id === 'mageArmor').blocked).toBe('En tu libro, sin preparar');
     expect(rows.find(r => r.id === 'fireBolt')).toMatchObject({ blocked: null, attackBonus: 5, saveDC: 13, abilityName: 'Inteligencia' });
-    const drained = { ...hero, spellcasting: { ...hero.spellcasting, slots: { ...hero.spellcasting.slots, used: 2 } } };
+    const drained = { ...hero, spellcasting: { ...hero.spellcasting, slots: { recovery: 'long', levels: { 1: { max: 2, used: 2 } } } } };
     const drainedRows = spellRows(drained);
     expect(drainedRows.find(r => r.id === 'sleep').blocked).toBe('Sin espacios de conjuro');
     expect(drainedRows.find(r => r.id === 'featherFall')).toMatchObject({ blocked: null, freeAvailable: true });
@@ -277,7 +277,7 @@ describe('rests', () => {
     ...hero,
     hp: 1,
     hitDiceUsed: 1,
-    spellcasting: { ...hero.spellcasting, freeCastsUsed: ['featherFall'], slots: { ...hero.spellcasting.slots, used: 2 } }
+    spellcasting: { ...hero.spellcasting, freeCastsUsed: ['featherFall'], slots: { recovery: 'long', levels: { 1: { max: 2, used: 2 } } } }
   };
 
   it('a long rest restores hit points, slots, free casts and the hit die', () => {
@@ -304,7 +304,7 @@ describe('rests', () => {
     expect(shortRest(spent, fixedDice([3])).slotsRecovered).toBe(false);
     const warlock = {
       ...hero,
-      spellcasting: { ...hero.spellcasting, slots: { max: 1, used: 1, recovery: 'short' } }
+      spellcasting: { ...hero.spellcasting, slots: { max: 1, used: 1, recovery: 'short' } } // old save format
     };
     const rested = shortRest(warlock, fixedDice([3]));
     expect(rested.slotsRecovered).toBe(true);

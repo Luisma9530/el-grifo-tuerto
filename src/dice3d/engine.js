@@ -59,7 +59,8 @@ function buildAtlas(die, labels, format) {
   ctx.fillStyle = EDGE;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  const needsUnderline = text => die.sides > 6 && (text === '6' || text === '9');
+  // 6 and 9 look alike once the die rolls: underline them (on a d6 too)
+  const needsUnderline = text => die.sides >= 6 && (text === '6' || text === '9');
 
   const uvs = die.faces.map((face, i) => {
     const { points, inradius } = getFaceLayout(die, i);

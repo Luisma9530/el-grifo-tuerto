@@ -105,7 +105,7 @@ describe('local engine with spells and rests', () => {
 describe('AI prompt with magic', () => {
   it('lists the spells the hero can cast and the slots left', () => {
     const prompt = buildDMPrompt({ playerAction: 'x', character, world, d20: 10 });
-    expect(prompt).toContain('le quedan 1 de 2 espacios de conjuro de nivel 1');
+    expect(prompt).toContain('espacios de conjuro que le quedan (nivel 1: 1 de 2)');
     expect(prompt).toContain('Trucos: Descarga de Fuego.');
     expect(prompt).toContain('Conjuros: Manos Ardientes.');
     expect(prompt).not.toContain('Armadura de Mago'); // in the book, not prepared

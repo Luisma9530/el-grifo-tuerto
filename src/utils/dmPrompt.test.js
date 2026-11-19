@@ -88,8 +88,12 @@ describe('parseDMReply', () => {
       damageTaken: 3,
       healing: 0,
       goldEarned: -4,
+      xpEarned: 0,
       usedRoll: true
     });
+    expect(parseDMReply(reply({ experiencia: 60 }), character).xpEarned).toBe(60);
+    expect(parseDMReply(reply({ experiencia: 5000 }), character).xpEarned).toBe(300);
+    expect(parseDMReply(reply({ experiencia: -20 }), character).xpEarned).toBe(0);
   });
 
   it('accepts JSON wrapped in a code fence', () => {

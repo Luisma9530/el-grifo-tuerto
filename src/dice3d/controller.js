@@ -6,7 +6,7 @@ import { tavernAudio } from '../utils/audio';
 const SETTING_KEY = 'tavern_dice_3d';
 const ANIMATED_SIDES = [4, 6, 8, 10, 12, 20, 100];
 const FALLBACK_DELAY_MS = 450;
-const MAX_PHYSICAL_DICE = 5; // more than this gets crowded: resolved instantly instead
+const MAX_PHYSICAL_DICE = 10; // e.g. 8d6 for Fireball; more than this gets crowded: resolved instantly instead
 
 let stage = null;
 

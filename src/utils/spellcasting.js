@@ -3,6 +3,7 @@
 
 import { CLASSES, FEATS, BACKGROUNDS, SPECIES, ABILITIES, LEVEL_1_PROFICIENCY_BONUS } from '../data/srd';
 import { SPELLS, CLASS_SPELLCASTING, MAGIC_INITIATE, SPECIES_CANTRIPS } from '../data/spells';
+import { SPELL_PROGRESSION, CANTRIP_UPGRADE_LEVEL } from '../data/progression';
 
 const mod = score => Math.floor(((Number(score) || 10) - 10) / 2);
 const abilityName = id => ABILITIES.find(a => a.id === id)?.name || id;
@@ -159,18 +160,16 @@ export function buildSpellcasting(draft, stats) {
   spellSources(draft).forEach(source => {
     const picks = picksFor(draft, source.key);
     const isClass = source.key === 'class';
-    picks.cantrips.forEach(id => known.push({ id, source: source.title, ability: source.ability, prepared: true, freeCast: false }));
+    picks.cantrips.forEach(id => known.push({ id, source: source.title, sourceKey: source.key, ability: source.ability, prepared: true, freeCast: false }));
     picks.spells.forEach(id => known.push({
       id,
       source: source.title,
+      sourceKey: source.key,
       ability: source.ability,
       prepared: source.prepared ? picks.prepared.includes(id) : true,
       freeCast: !isClass
     }));
-    if (isClass) {
-      const casting = CLASS_SPELLCASTING[source.list];
-      slots = { max: casting.slots, used: 0, recovery: casting.recovery };
-    }
+    if (isClass) slots = slotsForLevel(source.list, 1);
   });
 
   const innate = speciesCantrips(draft);
@@ -178,7 +177,7 @@ export function buildSpellcasting(draft, stats) {
     // Species magic uses the best of Intelligence, Wisdom or Charisma
     const ability = ['int', 'sab', 'car'].reduce((best, id) => (stats[id] > stats[best] ? id : best), 'int');
     const speciesName = SPECIES.find(s => s.id === draft.speciesId).name;
-    innate.forEach(id => known.push({ id, source: speciesName, ability, prepared: true, freeCast: false }));
+    innate.forEach(id => known.push({ id, source: speciesName, sourceKey: 'species', ability, prepared: true, freeCast: false }));
   }
 
   if (known.length === 0) return null;
@@ -217,10 +216,10 @@ export function parseDice(notation) {
   return { count: Number(match[1]), sides: Number(match[2]), bonus: Number(match[3] || 0) };
 }
 
-function rollNotation(notation, rollDie, multiplier = 1) {
+function rollNotation(notation, rollDie, multiplier = 1, extraDice = 0) {
   const parsed = parseDice(notation);
   if (!parsed) return null;
-  const dice = Array.from({ length: parsed.count * multiplier }, () => rollDie(parsed.sides));
+  const dice = Array.from({ length: parsed.count * multiplier + extraDice }, () => rollDie(parsed.sides));
   return { dice, sides: parsed.sides, bonus: parsed.bonus, total: dice.reduce((sum, d) => sum + d, 0) + parsed.bonus };
 }
 
@@ -231,9 +230,67 @@ export function spellNumbers(character, entry) {
   return { modifier, saveDC: 8 + pb + modifier, attackBonus: pb + modifier };
 }
 
-export function slotsLeft(character) {
-  const slots = character.spellcasting?.slots;
-  return slots ? Math.max(0, slots.max - slots.used) : 0;
+// ---------------------------------------------------------------------------
+// Spell slots
+//
+// Shape: { recovery: 'long' | 'short', levels: { [spellLevel]: { max, used } } }
+// Heroes saved before levels existed have { max, used, recovery } (level 1 only):
+// every reader goes through slotTable(), which understands both.
+// ---------------------------------------------------------------------------
+
+/** Spell slots of a class at a character level, all unused (null for non-casters). */
+export function slotsForLevel(classId, level) {
+  const progression = SPELL_PROGRESSION[classId];
+  if (!progression) return null;
+  const table = progression.slots[level] || {};
+  return {
+    recovery: progression.recovery,
+    levels: Object.fromEntries(Object.entries(table).map(([spellLevel, max]) => [spellLevel, { max, used: 0 }]))
+  };
+}
+
+/** Slot rows [{ level, max, used, left }] sorted by spell level. */
+export function slotTable(casting) {
+  const slots = casting?.slots;
+  if (!slots) return [];
+  const levels = slots.levels || { 1: { max: slots.max, used: slots.used } };
+  return Object.entries(levels)
+    .map(([level, { max, used }]) => ({ level: Number(level), max, used, left: Math.max(0, max - used) }))
+    .filter(row => row.max > 0)
+    .sort((a, b) => a.level - b.level);
+}
+
+export const slotRecovery = casting => casting?.slots?.recovery || null;
+
+/** Slots left of `minLevel` or higher (all of them by default). */
+export function slotsLeft(character, minLevel = 1) {
+  return slotTable(character.spellcasting)
+    .filter(row => row.level >= minLevel)
+    .reduce((sum, row) => sum + row.left, 0);
+}
+
+/** Highest spell level the hero has slots for (0 if none). */
+export function maxSlotLevel(casting) {
+  return slotTable(casting).reduce((max, row) => Math.max(max, row.level), 0);
+}
+
+/** Rebuild the slots object from rows, in the current shape. */
+function withSlots(casting, rows, recovery = slotRecovery(casting)) {
+  return {
+    ...casting,
+    slots: { recovery, levels: Object.fromEntries(rows.map(row => [row.level, { max: row.max, used: row.used }])) }
+  };
+}
+
+/** All slots back (long rest, or short rest for pact magic). */
+function restoreSlots(casting) {
+  if (!casting?.slots) return casting;
+  return withSlots(casting, slotTable(casting).map(row => ({ ...row, used: 0 })));
+}
+
+/** Cantrip damage dice multiply as the hero gains levels (two dice from level 5). */
+export function cantripDiceMultiplier(character) {
+  return (character.level || 1) >= CANTRIP_UPGRADE_LEVEL ? 2 : 1;
 }
 
 /** Rows for the spells tab of the sheet, cantrips first. */
@@ -247,7 +304,7 @@ export function spellRows(character) {
       const freeAvailable = entry.freeCast && !casting.freeCastsUsed.includes(entry.id);
       let blocked = null;
       if (!entry.prepared) blocked = 'En tu libro, sin preparar';
-      else if (spell.level > 0 && !freeAvailable && slotsLeft(character) === 0) blocked = 'Sin espacios de conjuro';
+      else if (spell.level > 0 && !freeAvailable && slotsLeft(character, spell.level) === 0) blocked = 'Sin espacios de conjuro';
       return { ...spell, entry, ...spellNumbers(character, entry), freeAvailable, blocked, abilityName: abilityName(entry.ability) };
     })
     .filter(Boolean)
@@ -258,11 +315,14 @@ export function spellRows(character) {
  * Cast a spell the character knows.
  * @param {(sides: number) => number} rollDie
  * @returns {{ok: false, error: string} | {ok: true, character: object, cast: object}}
- *   cast: { spell, modifier, saveDC, attackBonus, usedSlot, usedFreeCast,
+ *   cast: { spell, modifier, saveDC, attackBonus, usedSlot, slotLevel, usedFreeCast,
  *           attack: {raw, total, isNat20, isNat1} | null,
  *           damage: {dice, sides, bonus, total, type} | null,
  *           heal: {dice, sides, bonus, total, applied} | null }
  *   Healing spells heal the caster. A natural 20 on a spell attack doubles the damage dice.
+ *   A spell uses the lowest free slot of its level or higher; cast with a higher slot,
+ *   damage and healing gain one die per level above (a simplification of each spell's
+ *   own "at higher levels" rule). Cantrips gain dice with character level.
  */
 export function castSpell(character, spellId, rollDie) {
   const casting = character.spellcasting;
@@ -272,19 +332,26 @@ export function castSpell(character, spellId, rollDie) {
   if (!entry.prepared) return { ok: false, error: 'Ese conjuro está en tu libro, pero no lo tienes preparado.' };
 
   let usedSlot = false;
+  let slotLevel = null;
   let usedFreeCast = false;
   let nextCasting = casting;
   if (spell.level > 0) {
+    const rows = slotTable(casting);
+    const slot = rows.find(row => row.level >= spell.level && row.left > 0);
     if (entry.freeCast && !casting.freeCastsUsed.includes(spellId)) {
       usedFreeCast = true;
       nextCasting = { ...casting, freeCastsUsed: [...casting.freeCastsUsed, spellId] };
-    } else if (slotsLeft(character) > 0) {
+    } else if (slot) {
       usedSlot = true;
-      nextCasting = { ...casting, slots: { ...casting.slots, used: casting.slots.used + 1 } };
+      slotLevel = slot.level;
+      nextCasting = withSlots(casting, rows.map(row => (row.level === slot.level ? { ...row, used: row.used + 1 } : row)));
     } else {
-      return { ok: false, error: 'No te quedan espacios de conjuro. Descansa para recuperarlos.' };
+      return { ok: false, error: 'No te quedan espacios de conjuro de ese nivel. Descansa para recuperarlos.' };
     }
   }
+  // Extra dice: higher slot for leveled spells, character level for cantrips
+  const upcast = slotLevel ? slotLevel - spell.level : 0;
+  const cantripMultiplier = spell.level === 0 ? cantripDiceMultiplier(character) : 1;
 
   const numbers = spellNumbers(character, entry);
   let attack = null;
@@ -293,13 +360,15 @@ export function castSpell(character, spellId, rollDie) {
     attack = { raw, total: raw + numbers.attackBonus, isNat20: raw === 20, isNat1: raw === 1 };
   }
 
-  const rolledDamage = spell.damage ? rollNotation(spell.damage, rollDie, attack?.isNat20 ? 2 : 1) : null;
+  const rolledDamage = spell.damage
+    ? rollNotation(spell.damage, rollDie, (attack?.isNat20 ? 2 : 1) * cantripMultiplier, upcast)
+    : null;
   const damage = rolledDamage ? { ...rolledDamage, type: spell.type } : null;
 
   let heal = null;
   let hp = character.hp;
   if (spell.kind === 'heal') {
-    const rolled = rollNotation(spell.heal, rollDie);
+    const rolled = rollNotation(spell.heal, rollDie, 1, upcast);
     const total = Math.max(1, rolled.total + (spell.addMod ? numbers.modifier : 0));
     hp = Math.min(character.maxHp, character.hp + total);
     heal = { ...rolled, bonus: rolled.bonus + (spell.addMod ? numbers.modifier : 0), total, applied: hp - character.hp };
@@ -308,7 +377,7 @@ export function castSpell(character, spellId, rollDie) {
   return {
     ok: true,
     character: { ...character, hp, spellcasting: nextCasting },
-    cast: { spell, ...numbers, usedSlot, usedFreeCast, attack, damage, heal }
+    cast: { spell, ...numbers, usedSlot, slotLevel, usedFreeCast, attack, damage, heal }
   };
 }
 
@@ -320,7 +389,8 @@ export function describeCast(cast, { target = '', dc = 12 } = {}) {
   const { spell } = cast;
   const on = target.trim() ? ` sobre ${target.trim()}` : '';
   const what = spell.level === 0 ? 'el truco' : 'el conjuro';
-  const parts = [`Lanzo ${what} **${spell.name}**${on}.`];
+  const upcast = cast.slotLevel && cast.slotLevel > spell.level ? ` con un espacio de nivel ${cast.slotLevel}` : '';
+  const parts = [`Lanzo ${what} **${spell.name}**${on}${upcast}.`];
   const dmg = cast.damage ? `${cast.damage.total} de daño ${cast.damage.type}` : null;
 
   if (cast.attack) {
@@ -357,16 +427,16 @@ export function longRest(character) {
     ...character,
     hp: character.maxHp,
     hitDiceUsed: 0,
-    spellcasting: casting
-      ? { ...casting, freeCastsUsed: [], slots: casting.slots ? { ...casting.slots, used: 0 } : null }
-      : casting
+    spellcasting: casting ? { ...restoreSlots(casting), freeCastsUsed: [] } : casting
   };
 }
 
-export const hasHitDie = character => Boolean(character.hitDie) && (character.hitDiceUsed || 0) < (character.level || 1);
+/** Hit dice left to spend on short rests (one per level, all back on a long rest). */
+export const hitDiceLeft = character => (character.hitDie ? Math.max(0, (character.level || 1) - (character.hitDiceUsed || 0)) : 0);
+export const hasHitDie = character => hitDiceLeft(character) > 0;
 
 /**
- * Short rest: spend the hit die (if any is left and the hero is hurt) to heal
+ * Short rest: spend one hit die (if any is left and the hero is hurt) to heal
  * hitDie + Constitution, and recover slots that return on a short rest (warlock).
  * @returns {{ character: object, healed: number, die: number | null, slotsRecovered: boolean }}
  */
@@ -383,10 +453,10 @@ export function shortRest(character, rollDie) {
     next = { ...next, hp, hitDiceUsed: (character.hitDiceUsed || 0) + 1 };
   }
 
-  const slots = character.spellcasting?.slots;
-  const slotsRecovered = Boolean(slots && slots.recovery === 'short' && slots.used > 0);
+  const casting = character.spellcasting;
+  const slotsRecovered = slotRecovery(casting) === 'short' && slotTable(casting).some(row => row.used > 0);
   if (slotsRecovered) {
-    next = { ...next, spellcasting: { ...character.spellcasting, slots: { ...slots, used: 0 } } };
+    next = { ...next, spellcasting: restoreSlots(casting) };
   }
 
   return { character: next, healed, die, slotsRecovered };

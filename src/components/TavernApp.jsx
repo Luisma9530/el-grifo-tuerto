@@ -19,6 +19,8 @@ import {
 import { tavernAudio } from '../utils/audio';
 import { animateRoll, is3DDiceEnabled } from '../dice3d/controller';
 import { applySceneOutcome } from '../utils/sceneOutcome';
+import { addXp, canLevelUp, describeLevelUp } from '../utils/leveling';
+import LevelUpModal from './game/LevelUpModal';
 
 export default function TavernApp({
   activeCampaign = null,
@@ -101,6 +103,7 @@ export default function TavernApp({
 
   const [saveStatus, setSaveStatus] = useState('saved'); // 'saved' | 'error' | 'quota'
   const isRollingCheckRef = useRef(false); // a stat check die is on the table
+  const [isLevelUpOpen, setIsLevelUpOpen] = useState(false);
 
   // Guards against double-creation under React.StrictMode (effects run twice in dev)
   const campaignInitRef = useRef(false);
@@ -253,6 +256,11 @@ export default function TavernApp({
         });
       }
 
+      // Experience: tell the player once when they can go up a level
+      const xpGained = response.xpEarned || 0;
+      const reachesNewLevel = xpGained > 0 && !canLevelUp(sheet) && canLevelUp(addXp(sheet, xpGained));
+      if (xpGained > 0) setCharacter(prev => addXp(prev, xpGained));
+
       setMessages(prev => [
         ...prev,
         {
@@ -260,11 +268,16 @@ export default function TavernApp({
           text: response.text,
           source: response.source,
           notice: response.notice || undefined,
+          xp: response.xpEarned || undefined,
           keyIndex: response.keyIndex,
           totalKeys: response.totalKeys,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);
+
+      if (reachesNewLevel) {
+        pushSystemMessage(`✨ ¡${sheet.name} tiene experiencia suficiente para subir a nivel ${(sheet.level || 1) + 1}! Pulsa «Subir de nivel» en tu ficha.`);
+      }
 
       // Dropping to 0 HP: Duncan patches the hero up... at a price
       if (outcome.knockedOut) {
@@ -367,6 +380,13 @@ export default function TavernApp({
     } finally {
       isRollingCheckRef.current = false;
     }
+  };
+
+  const handleLevelUpConfirmed = (next, summary) => {
+    setCharacter(next);
+    setIsLevelUpOpen(false);
+    tavernAudio.playCritSuccess();
+    pushSystemMessage(describeLevelUp(next, summary));
   };
 
   // Short rest (an hour by the fire) or long rest (a night in a room, for a price)
@@ -601,6 +621,7 @@ export default function TavernApp({
             onRollCheck={handleRollCheck}
             onCastSpell={handleCastSpell}
             onRest={handleRest}
+            onLevelUp={() => setIsLevelUpOpen(true)}
             busy={isGenerating}
           />
         </div>
@@ -630,6 +651,14 @@ export default function TavernApp({
       </div>
 
       {/* Floating 3D Dice Roller Tray */}
+      {isLevelUpOpen && canLevelUp(character) && (
+        <LevelUpModal
+          character={character}
+          onConfirm={handleLevelUpConfirmed}
+          onClose={() => setIsLevelUpOpen(false)}
+        />
+      )}
+
       <DiceRollerTray onSendRollToChat={handleDiceRollToChat} />
 
     </div>

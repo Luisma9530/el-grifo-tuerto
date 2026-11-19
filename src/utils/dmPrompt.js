@@ -2,7 +2,7 @@
 // Pure functions: no network, no storage.
 
 import { SKILLS, ABILITIES } from '../data/srd';
-import { spellRows, slotsLeft } from './spellcasting';
+import { spellRows, slotTable } from './spellcasting';
 
 const HISTORY_MESSAGES = 12;
 const HISTORY_CHARS_PER_MESSAGE = 700;
@@ -23,9 +23,10 @@ export const DM_RESPONSE_SCHEMA = {
     danio: { type: 'INTEGER', description: 'Puntos de golpe que pierde el personaje (0 si ninguno).' },
     curacion: { type: 'INTEGER', description: 'Puntos de golpe que recupera el personaje (0 si ninguno).' },
     oro: { type: 'INTEGER', description: 'Monedas de oro ganadas (positivo) o gastadas/perdidas (negativo).' },
+    experiencia: { type: 'INTEGER', description: 'Puntos de experiencia ganados por superar un reto (0 si ninguno).' },
     opciones: { type: 'ARRAY', items: { type: 'STRING' }, description: '3 o 4 sugerencias breves de acción.' }
   },
-  required: ['narracion', 'usaTirada', 'danio', 'curacion', 'oro', 'opciones']
+  required: ['narracion', 'usaTirada', 'danio', 'curacion', 'oro', 'experiencia', 'opciones']
 };
 
 function modifier(score) {
@@ -47,6 +48,8 @@ function describeStats(stats) {
 function describeBuild(character) {
   const lines = [];
   const origin = [
+    character.xp != null && `Experiencia: ${character.xp} PX`,
+    character.subclass && `Subclase: ${character.subclass}`,
     character.background && `Trasfondo: ${character.background}`,
     character.alignment && `Alineamiento: ${character.alignment}`
   ].filter(Boolean).join('. ');
@@ -67,8 +70,9 @@ function describeBuild(character) {
   if (spells.length > 0) {
     const cantrips = spells.filter(s => s.level === 0).map(s => s.name);
     const prepared = spells.filter(s => s.level > 0).map(s => s.name);
-    const slots = character.spellcasting.slots;
-    lines.push(`- Magia: ${slots ? `le quedan ${slotsLeft(character)} de ${slots.max} espacios de conjuro de nivel 1. ` : ''}${
+    const slots = slotTable(character.spellcasting);
+    const slotText = slots.map(row => `nivel ${row.level}: ${row.left} de ${row.max}`).join(', ');
+    lines.push(`- Magia: ${slots.length ? `espacios de conjuro que le quedan (${slotText}). ` : ''}${
       cantrips.length ? `Trucos: ${cantrips.join(', ')}. ` : ''}${prepared.length ? `Conjuros: ${prepared.join(', ')}.` : ''}`.trim());
   }
 
@@ -128,6 +132,7 @@ export function buildDMPrompt({
 - "danio": puntos de golpe que pierde ${name} por lo ocurrido (entero, 0 si nada).
 - "curacion": puntos de golpe que recupera (entero, 0 si nada).
 - "oro": monedas de oro que gana (positivo) o que gasta o pierde (negativo); 0 si nada.
+- "experiencia": puntos de experiencia por superar un reto en esta escena: 0 si no superó nada (charlar, comprar, descansar, fallar sin aprender nada), 10-30 por un reto menor, 40-80 por vencer un combate o descubrir algo importante, 100-200 solo por un logro excepcional.
 - "opciones": 3 o 4 sugerencias breves de lo que puede hacer ahora.
 Lo que cuentes en la narración debe coincidir con "danio", "curacion" y "oro".`
     : `Al final de tu respuesta, en una línea separada que empiece con "OPCIONES:", proporciona 3 o 4 sugerencias breves de acción separadas por una pleca "|". Por ejemplo: OPCIONES: Sacar el arma | Negociar con el tabernero | Escabullirse por la puerta trasera.
@@ -198,6 +203,7 @@ export function parseDMReply(raw, character = {}) {
         damageTaken: toInt(data.danio, 0, maxHp),
         healing: toInt(data.curacion, 0, maxHp),
         goldEarned: toInt(data.oro, -gold, 500),
+        xpEarned: toInt(data.experiencia, 0, 300),
         usedRoll: data.usaTirada === true
       };
     } catch {
@@ -219,6 +225,7 @@ export function parseDMReply(raw, character = {}) {
     damageTaken: 0,
     healing: 0,
     goldEarned: 0,
+    xpEarned: 0,
     // Plain text can't tell us reliably; look for the dice marker the prompt asks for
     usedRoll: text.includes('🎲')
   };

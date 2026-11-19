@@ -123,6 +123,17 @@ async function askGemini(key, context) {
   return requestGemini(key, { prompt: buildDMPrompt({ ...context, structured: false }) });
 }
 
+// Experience the local engine awards for a scene: risky actions resolved with a die
+// give more when they go well; talking, buying and resting give little or nothing.
+function localXp({ text, rest, spellXp, isCrit, isCritFail, isHighRoll }) {
+  if (rest) return 0;
+  if (spellXp != null) return spellXp;
+  if (!text.includes('🎲')) return 5;
+  if (isCrit) return 75;
+  if (isCritFail) return 10;
+  return isHighRoll ? 40 : 15;
+}
+
 const AI_FAILURE_NOTICES = {
   overloaded: 'Gemini está saturado ahora mismo: Duncan improvisa con el motor local en este turno.',
   network: 'No hay conexión con Gemini: Duncan improvisa con el motor local en este turno.',
@@ -193,6 +204,7 @@ export async function generateDMResponse({
               damageTaken: parsed.damageTaken,
               healing: parsed.healing,
               goldEarned: parsed.goldEarned,
+              xpEarned: rest ? 0 : parsed.xpEarned,
               roll: parsed.usedRoll && !playerRoll && !needsNoRoll ? { sides: 20, value: d20 } : null,
               source: 'gemini',
               keyIndex: activeIdx,
@@ -230,10 +242,13 @@ export async function generateDMResponse({
   let goldEarned = 0;
 
   // Rests and spells have their own narration
+  let spellXp = null;
   if (rest) {
     ({ text, suggestedActions } = narrateRest(rest, character));
   } else if (spellCast) {
-    ({ text, suggestedActions } = narrateSpell(spellCast, { character, enemyRoll: rollResult }));
+    let narration;
+    ({ text, suggestedActions, ...narration } = narrateSpell(spellCast, { character, enemyRoll: rollResult }));
+    spellXp = narration.xp;
   }
 
   // The player rolled an ability check from the character sheet: narrate its outcome
@@ -432,6 +447,7 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     damageTaken,
     healing: 0,
     goldEarned,
+    xpEarned: localXp({ text, rest, spellXp, isCrit, isCritFail, isHighRoll }),
     // Set when Gemini keys exist but the AI could not answer this turn
     notice: aiFailure ? AI_FAILURE_NOTICES[aiFailure] || AI_FAILURE_NOTICES.overloaded : null,
     // Only when Duncan's own roll is mentioned in the narration

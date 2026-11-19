@@ -226,6 +226,10 @@ export const FAQS = [
     a: 'Cada campaña empieza creando a tu héroe paso a paso con las reglas de D&D 2024: clase, trasfondo, especie, características (conjunto estándar, compra de puntos o tirando dados), competencias e identidad. Si tienes prisa, el botón "Héroe al azar" te genera uno completo que puedes retocar. Todos empiezan en nivel 1.'
   },
   {
+    q: '¿Mi personaje sube de nivel?',
+    a: 'Sí, hasta el nivel 5. Ganas experiencia al superar retos: combates, hechizos certeros, pruebas difíciles... Cuando tienes suficiente, aparece el botón «Subir de nivel» en tu ficha: eliges si tiras el dado de golpe o tomas la media, recibes los rasgos de tu clase (subclase a nivel 3, mejora de característica a nivel 4) y, si lanzas conjuros, aprendes nuevos y desbloqueas los de nivel 2 y 3.'
+  },
+  {
     q: '¿Cómo funciona la magia?',
     a: 'Los lanzadores de conjuros eligen sus trucos y conjuros de nivel 1 al crear el personaje. En la pestaña "Conjuros" de la ficha los lanzas con un clic: el juego tira el ataque, el daño o la curación con los dados 3D y Maese Duncan narra el resultado. Los trucos son ilimitados; los conjuros gastan espacios, que recuperas descansando en la posada.'
   },
