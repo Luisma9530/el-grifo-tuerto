@@ -3,7 +3,7 @@
 
 import { CLASSES, FEATS, BACKGROUNDS, SPECIES, ABILITIES, LEVEL_1_PROFICIENCY_BONUS } from '../data/srd';
 import { SPELLS, CLASS_SPELLCASTING, MAGIC_INITIATE, SPECIES_CANTRIPS } from '../data/spells';
-import { SPELL_PROGRESSION, CANTRIP_UPGRADE_LEVEL } from '../data/progression';
+import { SPELL_PROGRESSION, CANTRIP_UPGRADE_LEVELS } from '../data/progression';
 
 const mod = score => Math.floor(((Number(score) || 10) - 10) / 2);
 const abilityName = id => ABILITIES.find(a => a.id === id)?.name || id;
@@ -219,7 +219,9 @@ export function parseDice(notation) {
 function rollNotation(notation, rollDie, multiplier = 1, extraDice = 0) {
   const parsed = parseDice(notation);
   if (!parsed) return null;
-  const dice = Array.from({ length: parsed.count * multiplier + extraDice }, () => rollDie(parsed.sides));
+  // Fixed amounts ("0d4+70") have no dice to add when upcast
+  const count = parsed.count === 0 ? 0 : parsed.count * multiplier + extraDice;
+  const dice = Array.from({ length: count }, () => rollDie(parsed.sides));
   return { dice, sides: parsed.sides, bonus: parsed.bonus, total: dice.reduce((sum, d) => sum + d, 0) + parsed.bonus };
 }
 
@@ -288,9 +290,10 @@ function restoreSlots(casting) {
   return withSlots(casting, slotTable(casting).map(row => ({ ...row, used: 0 })));
 }
 
-/** Cantrip damage dice multiply as the hero gains levels (two dice from level 5). */
+/** Cantrip damage dice multiply as the hero gains levels (x2 at 5, x3 at 11, x4 at 17). */
 export function cantripDiceMultiplier(character) {
-  return (character.level || 1) >= CANTRIP_UPGRADE_LEVEL ? 2 : 1;
+  const level = character.level || 1;
+  return 1 + CANTRIP_UPGRADE_LEVELS.filter(threshold => level >= threshold).length;
 }
 
 /** Rows for the spells tab of the sheet, cantrips first. */

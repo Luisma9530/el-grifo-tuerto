@@ -55,7 +55,7 @@ describe('spell data', () => {
     const abilityIds = ABILITIES.map(a => a.id);
     expect(new Set(SPELLS.map(s => s.id)).size).toBe(SPELLS.length);
     SPELLS.forEach(spell => {
-      expect([0, 1, 2, 3]).toContain(spell.level);
+      expect([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).toContain(spell.level);
       spell.classes.forEach(c => expect(classIds).toContain(c));
       if (spell.damage) expect(parseDice(spell.damage)).not.toBeNull();
       if (spell.kind === 'attack' || spell.kind === 'auto') expect(spell.damage).toBeTruthy();

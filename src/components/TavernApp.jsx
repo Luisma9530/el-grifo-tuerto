@@ -360,12 +360,12 @@ export default function TavernApp({
           rawRoll: raw, modifier: cast.attackBonus, total, dc: SPELL_ATTACK_DC, success, isNat20, isNat1,
           statName: `ataque de conjuro (${spell.name})`
         };
-        if (success && cast.damage) {
+        if (success && cast.damage?.dice.length) {
           await animateRoll({ dice: toDice(cast.damage), modifier: cast.damage.bonus, label: `${spell.name} · daño` });
         }
-      } else if (cast.damage) {
+      } else if (cast.damage?.dice.length) {
         await animateRoll({ dice: toDice(cast.damage), modifier: cast.damage.bonus, label: `${spell.name} · daño` });
-      } else if (cast.heal) {
+      } else if (cast.heal?.dice.length) {
         await animateRoll({ dice: toDice(cast.heal), modifier: cast.heal.bonus, label: `${spell.name} · curación` });
       }
 

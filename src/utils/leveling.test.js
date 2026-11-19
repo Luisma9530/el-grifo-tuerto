@@ -78,7 +78,7 @@ describe('experience', () => {
     expect(nextLevelXp(hero)).toBe(300);
     expect(xpProgress({ ...hero, xp: 150 })).toEqual({ level: 1, xp: 150, next: 300, percent: 50 });
     expect(xpProgress({ ...hero, level: 3, xp: 1800 })).toMatchObject({ next: 2700, percent: 50 });
-    expect(xpProgress({ ...hero, level: 5, xp: 9000 })).toEqual({ level: 5, xp: 9000, next: null, percent: 100 });
+    expect(xpProgress({ ...hero, level: 20, xp: 400000 })).toEqual({ level: 20, xp: 400000, next: null, percent: 100 });
   });
 
   it('adds experience safely', () => {
@@ -94,7 +94,8 @@ describe('experience', () => {
     expect(canLevelUp(hero)).toBe(false);
     expect(canLevelUp({ ...hero, xp: 299 })).toBe(false);
     expect(canLevelUp({ ...hero, xp: 300 })).toBe(true);
-    expect(canLevelUp({ ...hero, level: 5, xp: 99999 })).toBe(false);
+    expect(canLevelUp({ ...hero, level: 5, xp: 99999 })).toBe(true);
+    expect(canLevelUp({ ...hero, level: 20, xp: 9999999 })).toBe(false);
     // Heroes from old saves have no rules data
     const old = { name: 'Kaelen', class: 'Pícaro (Nivel 3)', xp: 5000, stats: {} };
     expect(canAdvance(old)).toBe(false);

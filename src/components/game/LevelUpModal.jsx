@@ -2,8 +2,10 @@ import React, { useMemo, useState } from 'react';
 import { Check, Dice5, Heart, Sparkles, Star, X } from 'lucide-react';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
 import {
-  levelUpPlan, emptyLevelUpChoices, learnableSpells, hpGain, asiBonuses, levelUpIssues, applyLevelUp
+  levelUpPlan, emptyLevelUpChoices, learnableSpells, hpGain, asiBonuses, levelUpIssues, applyLevelUp,
+  featureInfo, EPIC_MAX_ABILITY_SCORE
 } from '../../utils/leveling';
+import { EPIC_BOONS } from '../../data/progression';
 import { getSpell, spellSummary } from '../../utils/spellcasting';
 import { abilityModifier, formatModifier } from '../../utils/characterBuilder';
 import { ABILITIES, MAX_ABILITY_SCORE } from '../../data/srd';
@@ -77,6 +79,8 @@ export default function LevelUpModal({ character, onConfirm, onClose }) {
   const plan = useMemo(() => levelUpPlan(character), [character]);
   const [choices, setChoices] = useState(() => emptyLevelUpChoices(character));
   const [rolling, setRolling] = useState(false);
+  // Spell level shown in the "new spells" list (high levels have many options)
+  const [spellLevelFilter, setSpellLevelFilter] = useState(() => plan.spells?.maxSpellLevel || 1);
   useEscapeKey(true, () => !rolling && onClose());
 
   const issues = levelUpIssues(character, plan, choices);
@@ -202,14 +206,15 @@ export default function LevelUpModal({ character, onConfirm, onClose }) {
                 <p className="text-xs text-stone-300 mt-0.5">{plan.subclass.desc}</p>
               </div>
             )}
-            <ul className="flex flex-wrap gap-2">
+            <ul className="space-y-1.5">
               {plan.features.filter(f => f !== plan.subclass?.name).map(feature => (
-                <li key={feature} className="px-2.5 py-1 rounded-lg bg-stone-900 border border-stone-700 text-xs text-stone-200">{feature}</li>
+                <li key={feature} className="text-xs">
+                  <span className="font-semibold text-stone-100">{feature}</span>
+                  {featureInfo(feature) && <span className="text-stone-400"> — {featureInfo(feature)}</span>}
+                </li>
               ))}
               {plan.proficiencyAfter > plan.proficiencyBefore && (
-                <li className="px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-xs text-emerald-300">
-                  Bonificador de competencia +{plan.proficiencyAfter}
-                </li>
+                <li className="text-xs text-emerald-300">Bonificador de competencia +{plan.proficiencyAfter}</li>
               )}
             </ul>
           </Section>
@@ -252,8 +257,48 @@ export default function LevelUpModal({ character, onConfirm, onClose }) {
             </Section>
           )}
 
+          {/* Epic Boon (level 19) */}
+          {plan.epicBoon && (
+            <Section title="Don Épico">
+              <p className="text-xs text-stone-400 mb-3">
+                Una dote legendaria. Además, mejora una característica en +1 (hasta {EPIC_MAX_ABILITY_SCORE}).
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
+                {EPIC_BOONS.map(boon => {
+                  const selected = choices.boon?.id === boon.id;
+                  return (
+                    <button
+                      key={boon.id}
+                      type="button"
+                      onClick={() => set({ boon: { ...choices.boon, id: boon.id } })}
+                      aria-pressed={selected}
+                      className={`text-left px-3 py-2 rounded-lg border transition-colors ${
+                        selected ? 'bg-amber-500/15 border-amber-400' : 'bg-[#1b1624] border-stone-800 hover:border-amber-700/60'
+                      }`}
+                    >
+                      <span className={`block text-sm font-medium ${selected ? 'text-amber-200' : 'text-stone-200'}`}>{boon.name}</span>
+                      <span className="block text-[11px] text-stone-400 leading-snug">{boon.desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {ABILITIES.map(ability => (
+                  <Choice
+                    key={ability.id}
+                    selected={choices.boon?.ability === ability.id}
+                    disabled={character.stats[ability.id] + 1 > EPIC_MAX_ABILITY_SCORE}
+                    onClick={() => set({ boon: { ...choices.boon, ability: ability.id } })}
+                  >
+                    {ability.name} {character.stats[ability.id]} → {character.stats[ability.id] + 1}
+                  </Choice>
+                ))}
+              </div>
+            </Section>
+          )}
+
           {/* Spells */}
-          {plan.spells && (plan.spells.cantrips > 0 || plan.spells.spells > 0 || plan.spells.prepared != null) && (
+          {plan.spells && (plan.spells.cantrips > 0 || plan.spells.spells > 0 || plan.spells.prepared != null || plan.spells.arcanumLevel) && (
             <Section title="Magia">
               <div className="flex flex-wrap gap-2 mb-3 text-[11px] font-mono">
                 {plan.spells.slotsAfter.map(row => {
@@ -290,9 +335,22 @@ export default function LevelUpModal({ character, onConfirm, onClose }) {
                     {plan.spells.prepared != null ? 'Conjuros nuevos para tu libro' : 'Conjuros nuevos'} — elige {plan.spells.spells}{' '}
                     ({choices.spells.spells.length}/{plan.spells.spells}) · hasta nivel {plan.spells.maxSpellLevel}
                   </h4>
-                  {Array.from({ length: plan.spells.maxSpellLevel }, (_, i) => plan.spells.maxSpellLevel - i).map(level => {
+                  {plan.spells.maxSpellLevel > 1 && (
+                    <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                      <span className="text-[11px] text-stone-500 mr-1">Nivel:</span>
+                      {Array.from({ length: plan.spells.maxSpellLevel }, (_, i) => i + 1).map(level => {
+                        const picked = choices.spells.spells.filter(id => getSpell(id)?.level === level).length;
+                        return (
+                          <Choice key={level} selected={spellLevelFilter === level} onClick={() => setSpellLevelFilter(level)}>
+                            {level}{picked > 0 ? ` · ${picked}✓` : ''}
+                          </Choice>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {[spellLevelFilter].map(level => {
                     const options = learnableSpells(character, plan, level);
-                    if (options.length === 0) return null;
+                    if (options.length === 0) return <p key={level} className="text-xs text-stone-500">Ya conoces todos los conjuros de este nivel.</p>;
                     return (
                       <div key={level} className="mb-3">
                         <p className="text-[10px] font-mono uppercase tracking-wider text-purple-300/80 mb-1.5">Nivel {level}</p>
@@ -309,6 +367,19 @@ export default function LevelUpModal({ character, onConfirm, onClose }) {
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {plan.spells.arcanumLevel && (
+                <div className="mb-4">
+                  <h4 className="text-xs text-stone-300 mb-1">Arcano Místico — elige un conjuro de nivel {plan.spells.arcanumLevel}</h4>
+                  <p className="text-[11px] text-stone-500 mb-2">Tu patrón te lo concede: lo lanzas una vez por descanso largo sin gastar espacio.</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {learnableSpells(character, plan, plan.spells.arcanumLevel).map(spell => (
+                      <SpellPick key={spell.id} spell={spell} selected={choices.spells.arcanum === spell.id}
+                        onToggle={() => setSpells({ arcanum: choices.spells.arcanum === spell.id ? null : spell.id })} />
+                    ))}
+                  </div>
                 </div>
               )}
 

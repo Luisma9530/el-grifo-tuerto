@@ -58,7 +58,7 @@ function SpellList({ title, rows, onCast, busy }) {
                 {spell.name}
                 {spell.freeAvailable && (
                   <span className="ml-1.5 text-[9px] font-mono font-normal px-1 py-0.5 rounded bg-emerald-950/60 border border-emerald-800/50 text-emerald-300" title="Puedes lanzarlo una vez por descanso largo sin gastar espacio">
-                    1 GRATIS
+                    {spell.entry.sourceKey === 'arcanum' ? 'ARCANO' : '1 GRATIS'}
                   </span>
                 )}
               </h5>

@@ -227,7 +227,7 @@ export const FAQS = [
   },
   {
     q: '¿Mi personaje sube de nivel?',
-    a: 'Sí, hasta el nivel 5. Ganas experiencia al superar retos: combates, hechizos certeros, pruebas difíciles... Cuando tienes suficiente, aparece el botón «Subir de nivel» en tu ficha: eliges si tiras el dado de golpe o tomas la media, recibes los rasgos de tu clase (subclase a nivel 3, mejora de característica a nivel 4) y, si lanzas conjuros, aprendes nuevos y desbloqueas los de nivel 2 y 3.'
+    a: 'Sí, hasta el nivel 20, como en las reglas. Ganas experiencia al superar retos: combates, hechizos certeros, pruebas difíciles... Cuando tienes suficiente, aparece el botón «Subir de nivel» en tu ficha: eliges si tiras el dado de golpe o tomas la media, recibes los rasgos de tu clase y subclase, mejoras de característica, un Don Épico a nivel 19 y, si lanzas conjuros, aprendes nuevos hasta llegar a los de nivel 9.'
   },
   {
     q: '¿Cómo funciona la magia?',

@@ -1,12 +1,18 @@
-// Experience and level advancement (levels 1 to 5, D&D 2024 rules / SRD 5.2).
+// Experience and level advancement (levels 1 to 20, D&D 2024 rules / SRD 5.2).
 // Pure functions: the level-up dialog builds a `choices` object and these
 // functions validate it and apply it to the character sheet.
 
 import {
-  MAX_LEVEL, XP_FOR_LEVEL, PROFICIENCY_BY_LEVEL, ASI_LEVELS, SUBCLASS_LEVEL, SUBCLASSES, CLASS_FEATURES,
-  SPELL_PROGRESSION
+  MAX_LEVEL, XP_FOR_LEVEL, PROFICIENCY_BY_LEVEL, ASI_LEVELS_BY_CLASS, SUBCLASS_LEVEL, SUBCLASSES, CLASS_FEATURES,
+  SPELL_PROGRESSION, EPIC_BOON_LEVEL, EPIC_BOONS, FEATURE_INFO
 } from '../data/progression';
 import { ABILITIES, MAX_ABILITY_SCORE } from '../data/srd';
+
+/** An Epic Boon can push one ability score up to 30. */
+export const EPIC_MAX_ABILITY_SCORE = 30;
+
+/** Short description of a class or subclass feature (empty if unknown). */
+export const featureInfo = name => FEATURE_INFO?.[name] || '';
 import { getClass, getSpecies, abilityModifier, computeArmorClass } from './characterBuilder';
 import { spellsFor, slotsForLevel, slotTable, maxSlotLevel, getSpell } from './spellcasting';
 
@@ -81,6 +87,8 @@ export function levelUpPlan(character) {
     const isWizard = Boolean(progression.spellbook);
     const targetSpells = isWizard ? progression.spellbook[level - 1] : progression.prepared[level - 1];
     const slots = slotsForLevel(cls.id, level);
+    // Warlocks: one Mystic Arcanum spell (6th-9th level) at levels 11, 13, 15 and 17
+    const arcanumLevel = progression.mysticArcanum?.[level] || null;
     spells = {
       list: cls.id,
       ability: known[0]?.ability || null,
@@ -88,12 +96,18 @@ export function levelUpPlan(character) {
       spells: Math.max(0, targetSpells - knownSpells.length),
       prepared: isWizard ? progression.prepared[level - 1] : null,
       maxSpellLevel: maxSlotLevel({ slots }),
+      arcanumLevel,
       slotsBefore: slotTable(character.spellcasting),
       slotsAfter: slotTable({ slots })
     };
   }
 
-  const subclass = level === SUBCLASS_LEVEL ? SUBCLASSES[cls.id] : null;
+  const subclassData = SUBCLASSES[cls.id];
+  const subclass = level === SUBCLASS_LEVEL ? subclassData : null;
+  // Features of the subclass the hero already has (or gets now)
+  const subclassFeatures = level >= SUBCLASS_LEVEL ? subclassData?.features?.[level] || [] : [];
+  const asi = (ASI_LEVELS_BY_CLASS[cls.id] || []).includes(level);
+  const epicBoon = level === EPIC_BOON_LEVEL;
 
   return {
     level,
@@ -106,11 +120,14 @@ export function levelUpPlan(character) {
     proficiencyAfter: PROFICIENCY_BY_LEVEL[level],
     features: [
       ...(subclass ? [subclass.name] : []),
+      ...subclassFeatures,
       ...(CLASS_FEATURES[cls.id]?.[level] || []),
-      ...(ASI_LEVELS.includes(level) ? ['Mejora de Característica'] : [])
+      ...(asi ? ['Mejora de Característica'] : []),
+      ...(epicBoon ? ['Don Épico'] : [])
     ],
     subclass,
-    asi: ASI_LEVELS.includes(level),
+    asi,
+    epicBoon,
     spells
   };
 }
@@ -123,21 +140,26 @@ export function levelUpPlan(character) {
  * choices:
  * - hp: { method: 'average' | 'roll', roll: number | null }
  * - asi: { mode: 'two' (+2 to one) | 'split' (+1 to two), abilities: [id] or [id, id] }
- * - spells: { cantrips: [id], spells: [id], prepared: [id] } — prepared lists every
- *   spellbook spell a wizard wants ready (old and new)
+ * - spells: { cantrips: [id], spells: [id], prepared: [id], arcanum: id | null } — prepared
+ *   lists every spellbook spell a wizard wants ready (old and new); arcanum is the
+ *   warlock's Mystic Arcanum spell
+ * - boon: { id, ability } — Epic Boon at level 19 (+1 to an ability, up to 30)
  */
 export function emptyLevelUpChoices(character) {
   const prepared = (character.spellcasting?.known || []).filter(k => k.prepared && getSpell(k.id)?.level > 0 && !k.freeCast).map(k => k.id);
   return {
     hp: { method: 'average', roll: null },
     asi: { mode: 'two', abilities: [] },
-    spells: { cantrips: [], spells: [], prepared }
+    spells: { cantrips: [], spells: [], prepared, arcanum: null },
+    boon: { id: null, ability: null }
   };
 }
 
 /** Spells the hero can learn at the new level, by spell level (known ones excluded). */
 export function learnableSpells(character, plan, level) {
-  if (!plan.spells || level > plan.spells.maxSpellLevel) return [];
+  if (!plan.spells) return [];
+  const isArcanum = level === plan.spells.arcanumLevel;
+  if (level > plan.spells.maxSpellLevel && !isArcanum) return [];
   const known = new Set((character.spellcasting?.known || []).map(k => k.id));
   return spellsFor(plan.spells.list, level).filter(s => !known.has(s.id));
 }
@@ -168,6 +190,17 @@ export function levelUpIssues(character, plan, choices) {
       : abilities.length === 2 && abilities[0] !== abilities[1]
         && abilities.every(id => character.stats[id] + 1 <= MAX_ABILITY_SCORE);
     if (!valid) issues.push(mode === 'two' ? 'Elige qué característica sube +2.' : 'Elige dos características distintas para subir +1.');
+  }
+
+  if (plan.epicBoon) {
+    const { id, ability } = choices.boon || {};
+    if (!EPIC_BOONS.some(b => b.id === id)) issues.push('Elige tu Don Épico.');
+    else if (!ability || character.stats[ability] + 1 > EPIC_MAX_ABILITY_SCORE) issues.push('Elige qué característica mejora tu Don Épico.');
+  }
+
+  if (plan.spells?.arcanumLevel) {
+    const options = new Set(learnableSpells(character, plan, plan.spells.arcanumLevel).map(s => s.id));
+    if (!options.has(choices.spells.arcanum)) issues.push(`Elige tu Arcano Místico de nivel ${plan.spells.arcanumLevel}.`);
   }
 
   if (plan.spells) {
@@ -211,8 +244,17 @@ export function applyLevelUp(character, choices) {
   const { level } = plan;
 
   // Ability Score Improvement (raising Constitution also raises max HP retroactively)
-  const bonuses = plan.asi ? asiBonuses(choices) : {};
-  const stats = Object.fromEntries(ABILITY_IDS.map(id => [id, Math.min(MAX_ABILITY_SCORE, character.stats[id] + (bonuses[id] || 0))]));
+  const bonuses = plan.asi ? { ...asiBonuses(choices) } : {};
+  const boon = plan.epicBoon ? EPIC_BOONS.find(b => b.id === choices.boon.id) : null;
+  const caps = Object.fromEntries(ABILITY_IDS.map(id => [id, MAX_ABILITY_SCORE]));
+  if (boon) {
+    bonuses[choices.boon.ability] = (bonuses[choices.boon.ability] || 0) + 1;
+    caps[choices.boon.ability] = EPIC_MAX_ABILITY_SCORE;
+  }
+  const stats = Object.fromEntries(ABILITY_IDS.map(id => [
+    id,
+    Math.min(Math.max(caps[id], character.stats[id]), character.stats[id] + (bonuses[id] || 0))
+  ]));
   const conGain = abilityModifier(stats.con) - abilityModifier(character.stats.con);
   const gained = hpGain(plan, choices) + conGain * level;
 
@@ -226,6 +268,11 @@ export function applyLevelUp(character, choices) {
     const additions = [...choices.spells.cantrips, ...choices.spells.spells].map(id => ({
       id, source: cls.name, sourceKey: 'class', ability, prepared: true, freeCast: false
     }));
+    if (choices.spells.arcanum) {
+      additions.push({
+        id: choices.spells.arcanum, source: 'Arcano Místico', sourceKey: 'arcanum', ability, prepared: true, freeCast: true
+      });
+    }
     let known = [...spellcasting.known, ...additions];
     if (isWizard) {
       const prepared = new Set(choices.spells.prepared);
@@ -249,13 +296,17 @@ export function applyLevelUp(character, choices) {
     proficiencyBonus: plan.proficiencyAfter,
     ac: computeArmorClass(cls, stats),
     subclass: plan.subclass ? plan.subclass.name : character.subclass || null,
-    classFeatures: [...(character.classFeatures || []), ...plan.features.filter(f => f !== 'Mejora de Característica')],
+    classFeatures: [
+      ...(character.classFeatures || []),
+      ...plan.features.filter(f => f !== 'Mejora de Característica' && f !== 'Don Épico' && f !== plan.subclass?.name),
+      ...(boon ? [boon.name] : [])
+    ],
     spellcasting
   };
 
   return {
     character: next,
-    summary: { level, hpGain: gained, features: plan.features, learned, asi: bonuses }
+    summary: { level, hpGain: gained, features: plan.features.filter(f => f !== 'Don Épico').concat(boon ? [boon.name] : []), learned, asi: bonuses }
   };
 }
 

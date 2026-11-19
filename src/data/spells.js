@@ -1,4 +1,5 @@
-// Cantrips and level 1 spells for the 2024 rules of D&D.
+// Spells of every level (cantrips to 9th) for the 2024 rules of D&D. Levels 0-3 are
+// here; levels 4-5 and 6-9 live in spellsLevel4to5.js and spellsLevel6to9.js.
 //
 // This file includes material from the System Reference Document 5.2.1
 // ("SRD 5.2.1") by Wizards of the Coast LLC, available at
@@ -14,6 +15,9 @@
 //   auto    – always hits (`damage`)
 //   heal    – restores `heal` hit points (+ spellcasting modifier if `addMod`)
 //   utility – no numbers: the Dungeon Master narrates the effect
+
+import { SPELL_ROWS_4_5 } from './spellsLevel4to5';
+import { SPELL_ROWS_6_9 } from './spellsLevel6to9';
 
 const C = 'cantrip';
 
@@ -162,7 +166,7 @@ const ROWS = [
   ['windWall', 'Muro de Viento', 3, ['druid', 'ranger'], 'utility', { concentration: true }, 'Un muro de viento que desvía flechas y gases.']
 ];
 
-export const SPELLS = ROWS.map(([id, name, level, classes, kind, mechanics, desc]) => ({
+export const SPELLS = [...ROWS, ...SPELL_ROWS_4_5, ...SPELL_ROWS_6_9].map(([id, name, level, classes, kind, mechanics, desc]) => ({
   id,
   name,
   level: level === C ? 0 : level,
