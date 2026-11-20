@@ -61,13 +61,16 @@ const playerInitiativeBonus = character => mod(character.stats?.des)
  */
 export function createEncounter(groups, character, rollDie) {
   const enemies = [];
-  groups.forEach(({ monster, count = 1, name }) => {
+  groups.forEach(({ monster, count = 1, name, trait, elite }) => {
     for (let n = 1; n <= count; n++) {
       const label = name || monster.name;
       enemies.push({
         uid: `${monster.id}-${enemies.length + 1}`,
         monsterId: monster.id,
         name: count > 1 ? `${label} ${n}` : label,
+        baseName: monster.name,
+        trait: trait || null,
+        elite: Boolean(elite),
         type: monster.type,
         cr: monster.cr,
         xp: monster.xp,
@@ -155,6 +158,13 @@ function moraleCheck(encounter, uid, rollDie, reason) {
   return pushLog(next, 'morale', `${enemy.name} ${reason} y se viene abajo: ${flees ? 'huye despavorido' : 'suelta las armas y se rinde'} (moral ${total} vs CD ${MORALE_DC}).`, { uid, outcome: flees ? 'fled' : 'surrendered' });
 }
 
+/** A leader is stronger than every other creature of the encounter, or a named elite. */
+function isLeaderOf(encounter, uid) {
+  const enemy = encounter.enemies.find(e => e.uid === uid);
+  if (!enemy || encounter.enemies.length < 2) return false;
+  return enemy.elite || encounter.enemies.every(e => e.uid === uid || e.cr < enemy.cr);
+}
+
 /** Apply damage to an enemy, then death and morale. */
 function damageEnemy(encounter, uid, amount, rollDie) {
   const enemy = encounter.enemies.find(e => e.uid === uid);
@@ -164,9 +174,9 @@ function damageEnemy(encounter, uid, amount, rollDie) {
 
   if (hp === 0) {
     next = updateEnemy(next, uid, { status: 'dead' });
-    next = pushLog(next, 'down', `${enemy.name} cae y no se levanta.`, { uid });
+    next = pushLog(next, 'down', `${enemy.name} cae y no se levanta.`, { uid, leader: isLeaderOf(encounter, uid) });
     // A leader (a creature stronger than all the others) falling shakes the rest
-    const isLeader = encounter.enemies.length > 1 && encounter.enemies.every(e => e.uid === uid || e.cr < enemy.cr);
+    const isLeader = isLeaderOf(encounter, uid);
     const others = activeEnemies(next);
     if (isLeader) {
       others.forEach(o => { next = moraleCheck(next, o.uid, rollDie, `ve caer a ${enemy.name}`); });

@@ -91,7 +91,8 @@ describe('parseDMReply', () => {
       goldEarned: -4,
       xpEarned: 0,
       usedRoll: true,
-      summary: null
+      summary: null,
+      combat: null
     });
     expect(parseDMReply(reply({ experiencia: 60 }), character).xpEarned).toBe(60);
     expect(parseDMReply(reply({ experiencia: 5000 }), character).xpEarned).toBe(300);

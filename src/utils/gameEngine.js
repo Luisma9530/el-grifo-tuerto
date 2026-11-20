@@ -3,6 +3,7 @@ import { tavernAudio } from './audio';
 import { buildDMPrompt, parseDMReply, dmResponseSchema } from './dmPrompt';
 import { requestGemini } from './geminiClient';
 import { narrateSpell, narrateRest, narrateAttack } from './spellNarration';
+import { narrateCombatEnd, startLocalFight, isAggressive } from './combatNarration';
 
 // Helper to calculate D&D stat modifier from score (e.g. 16 -> +3, 10 -> 0, 8 -> -1)
 export function getModifier(score) {
@@ -116,7 +117,7 @@ export async function testGeminiKey(key) {
 async function askGemini(key, context) {
   const structured = await requestGemini(key, {
     prompt: buildDMPrompt({ ...context, structured: true }),
-    generationConfig: { responseMimeType: 'application/json', responseSchema: dmResponseSchema(context.requestSummary) }
+    generationConfig: { responseMimeType: 'application/json', responseSchema: dmResponseSchema(context.requestSummary, Boolean(context.bestiary)) }
   });
   if (structured.ok || structured.reason !== 'bad-request') return structured;
 
@@ -157,10 +158,11 @@ let currentKeyRotationIndex = 0;
 export async function generateDMResponse({
   playerAction, character, world, history = [], apiKey = null, apiKeys = [], playerRoll = null,
   spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
-  summary = '', events = [], requestSummary = false
+  summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null
 }) {
-  // Rests and spells without an attack or a saving throw involve no d20 at all
-  const needsNoRoll = Boolean(rest) || Boolean(weaponAttack) || (spellCast && !spellCast.attack && spellCast.spell.kind !== 'save');
+  // Rests, finished fights and spells without an attack or a saving throw involve no d20 at all
+  const needsNoRoll = Boolean(rest) || Boolean(weaponAttack) || Boolean(combatResult)
+    || (spellCast && !spellCast.attack && spellCast.spell.kind !== 'save');
 
   // Build active keys pool (from params or persistent storage)
   let pool = [];
@@ -194,7 +196,7 @@ export async function generateDMResponse({
       try {
         const reply = await askGemini(keyToUse, {
           playerAction, character, world, history, d20, playerRoll, spellCast, rest, effectsApplied,
-          weaponAttack, summary, events, requestSummary
+          weaponAttack, summary, events, requestSummary, bestiary, combatResult
         });
 
         if (reply.ok) {
@@ -205,11 +207,13 @@ export async function generateDMResponse({
             return {
               text: parsed.text,
               suggestedActions: parsed.suggestedActions,
-              damageTaken: parsed.damageTaken,
-              healing: parsed.healing,
+              // After a finished fight: no damage, healing or XP from the narration (already resolved)
+              damageTaken: combatResult ? 0 : parsed.damageTaken,
+              healing: combatResult ? 0 : parsed.healing,
               goldEarned: parsed.goldEarned,
-              xpEarned: rest ? 0 : parsed.xpEarned,
+              xpEarned: rest || combatResult ? 0 : parsed.xpEarned,
               summary: parsed.summary,
+              combat: bestiary ? parsed.combat : null,
               roll: parsed.usedRoll && !playerRoll && !needsNoRoll ? { sides: 20, value: d20 } : null,
               source: 'gemini',
               keyIndex: activeIdx,
@@ -248,7 +252,15 @@ export async function generateDMResponse({
 
   // Rests and spells have their own narration
   let spellXp = null;
-  if (rest) {
+  let combat = null;
+  if (combatResult) {
+    ({ text, suggestedActions, goldEarned } = narrateCombatEnd(combatResult, { character, rng: Math.random }));
+    spellXp = 0;
+  } else if (bestiary && !playerRoll && isAggressive(actionLower)) {
+    // A fight starts: the game resolves it with creatures of the bestiary
+    ({ text, suggestedActions, combat } = startLocalFight(bestiary, { character, world, rng: Math.random }));
+    spellXp = 0;
+  } else if (rest) {
     ({ text, suggestedActions } = narrateRest(rest, character));
   } else if (weaponAttack) {
     let narration;
@@ -457,6 +469,7 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     healing: 0,
     goldEarned,
     xpEarned: localXp({ text, rest, spellXp, isCrit, isCritFail, isHighRoll }),
+    combat,
     // Set when Gemini keys exist but the AI could not answer this turn
     notice: aiFailure ? AI_FAILURE_NOTICES[aiFailure] || AI_FAILURE_NOTICES.overloaded : null,
     // Only when Duncan's own roll is mentioned in the narration

@@ -8,7 +8,8 @@ import { activeEnemies, isPlayerTurn } from '../../utils/encounter';
 const LOG_COLORS = {
   info: 'text-stone-400', hit: 'text-emerald-300', crit: 'text-emerald-200 font-semibold', miss: 'text-stone-400',
   heal: 'text-sky-300', down: 'text-amber-300 font-semibold', morale: 'text-amber-200', end: 'text-amber-100 font-semibold',
-  enemyHit: 'text-red-300', enemyCrit: 'text-red-200 font-semibold', enemyMiss: 'text-stone-500'
+  enemyHit: 'text-red-300', enemyCrit: 'text-red-200 font-semibold', enemyMiss: 'text-stone-500',
+  duncan: 'text-amber-100/90 italic font-serif'
 };
 
 const ACTION_TABS = [
@@ -37,6 +38,12 @@ function EnemyCard({ enemy, selected, onSelect, isTurn }) {
         <span className={`text-xs font-semibold truncate ${out ? 'text-stone-500 line-through' : 'text-stone-100'}`}>{enemy.name}</span>
         <span className="text-[10px] font-mono text-stone-400 shrink-0">CA {enemy.ac}</span>
       </div>
+      {(enemy.elite || enemy.baseName !== enemy.name.replace(/ \d+$/, '')) && (
+        <p className="text-[10px] text-stone-500 truncate">
+          {enemy.baseName}{enemy.elite && <span className="ml-1 text-amber-400 font-semibold">· élite</span>}
+        </p>
+      )}
+      {enemy.trait && <p className="text-[10px] italic text-stone-400 truncate" title={enemy.trait}>{enemy.trait}</p>}
       {out ? (
         <p className="text-[10px] text-stone-500 mt-1">{STATUS_LABELS[enemy.status]}</p>
       ) : (

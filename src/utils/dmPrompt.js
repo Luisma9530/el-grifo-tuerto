@@ -32,17 +32,50 @@ export const DM_RESPONSE_SCHEMA = {
   required: ['narracion', 'usaTirada', 'danio', 'curacion', 'oro', 'experiencia', 'opciones']
 };
 
-/** Response schema; with `requestSummary` it also asks for the updated campaign summary. */
-export function dmResponseSchema(requestSummary = false) {
-  if (!requestSummary) return DM_RESPONSE_SCHEMA;
-  return {
-    ...DM_RESPONSE_SCHEMA,
-    properties: {
-      ...DM_RESPONSE_SCHEMA.properties,
-      resumen: { type: 'STRING', description: 'Resumen actualizado de toda la campaña, máximo 800 caracteres.' }
-    },
-    required: [...DM_RESPONSE_SCHEMA.required, 'resumen']
-  };
+const COMBAT_SCHEMA = {
+  type: 'OBJECT',
+  nullable: true,
+  description: 'Solo si empieza una pelea en esta escena: los enemigos (de la lista de criaturas).',
+  properties: {
+    enemigos: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          id: { type: 'STRING' },
+          cantidad: { type: 'INTEGER' },
+          nombre: { type: 'STRING', description: 'Nombre propio, solo para un individuo único.' },
+          rasgo: { type: 'STRING', description: 'Rasgo breve que lo distingue.' },
+          elite: { type: 'BOOLEAN', description: 'true si es un jefe más duro de lo normal.' }
+        },
+        required: ['id', 'cantidad']
+      }
+    }
+  },
+  required: ['enemigos']
+};
+
+/**
+ * Response schema; with `requestSummary` it also asks for the updated campaign
+ * summary, with `allowCombat` it accepts an optional fight to start.
+ */
+export function dmResponseSchema(requestSummary = false, allowCombat = false) {
+  if (!requestSummary && !allowCombat) return DM_RESPONSE_SCHEMA;
+  const properties = { ...DM_RESPONSE_SCHEMA.properties };
+  const required = [...DM_RESPONSE_SCHEMA.required];
+  if (requestSummary) {
+    properties.resumen = { type: 'STRING', description: 'Resumen actualizado de toda la campaña, máximo 800 caracteres.' };
+    required.push('resumen');
+  }
+  if (allowCombat) properties.combate = COMBAT_SCHEMA;
+  return { ...DM_RESPONSE_SCHEMA, properties, required };
+}
+
+const formatCr = cr => (cr === 0.125 ? '1/8' : cr === 0.25 ? '1/4' : cr === 0.5 ? '1/2' : String(cr));
+
+/** Lines describing the creatures the Dungeon Master may use to start a fight. */
+function describeBestiary(bestiary) {
+  return bestiary.creatures.map(c => `${c.id} = ${c.name} (VD ${formatCr(c.cr)}, ${c.xp} PX)`).join('; ');
 }
 
 function modifier(score) {
@@ -119,11 +152,13 @@ function formatHistory(history, characterName) {
  * @param {string} [params.summary]       campaign summary written in earlier turns
  * @param {string[]} [params.events]      facts recorded by the game (travel, level ups...)
  * @param {boolean} [params.requestSummary]  ask the model to rewrite the summary in this reply
+ * @param {object} [params.bestiary]     { creatures, budget } the model may start a fight with (see encounterCandidates)
+ * @param {string} [params.combatResult] summary of a fight the game just finished: narrate its outcome
  */
 export function buildDMPrompt({
   playerAction, character, world, history, d20, playerRoll = null, structured = true,
   spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
-  summary = '', events = [], requestSummary = false
+  summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null
 }) {
   const name = character.name || 'Aventurero';
   const location = world.mapNodes?.find(n => n.status === 'current')?.name || world.initialLocation;
@@ -134,7 +169,10 @@ export function buildDMPrompt({
   const attackDone = Boolean(weaponAttack);
   const saveAbility = enemySave ? ABILITIES.find(a => a.id === spellCast.spell.save)?.name : '';
 
-  const diceRules = attackDone
+  const diceRules = combatResult
+    ? `El combate ya ha terminado y lo ha resuelto el juego con sus propias tiradas. Resultado: ${combatResult}
+Narra el desenlace (cómo queda el lugar, qué hacen los que se rindieron o huyeron) sin cambiar nada de lo ocurrido ni tirar dados. "usaTirada": false, "danio": 0, "curacion": 0 y "experiencia": 0 (ya está aplicada). En "oro" pon el botín que encuentra si registra a los caídos (razonable para esas criaturas, o 0).`
+    : attackDone
     ? 'El juego YA ha resuelto este ataque con sus propias tiradas, que aparecen en la acción del jugador: narra exactamente esos impactos, fallos y el daño que sufre el enemigo, sin cambiar ningún número ni tirar dados ("usaTirada": false). Tú solo decides cómo reacciona el enemigo: si está muy herido, si huye o se rinde, o si contraataca (en ese caso pon en "danio" lo que pierde el personaje).'
     : noRoll
     ? 'Esta acción no necesita ninguna tirada: no menciones dados y marca "usaTirada" como false.'
@@ -159,6 +197,8 @@ export function buildDMPrompt({
 - "experiencia": puntos de experiencia por superar un reto en esta escena: 0 si no superó nada (charlar, comprar, descansar, fallar sin aprender nada), 10-30 por un reto menor, 40-80 por vencer un combate o descubrir algo importante, 100-200 solo por un logro excepcional.
 - "opciones": 3 o 4 sugerencias breves de lo que puede hacer ahora.${requestSummary ? `
 - "resumen": reescribe el resumen de la campaña juntando el resumen anterior y la crónica reciente (máximo 800 caracteres, frases cortas): hechos clave, personajes no jugadores y su relación con ${name}, misiones abiertas, pistas, deudas y objetos importantes. Es tu memoria para el resto de la partida.` : ''}
+${bestiary ? `
+- "combate": SOLO si en esta escena empieza una pelea (alguien ataca al héroe, o el héroe ataca a alguien). En ese caso NO resuelvas la pelea: narra hasta el primer choque de aceros y devuelve los enemigos; el juego llevará el combate. Usa únicamente estas criaturas: ${describeBestiary(bestiary)}. Para ${name} solo, un combate normal suma unos ${bestiary.budget.moderate} PX (fácil ${bestiary.budget.low}, duro ${bestiary.budget.high}). Puedes dar a un único enemigo un "nombre" propio y un "rasgo" breve, y marcarlo "elite" si es un jefe. Si no empieza ninguna pelea, omite "combate".` : ''}
 Lo que cuentes en la narración debe coincidir con "danio", "curacion" y "oro".`
     : `Al final de tu respuesta, en una línea separada que empiece con "OPCIONES:", proporciona 3 o 4 sugerencias breves de acción separadas por una pleca "|". Por ejemplo: OPCIONES: Sacar el arma | Negociar con el tabernero | Escabullirse por la puerta trasera.
 Mantén la respuesta en español, entre 1 y 3 párrafos breves.`;
@@ -237,7 +277,8 @@ export function parseDMReply(raw, character = {}) {
         goldEarned: toInt(data.oro, -gold, 500),
         xpEarned: toInt(data.experiencia, 0, 300),
         usedRoll: data.usaTirada === true,
-        summary: cleanSummary(data.resumen)
+        summary: cleanSummary(data.resumen),
+        combat: data.combate && Array.isArray(data.combate.enemigos) && data.combate.enemigos.length ? data.combate : null
       };
     } catch {
       // Not valid JSON: treat it as plain text below
@@ -260,6 +301,7 @@ export function parseDMReply(raw, character = {}) {
     goldEarned: 0,
     xpEarned: 0,
     summary: null,
+    combat: null,
     // Plain text can't tell us reliably; look for the dice marker the prompt asks for
     usedRoll: text.includes('🎲')
   };

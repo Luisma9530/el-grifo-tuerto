@@ -20,6 +20,7 @@ import { tavernAudio } from '../utils/audio';
 import { animateRoll, is3DDiceEnabled } from '../dice3d/controller';
 import { applySceneOutcome, rescueKnockedOut } from '../utils/sceneOutcome';
 import { createEncounter, runEnemyTurns, playerAction, describeEncounterResult } from '../utils/encounter';
+import { keyMoments, narrateMoment, MAX_MOMENTS } from '../utils/combatNarration';
 import CombatView from './game/CombatView';
 import { addXp, canLevelUp, describeLevelUp } from '../utils/leveling';
 import LevelUpModal from './game/LevelUpModal';
@@ -31,6 +32,8 @@ import { skillModifier, getSkill } from '../utils/characterBuilder';
 
 // The bestiary (and its builder) is only needed when a fight is being prepared
 const EncounterBuilder = lazy(() => import('./game/EncounterBuilder'));
+// The bestiary is big: loaded the first time Duncan may start a fight
+const loadBestiary = () => import('../utils/bestiary');
 
 export default function TavernApp({
   activeCampaign = null,
@@ -234,12 +237,12 @@ export default function TavernApp({
   // `effectsApplied`: HP / gold for this action were already changed here (drinks, rests, healing)
   const handleSendAction = async (actionText, {
     playerRoll = null, sheet = character, spellCast = null, rest = null, effectsApplied = false,
-    weaponAttack = null
+    weaponAttack = null, combatResult = null
   } = {}) => {
     if (!actionText || isGenerating) return;
 
-    // Add player's action to messages
-    const newMsgList = [
+    // Add player's action to messages (not for the narration after a fight)
+    const newMsgList = combatResult ? messages : [
       ...messages,
       {
         sender: 'player',
@@ -247,12 +250,20 @@ export default function TavernApp({
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }
     ];
-    setMessages(newMsgList);
+    // (the fight's own system lines were just added with functional updates: keep them)
+    if (!combatResult) setMessages(newMsgList);
     setIsGenerating(true);
 
     try {
       const currentKeys = getStoredGeminiKeys();
       setGeminiKeys(currentKeys);
+
+      // A plain action outside combat may start a fight: Duncan gets a short list of creatures
+      const mayStartFight = !encounter && !combatResult && !playerRoll && !spellCast && !rest && !weaponAttack;
+      const bestiaryModule = mayStartFight ? await loadBestiary().catch(() => null) : null;
+      const bestiary = bestiaryModule
+        ? bestiaryModule.encounterCandidates(sheet.level || 1, { tags: bestiaryModule.WORLD_TAGS[world?.id] || null })
+        : null;
 
       // Small requests: summary + uncovered messages; the summary is refreshed in
       // this same call every few turns (only when the AI is connected)
@@ -270,8 +281,20 @@ export default function TavernApp({
         weaponAttack,
         summary,
         events: eventsForPrompt(events),
-        requestSummary
+        requestSummary,
+        bestiary,
+        combatResult
       });
+      // A fight starts: the game resolves it, so nothing from this reply touches the sheet
+      const fightGroups = response.combat && bestiaryModule
+        ? bestiaryModule.resolveCombatRequest(response.combat, sheet.level || 1)
+        : [];
+      if (fightGroups.length) {
+        response.damageTaken = 0;
+        response.healing = 0;
+        response.goldEarned = 0;
+        response.xpEarned = 0;
+      }
       if (response.summary) {
         setSummary(response.summary);
         // The reply is about to be added: the summary covers all but the last few messages
@@ -338,6 +361,8 @@ export default function TavernApp({
       if (response.suggestedActions) {
         setSuggestedActions(response.suggestedActions);
       }
+
+      if (fightGroups.length) startEncounter(fightGroups, sheet, { byDuncan: true });
     } catch (err) {
       console.error(err);
     } finally {
@@ -348,17 +373,39 @@ export default function TavernApp({
   // ---------------------------------------------------------------- combat encounters
   const combatDie = sides => rollDie(sides, { silent: true });
 
-  const handleStartEncounter = (groups) => {
-    setIsEncounterBuilderOpen(false);
-    let next = createEncounter(groups, character, combatDie);
-    let hero = character;
+  // `sheet`: the hero as it is now (Duncan may start a fight right after changing it)
+  const startEncounter = (groups, sheet = character, { byDuncan = false } = {}) => {
+    let next = { ...createEncounter(groups, sheet, combatDie), byDuncan, narrated: 0 };
+    let hero = sheet;
     // Enemies that won initiative act before the hero
     ({ encounter: next, character: hero } = runEnemyTurns(next, hero, combatDie));
-    const names = groups.map(g => (g.count > 1 ? `${g.count} × ${g.monster.name}` : g.monster.name)).join(', ');
-    pushSystemMessage(`⚔️ ¡Combate! ${character.name} se enfrenta a: ${names}.`);
+    const names = groups.map(g => {
+      const label = g.name ? `${g.name} (${g.monster.name}${g.elite ? ', élite' : ''})` : g.monster.name;
+      return g.count > 1 ? `${g.count} × ${label}` : label;
+    }).join(', ');
+    pushSystemMessage(`⚔️ ¡Combate! ${sheet.name} se enfrenta a: ${names}.`);
     setEncounter(next);
-    if (hero !== character) setCharacter(hero);
+    if (hero !== sheet) setCharacter(hero);
     setMobileTab('story');
+  };
+
+  const handleStartEncounter = (groups) => {
+    setIsEncounterBuilderOpen(false);
+    startEncounter(groups);
+  };
+
+  // Key moments (a leader falls, an enemy surrenders or flees): Duncan adds a line,
+  // at most MAX_MOMENTS times per fight. The fight never waits for it.
+  const narrateKeyMoments = (before, after, hero) => {
+    if (after.status !== 'active' || (after.narrated || 0) >= MAX_MOMENTS) return after;
+    const moments = keyMoments(after.log.slice(before.log.length));
+    const key = getStoredGeminiKeys()[0]?.key;
+    if (!moments.length || !key) return after;
+    narrateMoment(key, { moments, encounter: after, character: hero, world }).then(text => {
+      if (!text) return;
+      setEncounter(prev => (prev ? { ...prev, log: [...prev.log, { round: prev.round, kind: 'duncan', text: `🗣️ ${text}` }] } : prev));
+    });
+    return { ...after, narrated: (after.narrated || 0) + 1 };
   };
 
   const handleCombatAction = async (action) => {
@@ -374,7 +421,7 @@ export default function TavernApp({
         await animateRoll(roll);
       }
     } finally {
-      setEncounter(result.encounter);
+      setEncounter(narrateKeyMoments(encounter, result.encounter, result.character));
       setCharacter(result.character);
       setCombatBusy(false);
     }
@@ -405,6 +452,8 @@ export default function TavernApp({
     }
     setCharacter(hero);
     setEncounter(null);
+    // Duncan narrates the outcome (and any loot) from the result the game computed
+    handleSendAction('Narra el final del combate', { sheet: hero, combatResult: line });
   };
 
   // Weapon attack resolved by the game: Duncan only narrates the result
