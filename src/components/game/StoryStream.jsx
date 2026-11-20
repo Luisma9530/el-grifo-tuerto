@@ -10,6 +10,8 @@ export default function StoryStream({
   world,
   onSendAction,
   onOpenGeminiConnect,
+  onQuickAttack,
+  onQuickCheck,
   keysCount = 0
 }) {
   const [inputText, setInputText] = useState('');
@@ -227,24 +229,30 @@ export default function StoryStream({
         <div className="flex items-center gap-4 mt-2 px-1 text-[11px] text-stone-400">
           <button
             type="button"
-            onClick={() => handleChipClick('Desenvainar arma y amenazar')}
-            className="hover:text-amber-300 flex items-center gap-1 transition-colors"
+            onClick={() => !isGenerating && onQuickAttack?.()}
+            disabled={isGenerating}
+            title="Ataca con tu primera arma equipada (lo resuelve el juego)"
+            className="hover:text-amber-300 flex items-center gap-1 transition-colors disabled:opacity-40"
           >
             <Sword className="w-3 h-3 text-red-400" />
             <span>Atacar</span>
           </button>
           <button
             type="button"
-            onClick={() => handleChipClick('Inspeccionar con cuidado la habitación')}
-            className="hover:text-amber-300 flex items-center gap-1 transition-colors"
+            onClick={() => !isGenerating && onQuickCheck?.('perception')}
+            disabled={isGenerating}
+            title="Tirada de Percepción con tu ficha (lo resuelve el juego)"
+            className="hover:text-amber-300 flex items-center gap-1 transition-colors disabled:opacity-40"
           >
             <Eye className="w-3 h-3 text-blue-400" />
             <span>Percepción</span>
           </button>
           <button
             type="button"
-            onClick={() => handleChipClick('Intentar convencerlo mediante diplomacia')}
-            className="hover:text-amber-300 flex items-center gap-1 transition-colors"
+            onClick={() => !isGenerating && onQuickCheck?.('persuasion')}
+            disabled={isGenerating}
+            title="Tirada de Persuasión con tu ficha (lo resuelve el juego)"
+            className="hover:text-amber-300 flex items-center gap-1 transition-colors disabled:opacity-40"
           >
             <MessageCircle className="w-3 h-3 text-purple-400" />
             <span>Persuadir</span>

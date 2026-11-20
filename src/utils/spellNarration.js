@@ -134,6 +134,41 @@ Un par de parroquianos se santiguan y otro pide que le rellenen la jarra «por s
   };
 }
 
+/**
+ * Narrate a weapon attack already resolved by the game (see resolveAttack in combat.js).
+ * @returns {{ text: string, suggestedActions: string[], xp: number }}
+ */
+export function narrateAttack(attack, { character }) {
+  const name = character.name;
+  const weapon = attack.option.weapon ? `su ${attack.option.name.toLowerCase()}` : 'los puños';
+  const tags = attack.rolls.map(r => `[🎲 Ataque D20: **${r.raw}** = ${r.total} vs CA ${attack.targetAC}]`).join(' ');
+  const crit = attack.rolls.some(r => r.crit);
+  const fumble = attack.rolls.every(r => r.fumble);
+
+  if (attack.hits === 0) {
+    return {
+      text: `${name} arremete con ${weapon} ${tags} **(${fumble ? '¡Pifia!' : 'Falla'})**.
+
+${fumble ? 'El golpe se pierde en el aire y casi acabas por los suelos entre las risas de la sala.' : 'Tu rival esquiva en el último momento y el golpe muerde la madera de una mesa.'}
+
+—*Así no, chaval* —gruñe Duncan—. *Más muñeca y menos furia.*`,
+      suggestedActions: ['Volver a atacar', 'Retroceder y buscar cobertura', 'Cambiar de arma', 'Intentar intimidarlo'],
+      xp: 10
+    };
+  }
+
+  const sneak = attack.sneak ? ` Aprovechas un descuido para hundir el golpe donde más duele (**+${attack.sneak.total}** de Ataque Furtivo).` : '';
+  return {
+    text: `${name} ataca con ${weapon} ${tags} **(${crit ? '¡CRÍTICO!' : attack.hits > 1 ? `${attack.hits} impactos` : 'Impacta'})**.
+
+El golpe ${crit ? 'entra de lleno con un crujido que hace callar a la taberna' : 'encuentra su objetivo'}: **${attack.totalDamage}** de daño ${attack.option.type}.${sneak}
+
+—*Eso ha tenido que doler* —comenta Duncan sin dejar de secar una jarra—. *Pero aún respira.*`,
+    suggestedActions: ['Rematar la faena', 'Exigirle que se rinda', 'Retroceder y buscar cobertura', 'Registrar sus bolsillos'],
+    xp: crit ? 75 : 40
+  };
+}
+
 /** Narrate a rest. `kind`: 'long' | 'short'. */
 export function narrateRest(kind, character) {
   if (kind === 'long') {

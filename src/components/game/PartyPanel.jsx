@@ -5,6 +5,8 @@ import { skillRows, proficiencyBonus, formatModifier } from '../../utils/charact
 import { TAVERN_MENU } from '../../data/gameData';
 import { tavernAudio } from '../../utils/audio';
 import SpellsTab, { RestButtons } from './SpellsTab';
+import AttacksPanel from './AttacksPanel';
+import { weaponForItem, isEquipped, setEquipped } from '../../utils/combat';
 import { xpProgress, canLevelUp, canAdvance } from '../../utils/leveling';
 
 export default function PartyPanel({
@@ -15,6 +17,7 @@ export default function PartyPanel({
   onCastSpell,
   onRest,
   onLevelUp,
+  onAttack,
   busy = false
 }) {
   const progress = xpProgress(character);
@@ -203,6 +206,8 @@ export default function PartyPanel({
         {/* STATS SHEET TAB */}
         {activeTab === 'sheet' && (
           <div className="space-y-4">
+            <AttacksPanel character={character} onAttack={onAttack} busy={busy} />
+
             <div>
               <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block mb-2">
                 Tiradas de Habilidad (Haz clic para tirar):
@@ -332,6 +337,21 @@ export default function PartyPanel({
                     </span>
                   )}
                 </div>
+
+                {weaponForItem(item) && (
+                  <button
+                    onClick={() => onUpdateCharacter(setEquipped(character, item.id, !isEquipped(item)))}
+                    aria-pressed={isEquipped(item)}
+                    title={isEquipped(item) ? 'Equipada: aparece en tus ataques' : 'En la mochila: no la usarás al atacar'}
+                    className={`px-2.5 py-1 rounded text-xs font-bold shrink-0 transition-colors border ${
+                      isEquipped(item)
+                        ? 'bg-red-950/50 border-red-700/60 text-red-200 hover:bg-red-900/50'
+                        : 'bg-stone-900 border-stone-700 text-stone-400 hover:text-stone-200'
+                    }`}
+                  >
+                    {isEquipped(item) ? '⚔ Equipada' : 'Equipar'}
+                  </button>
+                )}
 
                 {item.type === 'consumable' && (
                   <button

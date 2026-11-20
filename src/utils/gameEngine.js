@@ -1,8 +1,8 @@
 // Core RPG & Story Game Engine for El Grifo Tuerto
 import { tavernAudio } from './audio';
-import { buildDMPrompt, parseDMReply, DM_RESPONSE_SCHEMA } from './dmPrompt';
+import { buildDMPrompt, parseDMReply, dmResponseSchema } from './dmPrompt';
 import { requestGemini } from './geminiClient';
-import { narrateSpell, narrateRest } from './spellNarration';
+import { narrateSpell, narrateRest, narrateAttack } from './spellNarration';
 
 // Helper to calculate D&D stat modifier from score (e.g. 16 -> +3, 10 -> 0, 8 -> -1)
 export function getModifier(score) {
@@ -116,7 +116,7 @@ export async function testGeminiKey(key) {
 async function askGemini(key, context) {
   const structured = await requestGemini(key, {
     prompt: buildDMPrompt({ ...context, structured: true }),
-    generationConfig: { responseMimeType: 'application/json', responseSchema: DM_RESPONSE_SCHEMA }
+    generationConfig: { responseMimeType: 'application/json', responseSchema: dmResponseSchema(context.requestSummary) }
   });
   if (structured.ok || structured.reason !== 'bad-request') return structured;
 
@@ -156,10 +156,11 @@ let currentKeyRotationIndex = 0;
 // `effectsApplied`: the caller already changed HP / gold for this action (drinks, rests, healing).
 export async function generateDMResponse({
   playerAction, character, world, history = [], apiKey = null, apiKeys = [], playerRoll = null,
-  spellCast = null, rest = null, effectsApplied = false
+  spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
+  summary = '', events = [], requestSummary = false
 }) {
   // Rests and spells without an attack or a saving throw involve no d20 at all
-  const needsNoRoll = Boolean(rest) || (spellCast && !spellCast.attack && spellCast.spell.kind !== 'save');
+  const needsNoRoll = Boolean(rest) || Boolean(weaponAttack) || (spellCast && !spellCast.attack && spellCast.spell.kind !== 'save');
 
   // Build active keys pool (from params or persistent storage)
   let pool = [];
@@ -191,7 +192,10 @@ export async function generateDMResponse({
       const keyToUse = pool[activeIdx];
 
       try {
-        const reply = await askGemini(keyToUse, { playerAction, character, world, history, d20, playerRoll, spellCast, rest, effectsApplied });
+        const reply = await askGemini(keyToUse, {
+          playerAction, character, world, history, d20, playerRoll, spellCast, rest, effectsApplied,
+          weaponAttack, summary, events, requestSummary
+        });
 
         if (reply.ok) {
           const parsed = parseDMReply(reply.text, character);
@@ -205,6 +209,7 @@ export async function generateDMResponse({
               healing: parsed.healing,
               goldEarned: parsed.goldEarned,
               xpEarned: rest ? 0 : parsed.xpEarned,
+              summary: parsed.summary,
               roll: parsed.usedRoll && !playerRoll && !needsNoRoll ? { sides: 20, value: d20 } : null,
               source: 'gemini',
               keyIndex: activeIdx,
@@ -245,6 +250,10 @@ export async function generateDMResponse({
   let spellXp = null;
   if (rest) {
     ({ text, suggestedActions } = narrateRest(rest, character));
+  } else if (weaponAttack) {
+    let narration;
+    ({ text, suggestedActions, ...narration } = narrateAttack(weaponAttack, { character }));
+    spellXp = narration.xp;
   } else if (spellCast) {
     let narration;
     ({ text, suggestedActions, ...narration } = narrateSpell(spellCast, { character, enemyRoll: rollResult }));

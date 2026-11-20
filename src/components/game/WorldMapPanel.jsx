@@ -1,7 +1,7 @@
 import React from 'react';
 import { Compass, MapPin, Shield, Flag, Skull, CheckCircle2 } from 'lucide-react';
 
-export default function WorldMapPanel({ world, onTravelToNode }) {
+export default function WorldMapPanel({ world, onTravelToNode, summary = '', events = [] }) {
   return (
     <div className="h-full flex flex-col bg-[#120f18] border-l border-amber-950/60 overflow-hidden text-stone-200">
       
@@ -14,11 +14,31 @@ export default function WorldMapPanel({ world, onTravelToNode }) {
           </h3>
         </div>
         <p className="text-xs text-stone-400 font-mono">
-          UBICACIÓN: <span className="text-amber-300 font-semibold">{world.initialLocation}</span>
+          UBICACIÓN: <span className="text-amber-300 font-semibold">{world.mapNodes?.find(n => n.status === 'current')?.name || world.initialLocation}</span>
         </p>
       </div>
 
       <div className="flex-1 p-4 overflow-y-auto space-y-6">
+
+        {/* Campaign diary: Duncan's summary + facts recorded by the game */}
+        <div className="p-3 rounded-xl bg-[#17131f] border border-amber-900/30">
+          <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block mb-1.5">Diario de campaña</span>
+          {summary ? (
+            <p className="text-xs text-stone-300 leading-relaxed whitespace-pre-line">{summary}</p>
+          ) : (
+            <p className="text-[11px] text-stone-500 italic">
+              Con la IA conectada, Maese Duncan irá resumiendo aquí lo importante de la partida.
+            </p>
+          )}
+          {events.length > 0 && (
+            <ul className="mt-2 pt-2 border-t border-stone-800 space-y-0.5">
+              {events.slice(-6).reverse().map((event, index) => (
+                <li key={`${index}-${event}`} className="text-[11px] text-stone-400">· {event}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+
         
         {/* Dynamic Parchment Visual Map */}
         <div className="relative w-full h-52 rounded-2xl bg-[#181320] border-2 border-amber-900/40 p-3 overflow-hidden shadow-inner flex items-center justify-center">

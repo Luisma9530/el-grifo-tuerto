@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildDMPrompt, parseDMReply } from './dmPrompt';
+import { buildDMPrompt, parseDMReply, dmResponseSchema, DM_RESPONSE_SCHEMA } from './dmPrompt';
 
 const character = {
   name: 'Kaelen', race: 'Elfo Silvano', class: 'Pícaro (Nivel 3)', hp: 12, maxHp: 28, ac: 15, gold: 10,
@@ -41,11 +41,12 @@ describe('buildDMPrompt', () => {
     history.push({ sender: 'system', text: '🎲 Tirada de dados: d20 (11)' });
     history.push({ sender: 'duncan', text: 'x'.repeat(2000) });
     const prompt = buildDMPrompt({ playerAction: 'x', character, world, history, d20: 10 });
-    expect(prompt).not.toContain('mensaje-9\n');
-    expect(prompt).toContain('Kaelen: mensaje-10');
+    // At most 14 messages: 20 + 2 messages -> the first 8 are left out
+    expect(prompt).not.toContain('mensaje-7\n');
+    expect(prompt).toContain('Kaelen: mensaje-8');
     expect(prompt).toContain('Maese Duncan (DM): mensaje-19');
     expect(prompt).toContain('Sistema (dados): 🎲');
-    expect(prompt).not.toContain('x'.repeat(701));
+    expect(prompt).not.toContain('x'.repeat(501));
   });
 
   it('can ask for the legacy plain-text format', () => {
@@ -89,7 +90,8 @@ describe('parseDMReply', () => {
       healing: 0,
       goldEarned: -4,
       xpEarned: 0,
-      usedRoll: true
+      usedRoll: true,
+      summary: null
     });
     expect(parseDMReply(reply({ experiencia: 60 }), character).xpEarned).toBe(60);
     expect(parseDMReply(reply({ experiencia: 5000 }), character).xpEarned).toBe(300);
@@ -131,5 +133,40 @@ describe('parseDMReply', () => {
     expect(parseDMReply('', character)).toBeNull();
     expect(parseDMReply(undefined, character)).toBeNull();
     expect(parseDMReply('{"narracion": ""}', character)).toBeNull(); // never show raw JSON
+  });
+});
+
+describe('campaign memory and resolved attacks in the prompt', () => {
+  it('includes the summary and the recorded facts', () => {
+    const prompt = buildDMPrompt({
+      playerAction: 'x', character, world, history: [], d20: 10,
+      summary: 'Le debes 20 po a Duncan. El encapuchado es un espía del Círculo.',
+      events: ['Viaja a: Viejo Molino', 'Sube a nivel 2']
+    });
+    expect(prompt).toContain('Resumen de la campaña hasta ahora');
+    expect(prompt).toContain('espía del Círculo');
+    expect(prompt).toContain('Hechos registrados por el juego: Viaja a: Viejo Molino · Sube a nivel 2.');
+    expect(prompt).not.toContain('"resumen"');
+  });
+
+  it('asks for an updated summary only when requested', () => {
+    const prompt = buildDMPrompt({ playerAction: 'x', character, world, history: [], d20: 10, requestSummary: true });
+    expect(prompt).toContain('"resumen": reescribe el resumen de la campaña');
+    expect(dmResponseSchema(false)).toBe(DM_RESPONSE_SCHEMA);
+    expect(dmResponseSchema(true).required).toContain('resumen');
+    expect(DM_RESPONSE_SCHEMA.required).not.toContain('resumen');
+  });
+
+  it('reads and trims the summary in the reply', () => {
+    const reply = JSON.stringify({ narracion: 'Hola.', usaTirada: false, danio: 0, curacion: 0, oro: 0, experiencia: 0, opciones: [], resumen: '  Hechos.  ' });
+    expect(parseDMReply(reply, character).summary).toBe('Hechos.');
+    const long = JSON.stringify({ narracion: 'Hola.', resumen: 'a'.repeat(5000) });
+    expect(parseDMReply(long, character).summary.length).toBeLessThanOrEqual(1200);
+  });
+
+  it('tells the model not to roll for attacks the game resolved', () => {
+    const prompt = buildDMPrompt({ playerAction: 'Ataco con mi espadón...', character, world, history: [], d20: 10, weaponAttack: { hits: 1 } });
+    expect(prompt).toContain('El juego YA ha resuelto este ataque');
+    expect(prompt).not.toContain('YA se ha lanzado para esta acción');
   });
 });

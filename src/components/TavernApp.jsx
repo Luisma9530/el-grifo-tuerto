@@ -21,6 +21,11 @@ import { animateRoll, is3DDiceEnabled } from '../dice3d/controller';
 import { applySceneOutcome } from '../utils/sceneOutcome';
 import { addXp, canLevelUp, describeLevelUp } from '../utils/leveling';
 import LevelUpModal from './game/LevelUpModal';
+import {
+  historyForPrompt, needsSummary, coverageAfterSummary, addEvent, eventsForPrompt
+} from '../utils/campaignMemory';
+import { resolveAttack, describeAttack, attackOptions } from '../utils/combat';
+import { skillModifier, getSkill } from '../utils/characterBuilder';
 
 export default function TavernApp({
   activeCampaign = null,
@@ -101,6 +106,13 @@ export default function TavernApp({
     ];
   });
 
+  // Campaign memory for the AI Dungeon Master (see campaignMemory.js)
+  const storedCampaign = () => activeCampaign || (currentCampaignId ? getCampaignById(currentCampaignId) : null);
+  const [summary, setSummary] = useState(() => storedCampaign()?.summary || '');
+  const [summaryCoverage, setSummaryCoverage] = useState(() => storedCampaign()?.summaryCoverage || 0);
+  const [events, setEvents] = useState(() => storedCampaign()?.events || []);
+  const recordEvent = text => setEvents(prev => addEvent(prev, text));
+
   const [saveStatus, setSaveStatus] = useState('saved'); // 'saved' | 'error' | 'quota'
   const isRollingCheckRef = useRef(false); // a stat check die is on the table
   const [isLevelUpOpen, setIsLevelUpOpen] = useState(false);
@@ -147,6 +159,9 @@ export default function TavernApp({
       setWorld(activeCampaign.world);
       setCharacter(activeCampaign.character);
       setMessages(activeCampaign.messages || []);
+      setSummary(activeCampaign.summary || '');
+      setSummaryCoverage(activeCampaign.summaryCoverage || 0);
+      setEvents(activeCampaign.events || []);
       if (activeCampaign.suggestedActions?.length > 0) {
         setSuggestedActions(activeCampaign.suggestedActions);
       }
@@ -183,14 +198,17 @@ export default function TavernApp({
       world,
       character,
       messages,
-      suggestedActions
+      suggestedActions,
+      summary,
+      summaryCoverage,
+      events
     });
     if (saved) {
       setSaveStatus('saved');
     } else {
       setSaveStatus(isQuotaError(getLastSaveError()) ? 'quota' : 'error');
     }
-  }, [messages, character, world, campaignTitle, currentCampaignId, suggestedActions]);
+  }, [messages, character, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events]);
 
   const toggleSound = () => {
     const newState = tavernAudio.toggleTavernAmbience();
@@ -203,7 +221,8 @@ export default function TavernApp({
   // `spellCast` / `rest`: what the action was, so the Dungeon Master narrates it properly
   // `effectsApplied`: HP / gold for this action were already changed here (drinks, rests, healing)
   const handleSendAction = async (actionText, {
-    playerRoll = null, sheet = character, spellCast = null, rest = null, effectsApplied = false
+    playerRoll = null, sheet = character, spellCast = null, rest = null, effectsApplied = false,
+    weaponAttack = null
   } = {}) => {
     if (!actionText || isGenerating) return;
 
@@ -223,17 +242,29 @@ export default function TavernApp({
       const currentKeys = getStoredGeminiKeys();
       setGeminiKeys(currentKeys);
 
+      // Small requests: summary + uncovered messages; the summary is refreshed in
+      // this same call every few turns (only when the AI is connected)
+      const requestSummary = currentKeys.length > 0 && needsSummary(newMsgList, summaryCoverage);
       const response = await generateDMResponse({
         playerAction: actionText,
         character: sheet,
         world,
-        history: newMsgList,
+        history: historyForPrompt(newMsgList, summaryCoverage),
         apiKeys: currentKeys,
         playerRoll,
         spellCast,
         rest,
-        effectsApplied
+        effectsApplied,
+        weaponAttack,
+        summary,
+        events: eventsForPrompt(events),
+        requestSummary
       });
+      if (response.summary) {
+        setSummary(response.summary);
+        // The reply is about to be added: the summary covers all but the last few messages
+        setSummaryCoverage(coverageAfterSummary(newMsgList.length + 1));
+      }
 
       // Duncan rolled behind the screen: show the die before his narration
       if (response.roll) {
@@ -281,6 +312,7 @@ export default function TavernApp({
 
       // Dropping to 0 HP: Duncan patches the hero up... at a price
       if (outcome.knockedOut) {
+        recordEvent(`${sheet.name} cayó inconsciente y Duncan lo curó`);
         setMessages(prev => [
           ...prev,
           {
@@ -299,6 +331,59 @@ export default function TavernApp({
     } finally {
       setIsGenerating(false);
     }
+  };
+
+  // Weapon attack resolved by the game: Duncan only narrates the result
+  const handleAttack = async ({ optionId, target = '', targetAC, raging = false }) => {
+    if (isGenerating || isRollingCheckRef.current) return;
+    const result = resolveAttack(character, optionId, sides => rollDie(sides, { silent: true }), { targetAC, raging });
+    if (!result.ok) {
+      pushSystemMessage(`⚔️ ${result.error}`);
+      return;
+    }
+
+    isRollingCheckRef.current = true;
+    try {
+      const { attack } = result;
+      const label = attack.option.name;
+      for (const [index, roll] of attack.rolls.entries()) {
+        await animateRoll({
+          sides: 20,
+          value: roll.raw,
+          modifier: roll.total - roll.raw,
+          dc: attack.targetAC,
+          success: roll.hit,
+          label: attack.rolls.length > 1 ? `${label} · ataque ${index + 1}` : `${label} · ataque`
+        });
+      }
+      // All the damage dice of the hits (and Sneak Attack) in a single throw
+      const damageDice = [
+        ...attack.rolls.flatMap(r => r.damage?.dice.map(value => ({ sides: r.damage.sides, value })) || []),
+        ...(attack.sneak?.dice.map(value => ({ sides: 6, value })) || [])
+      ];
+      if (damageDice.length > 0) {
+        const diceTotal = damageDice.reduce((sum, d) => sum + d.value, 0);
+        await animateRoll({ dice: damageDice, modifier: attack.totalDamage - diceTotal, label: `${label} · daño` });
+      }
+
+      setMobileTab('story');
+      handleSendAction(describeAttack(attack, target), { weaponAttack: attack });
+    } finally {
+      isRollingCheckRef.current = false;
+    }
+  };
+
+  // Shortcut under the chronicle: attack with the first equipped weapon
+  const handleQuickAttack = () => {
+    const options = attackOptions(character);
+    const option = options.find(o => o.weapon) || options[0];
+    handleAttack({ optionId: option.id });
+  };
+
+  // Shortcut under the chronicle: a skill check with the hero's sheet
+  const handleQuickCheck = (skillId) => {
+    const skill = getSkill(skillId);
+    if (skill) handleRollCheck({ label: skill.name, modifier: skillModifier(character, skillId) });
   };
 
   // When rolling an ability or skill check from the character sheet
@@ -387,6 +472,7 @@ export default function TavernApp({
     setIsLevelUpOpen(false);
     tavernAudio.playCritSuccess();
     pushSystemMessage(describeLevelUp(next, summary));
+    recordEvent(`Sube a nivel ${next.level}${summary.features.length ? ` (${summary.features.slice(0, 2).join(', ')})` : ''}`);
   };
 
   // Short rest (an hour by the fire) or long rest (a night in a room, for a price)
@@ -445,6 +531,7 @@ export default function TavernApp({
       }))
     }));
 
+    recordEvent(`Viaja a ${node.name}`);
     handleSendAction(`El grupo decide abandonar la posición y viajar hacia: "${node.name}".`);
   };
 
@@ -622,6 +709,7 @@ export default function TavernApp({
             onCastSpell={handleCastSpell}
             onRest={handleRest}
             onLevelUp={() => setIsLevelUpOpen(true)}
+            onAttack={handleAttack}
             busy={isGenerating}
           />
         </div>
@@ -637,6 +725,8 @@ export default function TavernApp({
             onSendAction={handleSendAction}
             onOpenGeminiConnect={onOpenGeminiConnect}
             keysCount={geminiKeys.length}
+            onQuickAttack={handleQuickAttack}
+            onQuickCheck={handleQuickCheck}
           />
         </div>
 
@@ -645,6 +735,8 @@ export default function TavernApp({
           <WorldMapPanel
             world={world}
             onTravelToNode={handleTravelToNode}
+            summary={summary}
+            events={events}
           />
         </div>
 

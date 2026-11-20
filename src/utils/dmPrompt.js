@@ -3,9 +3,12 @@
 
 import { SKILLS, ABILITIES } from '../data/srd';
 import { spellRows, slotTable } from './spellcasting';
+import { cleanSummary } from './campaignMemory';
 
-const HISTORY_MESSAGES = 12;
-const HISTORY_CHARS_PER_MESSAGE = 700;
+// The caller already trims the chronicle to the messages not covered by the
+// campaign summary (see campaignMemory.js); these are just safety limits.
+const HISTORY_MESSAGES = 14;
+const HISTORY_CHARS_PER_MESSAGE = 500;
 
 const DEFAULT_ACTIONS = [
   'Inspeccionar los alrededores',
@@ -18,7 +21,7 @@ const DEFAULT_ACTIONS = [
 export const DM_RESPONSE_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    narracion: { type: 'STRING', description: 'La respuesta de Maese Duncan, de 2 a 4 párrafos.' },
+    narracion: { type: 'STRING', description: 'La respuesta de Maese Duncan, de 1 a 3 párrafos breves.' },
     usaTirada: { type: 'BOOLEAN', description: 'true si el resultado dependió de la tirada de d20 proporcionada.' },
     danio: { type: 'INTEGER', description: 'Puntos de golpe que pierde el personaje (0 si ninguno).' },
     curacion: { type: 'INTEGER', description: 'Puntos de golpe que recupera el personaje (0 si ninguno).' },
@@ -28,6 +31,19 @@ export const DM_RESPONSE_SCHEMA = {
   },
   required: ['narracion', 'usaTirada', 'danio', 'curacion', 'oro', 'experiencia', 'opciones']
 };
+
+/** Response schema; with `requestSummary` it also asks for the updated campaign summary. */
+export function dmResponseSchema(requestSummary = false) {
+  if (!requestSummary) return DM_RESPONSE_SCHEMA;
+  return {
+    ...DM_RESPONSE_SCHEMA,
+    properties: {
+      ...DM_RESPONSE_SCHEMA.properties,
+      resumen: { type: 'STRING', description: 'Resumen actualizado de toda la campaña, máximo 800 caracteres.' }
+    },
+    required: [...DM_RESPONSE_SCHEMA.required, 'resumen']
+  };
+}
 
 function modifier(score) {
   const mod = Math.floor(((Number(score) || 10) - 10) / 2);
@@ -99,10 +115,15 @@ function formatHistory(history, characterName) {
  * @param {object} [params.spellCast]    spell the player just cast (see castSpell), if any
  * @param {string} [params.rest]         'long' | 'short' when the action is a rest
  * @param {boolean} [params.effectsApplied]  the game already changed HP / gold for this action
+ * @param {object} [params.weaponAttack]  weapon attack already resolved by the game (see combat.js)
+ * @param {string} [params.summary]       campaign summary written in earlier turns
+ * @param {string[]} [params.events]      facts recorded by the game (travel, level ups...)
+ * @param {boolean} [params.requestSummary]  ask the model to rewrite the summary in this reply
  */
 export function buildDMPrompt({
   playerAction, character, world, history, d20, playerRoll = null, structured = true,
-  spellCast = null, rest = null, effectsApplied = false
+  spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
+  summary = '', events = [], requestSummary = false
 }) {
   const name = character.name || 'Aventurero';
   const location = world.mapNodes?.find(n => n.status === 'current')?.name || world.initialLocation;
@@ -110,9 +131,12 @@ export function buildDMPrompt({
 
   const enemySave = spellCast && !spellCast.attack && spellCast.spell.kind === 'save';
   const noRoll = Boolean(rest) || (spellCast && !spellCast.attack && !enemySave);
+  const attackDone = Boolean(weaponAttack);
   const saveAbility = enemySave ? ABILITIES.find(a => a.id === spellCast.spell.save)?.name : '';
 
-  const diceRules = noRoll
+  const diceRules = attackDone
+    ? 'El juego YA ha resuelto este ataque con sus propias tiradas, que aparecen en la acción del jugador: narra exactamente esos impactos, fallos y el daño que sufre el enemigo, sin cambiar ningún número ni tirar dados ("usaTirada": false). Tú solo decides cómo reacciona el enemigo: si está muy herido, si huye o se rinde, o si contraataca (en ese caso pon en "danio" lo que pierde el personaje).'
+    : noRoll
     ? 'Esta acción no necesita ninguna tirada: no menciones dados y marca "usaTirada" como false.'
     : enemySave
     ? `El jugador ha lanzado un conjuro que obliga a su objetivo a hacer una tirada de salvación. El d20 ya lanzado (${d20}) es la tirada de salvación de ${saveAbility} del OBJETIVO: súmale un modificador razonable para esa criatura (entre -1 y +4) y compárala con la CD ${spellCast.saveDC}. Si la iguala o supera, resiste el conjuro (o recibe la mitad del daño si el conjuro lo indica); si no, sufre el efecto completo. Menciónala así: [🎲 Salvación de ${saveAbility} del objetivo D20: ${d20} + mod = total vs CD ${spellCast.saveDC}] y marca "usaTirada" como true. No hagas ninguna otra tirada.`
@@ -133,10 +157,11 @@ export function buildDMPrompt({
 - "curacion": puntos de golpe que recupera (entero, 0 si nada).
 - "oro": monedas de oro que gana (positivo) o que gasta o pierde (negativo); 0 si nada.
 - "experiencia": puntos de experiencia por superar un reto en esta escena: 0 si no superó nada (charlar, comprar, descansar, fallar sin aprender nada), 10-30 por un reto menor, 40-80 por vencer un combate o descubrir algo importante, 100-200 solo por un logro excepcional.
-- "opciones": 3 o 4 sugerencias breves de lo que puede hacer ahora.
+- "opciones": 3 o 4 sugerencias breves de lo que puede hacer ahora.${requestSummary ? `
+- "resumen": reescribe el resumen de la campaña juntando el resumen anterior y la crónica reciente (máximo 800 caracteres, frases cortas): hechos clave, personajes no jugadores y su relación con ${name}, misiones abiertas, pistas, deudas y objetos importantes. Es tu memoria para el resto de la partida.` : ''}
 Lo que cuentes en la narración debe coincidir con "danio", "curacion" y "oro".`
     : `Al final de tu respuesta, en una línea separada que empiece con "OPCIONES:", proporciona 3 o 4 sugerencias breves de acción separadas por una pleca "|". Por ejemplo: OPCIONES: Sacar el arma | Negociar con el tabernero | Escabullirse por la puerta trasera.
-Mantén la respuesta en español, entre 2 y 4 párrafos inmersivos.`;
+Mantén la respuesta en español, entre 1 y 3 párrafos breves.`;
 
   return `Eres "Maese Duncan", el veterano, tosco, ingenioso y carismático tabernero tuerto y Dungeon Master de la taberna "El Grifo Tuerto".
 Estás dirigiendo una partida de rol estilo D&D 5e en el mundo: "${world.name}" (${world.genre || 'fantasía'}).${location ? `\nUbicación actual: ${location}.` : ''}
@@ -145,7 +170,14 @@ Personaje del jugador: ${name}, ${character.race || ''} ${character.class || ''}
 - Puntos de golpe: ${character.hp}/${character.maxHp}. Armadura (CA): ${character.ac ?? '?'}. Oro: ${character.gold} monedas.
 - Atributos: ${describeStats(character.stats)}.${inventory ? `\n- Inventario: ${inventory}.` : ''}${describeBuild(character)}
 
-Crónica previa de la historia (mantén la coherencia con estos eventos):
+${summary ? `Resumen de la campaña hasta ahora:
+"""
+${summary}
+"""
+
+` : ''}${events.length ? `Hechos registrados por el juego: ${events.join(' · ')}.
+
+` : ''}Crónica reciente (mantén la coherencia con estos eventos):
 """
 ${formatHistory(history, name) || 'Inicio de la aventura en la taberna.'}
 """
@@ -157,7 +189,7 @@ Dados:
 ${diceRules}
 
 Instrucciones:
-1. Responde con tu inconfundible voz de Maese Duncan (humor negro, sabiduría de taberna, descripciones vívidas y consecuencias palpables).
+1. Responde con tu inconfundible voz de Maese Duncan (humor negro, sabiduría de taberna, descripciones vívidas y consecuencias palpables), en 1 a 3 párrafos breves.
 2. Respeta los hechos previos, la ficha y la historia del personaje (su clase, especie, trasfondo y rasgos deben notarse en la narración): no puede gastar oro que no tiene, y con pocos puntos de golpe el peligro es real.
 3. Si sufre daño, se cura, gana o gasta oro, indícalo de forma dramática pero breve.
 4. Concluye planteando un dilema inmediato o preguntando qué hará ahora.${effectsApplied ? '\n5. Los cambios de puntos de golpe, oro y espacios de conjuro de ESTA acción ya están aplicados en la ficha: devuelve "danio" 0, "curacion" 0 y "oro" 0, salvo que ocurra algo más aparte de lo que el jugador describe.' : ''}
@@ -204,7 +236,8 @@ export function parseDMReply(raw, character = {}) {
         healing: toInt(data.curacion, 0, maxHp),
         goldEarned: toInt(data.oro, -gold, 500),
         xpEarned: toInt(data.experiencia, 0, 300),
-        usedRoll: data.usaTirada === true
+        usedRoll: data.usaTirada === true,
+        summary: cleanSummary(data.resumen)
       };
     } catch {
       // Not valid JSON: treat it as plain text below
@@ -226,6 +259,7 @@ export function parseDMReply(raw, character = {}) {
     healing: 0,
     goldEarned: 0,
     xpEarned: 0,
+    summary: null,
     // Plain text can't tell us reliably; look for the dice marker the prompt asks for
     usedRoll: text.includes('🎲')
   };
