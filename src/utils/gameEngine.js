@@ -143,6 +143,9 @@ const AI_FAILURE_NOTICES = {
   'bad-request': 'Gemini rechazó la petición: Duncan improvisa con el motor local en este turno.'
 };
 
+/** Remove "[🎲 ...]" roll tags (and the space before them) from a narration. */
+export const stripRollTags = text => text.replace(/\s*\[🎲[^\]]*\]/gu, '').replace(/ {2,}/g, ' ').trim();
+
 // Module-level rotation pointer for Round-Robin multi-player token pool
 let currentKeyRotationIndex = 0;
 
@@ -204,8 +207,10 @@ export async function generateDMResponse({
           if (parsed) {
             // Advance rotation index for the next player action
             currentKeyRotationIndex = (activeIdx + 1) % pool.length;
+            // A fight starts: the game rolls it, so no dice tag in the narration
+            const startsFight = Boolean(bestiary && parsed.combat);
             return {
-              text: parsed.text,
+              text: startsFight ? stripRollTags(parsed.text) : parsed.text,
               suggestedActions: parsed.suggestedActions,
               // After a finished fight: no damage, healing or XP from the narration (already resolved)
               damageTaken: combatResult ? 0 : parsed.damageTaken,
@@ -214,7 +219,8 @@ export async function generateDMResponse({
               xpEarned: rest || combatResult ? 0 : parsed.xpEarned,
               summary: parsed.summary,
               combat: bestiary ? parsed.combat : null,
-              roll: parsed.usedRoll && !playerRoll && !needsNoRoll ? { sides: 20, value: d20 } : null,
+              // A fight that starts is rolled by the game, not by Duncan
+              roll: parsed.usedRoll && !playerRoll && !needsNoRoll && !startsFight ? { sides: 20, value: d20 } : null,
               source: 'gemini',
               keyIndex: activeIdx,
               totalKeys: pool.length

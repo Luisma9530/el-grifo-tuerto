@@ -9,6 +9,7 @@ import {
 import { encounterCandidates, resolveCombatRequest, eliteVersion, getMonster, MAX_CANDIDATES, MAX_PER_GROUP, XP_BUDGET } from './bestiary';
 import { buildDMPrompt, parseDMReply, dmResponseSchema } from './dmPrompt';
 import { createEncounter } from './encounter';
+import { stripRollTags } from './gameEngine';
 
 const character = { name: 'Kaelen', level: 3, hp: 20, maxHp: 28, ac: 15, gold: 10, stats: { fue: 10, des: 16, con: 12, int: 10, sab: 12, car: 10 } };
 const world = { name: 'Oakhaven', genre: 'Fantasía', initialLocation: 'Taberna', mapNodes: [] };
@@ -97,6 +98,13 @@ describe('prompt and reply', () => {
     expect(parseDMReply(JSON.stringify({ ...base, combate }), character).combat).toEqual(combate);
     expect(parseDMReply(JSON.stringify({ ...base, combate: { enemigos: [] } }), character).combat).toBeNull();
     expect(parseDMReply(JSON.stringify(base), character).combat).toBeNull();
+  });
+});
+
+describe('roll tags', () => {
+  it('are removed when a fight starts', () => {
+    expect(stripRollTags('Avanzas [🎲 Destreza D20: 12 + 2 = 14 vs CD 12]. Un jabalí sale.')).toBe('Avanzas. Un jabalí sale.');
+    expect(stripRollTags('Sin tiradas.')).toBe('Sin tiradas.');
   });
 });
 
