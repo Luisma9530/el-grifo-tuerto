@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { Volume2, VolumeX, Users, Settings, ArrowLeft, Dice5, Compass, User, Sparkles, BookOpen, Download, Check, AlertTriangle } from 'lucide-react';
 import PartyPanel from './game/PartyPanel';
 import StoryStream from './game/StoryStream';
@@ -18,7 +18,9 @@ import {
 } from '../utils/campaignStorage';
 import { tavernAudio } from '../utils/audio';
 import { animateRoll, is3DDiceEnabled } from '../dice3d/controller';
-import { applySceneOutcome } from '../utils/sceneOutcome';
+import { applySceneOutcome, rescueKnockedOut } from '../utils/sceneOutcome';
+import { createEncounter, runEnemyTurns, playerAction, describeEncounterResult } from '../utils/encounter';
+import CombatView from './game/CombatView';
 import { addXp, canLevelUp, describeLevelUp } from '../utils/leveling';
 import LevelUpModal from './game/LevelUpModal';
 import {
@@ -26,6 +28,9 @@ import {
 } from '../utils/campaignMemory';
 import { resolveAttack, describeAttack, attackOptions } from '../utils/combat';
 import { skillModifier, getSkill } from '../utils/characterBuilder';
+
+// The bestiary (and its builder) is only needed when a fight is being prepared
+const EncounterBuilder = lazy(() => import('./game/EncounterBuilder'));
 
 export default function TavernApp({
   activeCampaign = null,
@@ -113,6 +118,11 @@ export default function TavernApp({
   const [events, setEvents] = useState(() => storedCampaign()?.events || []);
   const recordEvent = text => setEvents(prev => addEvent(prev, text));
 
+  // Combat encounter in progress (null outside combat); saved with the campaign
+  const [encounter, setEncounter] = useState(() => storedCampaign()?.encounter || null);
+  const [isEncounterBuilderOpen, setIsEncounterBuilderOpen] = useState(false);
+  const [combatBusy, setCombatBusy] = useState(false);
+
   const [saveStatus, setSaveStatus] = useState('saved'); // 'saved' | 'error' | 'quota'
   const isRollingCheckRef = useRef(false); // a stat check die is on the table
   const [isLevelUpOpen, setIsLevelUpOpen] = useState(false);
@@ -162,6 +172,7 @@ export default function TavernApp({
       setSummary(activeCampaign.summary || '');
       setSummaryCoverage(activeCampaign.summaryCoverage || 0);
       setEvents(activeCampaign.events || []);
+      setEncounter(activeCampaign.encounter || null);
       if (activeCampaign.suggestedActions?.length > 0) {
         setSuggestedActions(activeCampaign.suggestedActions);
       }
@@ -201,14 +212,15 @@ export default function TavernApp({
       suggestedActions,
       summary,
       summaryCoverage,
-      events
+      events,
+      encounter
     });
     if (saved) {
       setSaveStatus('saved');
     } else {
       setSaveStatus(isQuotaError(getLastSaveError()) ? 'quota' : 'error');
     }
-  }, [messages, character, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events]);
+  }, [messages, character, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter]);
 
   const toggleSound = () => {
     const newState = tavernAudio.toggleTavernAmbience();
@@ -331,6 +343,68 @@ export default function TavernApp({
     } finally {
       setIsGenerating(false);
     }
+  };
+
+  // ---------------------------------------------------------------- combat encounters
+  const combatDie = sides => rollDie(sides, { silent: true });
+
+  const handleStartEncounter = (groups) => {
+    setIsEncounterBuilderOpen(false);
+    let next = createEncounter(groups, character, combatDie);
+    let hero = character;
+    // Enemies that won initiative act before the hero
+    ({ encounter: next, character: hero } = runEnemyTurns(next, hero, combatDie));
+    const names = groups.map(g => (g.count > 1 ? `${g.count} × ${g.monster.name}` : g.monster.name)).join(', ');
+    pushSystemMessage(`⚔️ ¡Combate! ${character.name} se enfrenta a: ${names}.`);
+    setEncounter(next);
+    if (hero !== character) setCharacter(hero);
+    setMobileTab('story');
+  };
+
+  const handleCombatAction = async (action) => {
+    if (!encounter || combatBusy) return;
+    const result = playerAction(encounter, character, action, combatDie);
+    if (!result.ok) {
+      setEncounter(prev => ({ ...prev, log: [...prev.log, { round: prev.round, kind: 'info', text: `⚠️ ${result.error}` }] }));
+      return;
+    }
+    setCombatBusy(true);
+    try {
+      for (const roll of result.animations) {
+        await animateRoll(roll);
+      }
+    } finally {
+      setEncounter(result.encounter);
+      setCharacter(result.character);
+      setCombatBusy(false);
+    }
+  };
+
+  // Close a finished fight: chronicle line, XP, recorded fact, rescue if the hero fell
+  const handleFinishEncounter = () => {
+    if (!encounter || encounter.status === 'active') return;
+    const line = describeEncounterResult(encounter, character);
+    pushSystemMessage(line);
+    const defeated = encounter.enemies.filter(e => e.status !== 'active').map(e => e.name);
+    if (encounter.status === 'victory') recordEvent(`Vence en combate a ${defeated.slice(0, 3).join(', ')}${defeated.length > 3 ? '…' : ''}`);
+    if (encounter.status === 'fled') recordEvent('Huye de un combate');
+
+    let hero = character;
+    if (encounter.xp > 0) {
+      const leveledBefore = canLevelUp(hero);
+      hero = addXp(hero, encounter.xp);
+      if (!leveledBefore && canLevelUp(hero)) {
+        pushSystemMessage(`✨ ¡${hero.name} tiene experiencia suficiente para subir a nivel ${(hero.level || 1) + 1}! Pulsa «Subir de nivel» en tu ficha.`);
+      }
+    }
+    if (encounter.status === 'defeat') {
+      const rescue = rescueKnockedOut(hero);
+      hero = { ...hero, hp: rescue.hp, gold: rescue.gold };
+      recordEvent(`${hero.name} cayó en combate y Duncan lo curó`);
+      pushSystemMessage(`💀 ${hero.name} cae inconsciente. Maese Duncan te arrastra junto a la chimenea y te remienda: despiertas con ${rescue.hp} HP${rescue.goldLost > 0 ? ` y ${rescue.goldLost} monedas de oro menos por los cuidados` : ''}.`);
+    }
+    setCharacter(hero);
+    setEncounter(null);
   };
 
   // Weapon attack resolved by the game: Duncan only narrates the result
@@ -716,18 +790,29 @@ export default function TavernApp({
 
         {/* Center Column: Story Stream (Flexible width) */}
         <div className={`flex-1 min-w-0 flex-col h-full overflow-hidden ${mobileTab === 'story' ? 'flex' : 'hidden lg:flex'}`}>
-          <StoryStream
-            messages={messages}
-            isGenerating={isGenerating}
-            suggestedActions={suggestedActions}
-            character={character}
-            world={world}
-            onSendAction={handleSendAction}
-            onOpenGeminiConnect={onOpenGeminiConnect}
-            keysCount={geminiKeys.length}
-            onQuickAttack={handleQuickAttack}
-            onQuickCheck={handleQuickCheck}
-          />
+          {encounter ? (
+            <CombatView
+              encounter={encounter}
+              character={character}
+              onAction={handleCombatAction}
+              onFinish={handleFinishEncounter}
+              busy={combatBusy}
+            />
+          ) : (
+            <StoryStream
+              messages={messages}
+              isGenerating={isGenerating}
+              suggestedActions={suggestedActions}
+              character={character}
+              world={world}
+              onSendAction={handleSendAction}
+              onOpenGeminiConnect={onOpenGeminiConnect}
+              keysCount={geminiKeys.length}
+              onQuickAttack={handleQuickAttack}
+              onQuickCheck={handleQuickCheck}
+              onStartCombat={() => setIsEncounterBuilderOpen(true)}
+            />
+          )}
         </div>
 
         {/* Right Column: World Map & Factions (300px on desktop) */}
@@ -743,6 +828,17 @@ export default function TavernApp({
       </div>
 
       {/* Floating 3D Dice Roller Tray */}
+      {isEncounterBuilderOpen && (
+        <Suspense fallback={null}>
+          <EncounterBuilder
+            character={character}
+            world={world}
+            onStart={handleStartEncounter}
+            onClose={() => setIsEncounterBuilderOpen(false)}
+          />
+        </Suspense>
+      )}
+
       {isLevelUpOpen && canLevelUp(character) && (
         <LevelUpModal
           character={character}
@@ -751,7 +847,8 @@ export default function TavernApp({
         />
       )}
 
-      <DiceRollerTray onSendRollToChat={handleDiceRollToChat} />
+      {/* Hidden during a fight: the combat rolls its own dice (and the button would cover its controls) */}
+      {!encounter && <DiceRollerTray onSendRollToChat={handleDiceRollToChat} />}
 
     </div>
   );
