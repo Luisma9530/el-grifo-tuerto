@@ -8,6 +8,7 @@ import {
   BASE_LANGUAGE, LANGUAGE_CHOICES
 } from '../data/srd';
 import { sanitizeSpells, spellIssues, buildSpellcasting, randomSpellChoices } from './spellcasting';
+import { normalizeEquipment, SHIELD_BONUS } from './equipment';
 
 const ABILITY_IDS = ABILITIES.map(a => a.id);
 
@@ -274,13 +275,21 @@ export function isDraftComplete(draft) {
 // Derived numbers
 // ---------------------------------------------------------------------------
 
-/** Armor Class from the class's starting armor (see CLASSES[].armor). */
-export function computeArmorClass(cls, scores) {
-  const { base, dexCap, shield, unarmored } = cls.armor;
+/**
+ * Armor Class from the class's starting armor, without a shield (see CLASSES[].armor).
+ * The shield only counts while it is in a hand (see equipment.js).
+ */
+export function computeBaseArmorClass(cls, scores) {
+  const { base, dexCap, unarmored } = cls.armor;
   const dex = abilityModifier(scores.des);
   const dexBonus = dexCap == null ? dex : Math.min(dex, dexCap);
   const extra = unarmored ? abilityModifier(scores[unarmored]) : 0;
-  return base + dexBonus + (shield ? 2 : 0) + extra;
+  return base + dexBonus + extra;
+}
+
+/** Armor Class with the class's starting equipment (its shield in hand, if it has one). */
+export function computeArmorClass(cls, scores) {
+  return computeBaseArmorClass(cls, scores) + (cls.armor.shield ? SHIELD_BONUS : 0);
 }
 
 export function computeMaxHp(cls, species, scores) {
@@ -300,6 +309,10 @@ function speciesDisplayName(species, optionId) {
  * Throws if the draft is not complete.
  */
 export function buildCharacter(draft, { id = `hero_${Date.now()}` } = {}) {
+  return normalizeEquipment(buildSheet(draft, id));
+}
+
+function buildSheet(draft, id) {
   if (!isDraftComplete(draft)) throw new Error('El personaje está incompleto.');
 
   const cls = getClass(draft.classId);
@@ -341,6 +354,8 @@ export function buildCharacter(draft, { id = `hero_${Date.now()}` } = {}) {
     hp: maxHp,
     maxHp,
     hitDie: cls.hitDie,
+    // Final AC (with the shield in hand) is set by normalizeEquipment
+    acBase: computeBaseArmorClass(cls, stats),
     ac: computeArmorClass(cls, stats),
     speed: option?.speed ?? species.speed,
     size: species.size,

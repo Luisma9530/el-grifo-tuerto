@@ -2,6 +2,7 @@
 // Handles multiple campaigns in localStorage, auto-saving, JSON export, and JSON import.
 
 import { markCampaignsExported } from './backupReminder';
+import { normalizeEquipment } from './equipment';
 
 const CAMPAIGNS_STORAGE_KEY = 'tavern_saved_campaigns';
 const ACTIVE_CAMPAIGN_ID_KEY = 'tavern_active_campaign_id';
@@ -33,6 +34,15 @@ export function generateCampaignId() {
 }
 
 /**
+ * Bring a campaign saved by an older version up to date. Characters without
+ * hands get a valid set (first weapon and shield) and healthy limbs.
+ */
+export function migrateCampaign(campaign) {
+  if (!campaign || typeof campaign !== 'object' || !campaign.character || typeof campaign.character !== 'object') return campaign;
+  return { ...campaign, character: normalizeEquipment(campaign.character) };
+}
+
+/**
  * Retrieve all saved campaigns, sorted by updatedAt descending
  */
 export function getAllCampaigns() {
@@ -41,7 +51,7 @@ export function getAllCampaigns() {
     if (!raw) return [];
     const list = JSON.parse(raw);
     if (!Array.isArray(list)) return [];
-    return list.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+    return list.map(migrateCampaign).sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
   } catch (error) {
     console.error('Error al recuperar campañas guardadas:', error);
     return [];
@@ -98,7 +108,7 @@ export function saveCampaign(campaignData) {
       `${campaignData.character?.name || 'Héroe'} en ${campaignData.world?.name || 'la Taberna'}`;
 
     const campaignRecord = {
-      ...campaignData,
+      ...migrateCampaign(campaignData),
       id: campaignId,
       title,
       createdAt: campaignData.createdAt || list[existingIndex]?.createdAt || now,
@@ -287,7 +297,7 @@ export function importCampaignsFromJson(jsonText) {
         ? item.messages.filter(m => m && typeof m === 'object' && typeof m.text === 'string')
         : [];
       const importedCampaign = {
-        ...item,
+        ...migrateCampaign(item),
         messages,
         suggestedActions: Array.isArray(item.suggestedActions)
           ? item.suggestedActions.filter(a => typeof a === 'string')
