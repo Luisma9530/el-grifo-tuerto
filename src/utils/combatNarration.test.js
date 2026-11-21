@@ -124,8 +124,11 @@ describe('local engine', () => {
     expect(resolveCombatRequest(combat, 2).length).toBe(1);
   });
 
-  it('closes a fight with loot only on victory', () => {
-    expect(narrateCombatEnd('⚔️ Kaelen gana el combate en 2 rondas.', { character, rng: () => 0.5 }).goldEarned).toBeGreaterThan(0);
+  it('closes a fight telling the loot the game gave, without adding gold', () => {
+    const won = narrateCombatEnd('⚔️ Kaelen gana el combate en 2 rondas.', { character, loot: { coins: 12, items: [{ name: 'Cimitarra' }] } });
+    expect(won.goldEarned).toBe(0);
+    expect(won.text).toContain('12 po y Cimitarra');
+    expect(narrateCombatEnd('⚔️ Kaelen gana el combate en 2 rondas.', { character, loot: { coins: 0, items: [] } }).text).toContain('nada que valga');
     expect(narrateCombatEnd('💀 Kaelen cae derrotado en combate.', { character }).goldEarned).toBe(0);
     expect(narrateCombatEnd('🏃 Kaelen huye del combate.', { character }).goldEarned).toBe(0);
   });

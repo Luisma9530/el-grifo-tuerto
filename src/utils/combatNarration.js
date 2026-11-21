@@ -4,6 +4,8 @@
 // already computed: the AI never decides what happens in combat.
 
 import { requestGemini } from './geminiClient';
+import { describeLoot } from './loot';
+import { SHOP_TYPES } from './shops';
 
 /** Words that mean the hero starts (or provokes) a fight. */
 const AGGRESSIVE = /\b(atac|golpe|pele|lucha|mata|asesin|desenvain|carg|embist|apuñal|dispar|emboscad|combat|enfrent)/;
@@ -36,20 +38,24 @@ export function startLocalFight(bestiary, { character, rng = Math.random }) {
 }
 
 /**
- * Local engine: close a fight the game already resolved. Some loot if the hero
- * won; XP was applied by the encounter itself.
+ * Local engine: close a fight the game already resolved. XP and loot were
+ * applied by the game (see loot.js): this only tells what was found.
  * @param {string} result  describeEncounterResult(...) text
+ * @param {{ loot?: { coins, items } }} options  the loot the game gave
  */
-export function narrateCombatEnd(result, { character, rng = Math.random }) {
+export function narrateCombatEnd(result, { character, loot = null }) {
   const name = character.name || 'Aventurero';
   const won = /gana el combate/.test(result);
   const fled = /huye del combate/.test(result);
-  const goldEarned = won ? 1 + Math.floor(rng() * (4 + 2 * (character.level || 1))) : 0;
+  const goldEarned = 0;
   let text;
   if (won) {
+    const found = describeLoot(loot);
     text = `Se hace el silencio. ${name} recupera el aliento entre los restos de la pelea.
 
-—*Bien hecho. Registra a los caídos antes de que llegue alguien más.* Entre sus cosas encuentras **${goldEarned} monedas de oro**.`;
+—*Bien hecho. Registra a los caídos antes de que llegue alguien más.* ${found === 'nada de valor'
+    ? 'Entre sus cosas no hay nada que valga la pena.'
+    : `Entre sus cosas encuentras **${found}**, que guardas en la mochila.`}`;
   } else if (fled) {
     text = `${name} corre hasta que los gritos quedan atrás y por fin puede apoyarse contra una pared.
 
@@ -65,6 +71,39 @@ export function narrateCombatEnd(result, { character, rng = Math.random }) {
     suggestedActions: won
       ? ['Registrar el lugar con calma', 'Curar mis heridas', 'Seguir adelante']
       : ['Buscar un lugar seguro para descansar', 'Pensar en lo ocurrido', 'Seguir adelante']
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Shops (local engine)
+// ---------------------------------------------------------------------------
+
+/** Words that mean the hero wants to trade. */
+const TRADE = /\b(tienda|mercader|comerciante|compr|vend|tendero|bazar|mercado|herrer|armer|boticari|alquimist|herbolari)/;
+const SMITH = /\b(herrer|armer|forja|armas?\b|armadura|escudo|espada|hacha|arco)/;
+const ALCHEMIST = /\b(boticari|alquimist|herbolari|poci[oó]n|pociones|ant[ií]doto|antitoxina)/;
+
+/**
+ * Local engine: the shop an action asks for ('smith' | 'alchemist' | 'general'),
+ * or null when the hero is not trying to trade. Without a clue of what to buy,
+ * the general store (or the first shop of the place).
+ */
+export function shopForAction(actionLower, shopsHere = []) {
+  const text = actionLower || '';
+  if (!TRADE.test(text)) return null;
+  if (ALCHEMIST.test(text)) return 'alchemist';
+  if (SMITH.test(text)) return 'smith';
+  return shopsHere.length && !shopsHere.includes('general') ? shopsHere[0] : 'general';
+}
+
+/** Local engine: Duncan points the hero to the shop (the game opens it). */
+export function narrateShopOpening(type, { character }) {
+  const shop = SHOP_TYPES[type];
+  return {
+    text: `Duncan señala con el trapo hacia la puerta de ${shop.name.toLowerCase()}.
+
+—*Ahí tienes lo que buscas, ${character.name || 'forastero'}. Paga lo que valga y no regatees demasiado, que el tendero tiene malas pulgas.*`,
+    suggestedActions: ['Volver a la taberna', 'Preguntar por rumores al tendero', 'Seguir mi camino']
   };
 }
 

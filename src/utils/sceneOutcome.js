@@ -1,4 +1,7 @@
 // How a scene's damage, healing and gold change the character sheet.
+// Gold keeps copper precision (0,01 po): shops and loot deal in silver and copper too.
+
+const roundCoins = value => Math.round((Number(value) || 0) * 100) / 100;
 
 /**
  * @param {{hp: number, maxHp: number, gold: number}} character  sheet before the scene
@@ -12,7 +15,7 @@ export function applySceneOutcome(character, { damage = 0, healing = 0, goldChan
   const maxHp = Math.max(1, Number(character.maxHp) || 1);
   const hpBefore = Math.min(maxHp, Math.max(0, Number(character.hp) || 0));
   let hp = Math.min(maxHp, Math.max(0, hpBefore - damage + healing));
-  let gold = Math.max(0, (Number(character.gold) || 0) + goldChange);
+  let gold = roundCoins(Math.max(0, (Number(character.gold) || 0) + goldChange));
 
   let knockedOut = false;
   let goldLost = 0;
@@ -20,7 +23,7 @@ export function applySceneOutcome(character, { damage = 0, healing = 0, goldChan
     knockedOut = true;
     hp = Math.max(1, Math.ceil(maxHp / 2));
     goldLost = Math.floor(gold / 2);
-    gold -= goldLost;
+    gold = roundCoins(gold - goldLost);
   }
 
   return { hp, gold, knockedOut, goldLost };
@@ -34,5 +37,5 @@ export function rescueKnockedOut(character) {
   const maxHp = Math.max(1, Number(character.maxHp) || 1);
   const gold = Math.max(0, Number(character.gold) || 0);
   const goldLost = Math.floor(gold / 2);
-  return { hp: Math.max(1, Math.ceil(maxHp / 2)), gold: gold - goldLost, goldLost };
+  return { hp: Math.max(1, Math.ceil(maxHp / 2)), gold: roundCoins(gold - goldLost), goldLost };
 }

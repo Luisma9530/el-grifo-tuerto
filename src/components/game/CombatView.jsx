@@ -6,6 +6,7 @@ import { formatModifier } from '../../utils/characterBuilder';
 import { activeEnemies, isPlayerTurn } from '../../utils/encounter';
 import { normalizeEquipment, fleeDC } from '../../utils/equipment';
 import EquipmentPanel from './EquipmentPanel';
+import { healingDice } from '../../utils/items';
 
 const LOG_COLORS = {
   info: 'text-stone-400', hit: 'text-emerald-300', crit: 'text-emerald-200 font-semibold', miss: 'text-stone-400',
@@ -31,11 +32,11 @@ function SwapGear({ character, disabled, onSwap }) {
   const changed = draft.hands.main !== current.hands.main || draft.hands.off !== current.hands.off;
   return (
     <div className="space-y-2">
-      <EquipmentPanel character={draft} onChange={setDraft} showLimbs={false} />
+      <EquipmentPanel character={draft} onChange={setDraft} showLimbs={false} lockArmor="La armadura no se cambia en mitad de un combate." />
       <div className="flex items-center gap-2">
         <button disabled={disabled || !changed} onClick={() => onSwap(draft.hands)}
           className="flex-1 px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:bg-stone-800 disabled:text-stone-500 text-stone-950 text-xs font-bold">
-          Cambiar de equipo · gasta el turno
+          Cambiar de equipo · gasta tu acción
         </button>
         {changed && (
           <button onClick={() => setDraft(current)} className="px-3 py-2 rounded-lg border border-stone-700 text-stone-300 text-xs">Deshacer</button>
@@ -109,8 +110,13 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
   }, [encounter.log.length]);
 
   const spells = spellRows(character).filter(s => !s.blocked);
-  const potions = (character.inventory || []).filter(i => i.type === 'consumable' && (i.uses === undefined || i.uses > 0));
+  const potions = (character.inventory || []).filter(i => healingDice(i));
   const act = action => onAction({ ...action, targetUid });
+  // Drinking a potion is a Bonus Action: one per turn, and the turn goes on
+  const bonusUsed = Boolean(encounter.bonusUsed);
+  const actionUsed = Boolean(encounter.actionUsed);
+  // Attack, spell, change gear, dodge or flee: one per turn
+  const canAct = playerTurn && !actionUsed;
 
   return (
     <div className="h-full flex flex-col bg-[radial-gradient(ellipse_at_top,_#1d1018_0%,_#0b0a0e_100%)]">
@@ -203,9 +209,25 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
                 })}
               </div>
               <span className={`text-[11px] font-mono ${playerTurn ? 'text-amber-300' : 'text-stone-500'}`}>
-                {playerTurn ? `Tu turno · objetivo: ${living.find(e => e.uid === targetUid)?.name || '—'}` : 'Los enemigos actúan…'}
+                {playerTurn
+                  ? `Tu turno · objetivo: ${living.find(e => e.uid === targetUid)?.name || '—'}${bonusUsed ? ' · acción adicional usada' : ''}`
+                  : 'Los enemigos actúan…'}
               </span>
             </div>
+
+            {playerTurn && (actionUsed || bonusUsed) && (
+              <div className="mb-2 p-2 rounded-lg bg-sky-950/30 border border-sky-800/50 flex items-center justify-between gap-2">
+                <p className="text-[11px] text-sky-200">
+                  {actionUsed
+                    ? 'Ya has hecho tu acción. Aún puedes beber una poción (acción adicional, pestaña «Otras») o terminar el turno.'
+                    : 'Has bebido una poción (acción adicional). Ahora haz tu acción: atacar, un conjuro, esquivar, huir o cambiar de equipo.'}
+                </p>
+                <button onClick={() => onAction({ type: 'endTurn' })}
+                  className="px-2.5 py-1 rounded-lg bg-sky-700 hover:bg-sky-600 text-stone-50 text-[11px] font-bold shrink-0">
+                  Terminar turno
+                </button>
+              </div>
+            )}
 
             <div className="max-h-64 overflow-y-auto">
               {tab === 'attacks' && (
@@ -217,10 +239,10 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
                     </label>
                   )}
                   {attackOptions(character).length === 0 && (
-                    <p className="sm:col-span-2 text-[11px] text-stone-500">No tienes con qué atacar: cambia de equipo en la pestaña «Equipo» (gasta el turno).</p>
+                    <p className="sm:col-span-2 text-[11px] text-stone-500">No tienes con qué atacar: cambia de equipo en la pestaña «Equipo» (gasta tu acción).</p>
                   )}
                   {attackOptions(character).map(option => (
-                    <button key={option.id} disabled={!playerTurn || !targetUid}
+                    <button key={option.id} disabled={!canAct || !targetUid}
                       onClick={() => act({ type: 'attack', optionId: option.id, raging })}
                       className="text-left p-2 rounded-lg bg-[#1b1420] border border-stone-800 hover:border-red-600/60 disabled:opacity-40">
                       <span className="block text-xs font-semibold text-stone-100">{option.itemName}</span>
@@ -233,7 +255,7 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
               {tab === 'spells' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                   {spells.map(spell => (
-                    <button key={spell.id} disabled={!playerTurn || (['attack', 'save', 'auto'].includes(spell.kind) && !targetUid)}
+                    <button key={spell.id} disabled={!canAct || (['attack', 'save', 'auto'].includes(spell.kind) && !targetUid)}
                       onClick={() => act({ type: 'spell', spellId: spell.id })}
                       className="text-left p-2 rounded-lg bg-[#17121f] border border-stone-800 hover:border-purple-500/60 disabled:opacity-40">
                       <span className="block text-xs font-semibold text-purple-100">{spell.name} <span className="text-stone-500 font-normal">· {spell.level === 0 ? 'truco' : `nivel ${spell.level}`}</span></span>
@@ -247,26 +269,34 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
                 <SwapGear
                   key={JSON.stringify([normalizeEquipment(character).hands, character.limbs])}
                   character={character}
-                  disabled={!playerTurn}
+                  disabled={!canAct}
                   onSwap={hands => act({ type: 'equip', hands })}
                 />
               )}
 
               {tab === 'other' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                  {potions.length > 0 && (
+                    <p className="sm:col-span-2 text-[10px] text-sky-300/80">
+                      {bonusUsed
+                        ? 'Ya has usado tu acción adicional este turno: podrás beber otra poción en tu siguiente turno.'
+                        : 'Beber una poción es una acción adicional: no gasta tu acción y puedes beberla antes o después de ella (una por turno).'}
+                    </p>
+                  )}
                   {potions.map(item => (
-                    <button key={item.id} disabled={!playerTurn} onClick={() => act({ type: 'potion', itemId: item.id })}
+                    <button key={item.id} disabled={!playerTurn || bonusUsed} onClick={() => act({ type: 'potion', itemId: item.id })}
+                      title={bonusUsed ? 'Ya has usado tu acción adicional este turno' : 'Acción adicional: no gasta tu acción'}
                       className="text-left p-2 rounded-lg bg-[#121a1a] border border-stone-800 hover:border-sky-600/60 disabled:opacity-40 flex items-center gap-2">
                       <FlaskConical className="w-4 h-4 text-sky-300" />
-                      <span className="text-xs text-stone-100">{item.name}{item.uses !== undefined ? ` (${item.uses})` : ''}</span>
+                      <span className="text-xs text-stone-100">{item.name}{item.uses !== undefined ? ` (${item.uses})` : ''} <span className="text-stone-500">· {healingDice(item)} PG · acción adicional</span></span>
                     </button>
                   ))}
-                  <button disabled={!playerTurn} onClick={() => act({ type: 'dodge' })}
+                  <button disabled={!canAct} onClick={() => act({ type: 'dodge' })}
                     className="text-left p-2 rounded-lg bg-[#16161c] border border-stone-800 hover:border-stone-500 disabled:opacity-40 flex items-center gap-2">
                     <Shield className="w-4 h-4 text-stone-300" />
                     <span className="text-xs text-stone-100">Esquivar <span className="text-stone-500">· desventaja a sus ataques</span></span>
                   </button>
-                  <button disabled={!playerTurn || fleeDC(character) == null} onClick={() => act({ type: 'flee' })}
+                  <button disabled={!canAct || fleeDC(character) == null} onClick={() => act({ type: 'flee' })}
                     className="text-left p-2 rounded-lg bg-[#1c1614] border border-stone-800 hover:border-amber-600/60 disabled:opacity-40 flex items-center gap-2">
                     <Footprints className="w-4 h-4 text-amber-300" />
                     <span className="text-xs text-stone-100">Huir <span className="text-stone-500">· {fleeDC(character) == null ? 'imposible con las dos piernas heridas' : `Destreza CD ${fleeDC(character)}`}</span></span>

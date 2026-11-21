@@ -138,6 +138,77 @@ describe('the player turn', () => {
   });
 });
 
+describe('drinking a potion is a Bonus Action', () => {
+  const potions = (uses = 2) => [{ id: 'p', name: 'Poción de curación', type: 'consumable', uses }];
+  const withPotions = (uses = 2) => ({ ...fighter(), hp: 3, maxHp: 20, inventory: [...fighter().inventory, ...potions(uses)] });
+  const swordOf = hero => attackOptions(hero).find(o => o.weapon?.id === 'greatsword');
+  const tough = { ...goblin, hp: 60 };
+
+  it('drinking first keeps the turn: the hero can still attack', () => {
+    const hero = withPotions();
+    const enc = createEncounter([{ monster: tough }], hero, dice(5, 15));
+    const drink = playerAction(enc, hero, { type: 'potion', itemId: 'p' }, dice(4, 4));
+    expect(drink.ok).toBe(true);
+    expect(isPlayerTurn(drink.encounter)).toBe(true);
+    expect(drink.encounter.round).toBe(1);
+    expect(drink.encounter.bonusUsed).toBe(true);
+    expect(drink.encounter.log.at(-1).text).toMatch(/como acción adicional.*Aún puede hacer su acción/);
+
+    // A second potion in the same turn is refused
+    expect(playerAction(drink.encounter, drink.character, { type: 'potion', itemId: 'p' }, dice(4))).toMatchObject({ ok: false, error: expect.stringMatching(/acción adicional/) });
+
+    // The attack ends the turn (nothing else to do): the goblin answers and a new round starts
+    const attack = playerAction(drink.encounter, drink.character, { type: 'attack', optionId: swordOf(hero).id, targetUid: 'goblin-1' }, dice(15, 3, 3, 3));
+    expect(attack.encounter.round).toBe(2);
+    expect(isPlayerTurn(attack.encounter)).toBe(true);
+    expect(attack.encounter.bonusUsed).toBe(false);
+    expect(attack.encounter.actionUsed).toBe(false);
+    // Next turn the potion can be drunk again
+    expect(playerAction(attack.encounter, attack.character, { type: 'potion', itemId: 'p' }, dice(4)).ok).toBe(true);
+  });
+
+  it('acting first keeps the turn open while there is a potion to drink, then drinking ends it', () => {
+    const hero = withPotions();
+    const enc = createEncounter([{ monster: tough }], hero, dice(5, 15));
+    const attack = playerAction(enc, hero, { type: 'attack', optionId: swordOf(hero).id, targetUid: 'goblin-1' }, dice(15, 3, 3, 3));
+    expect(isPlayerTurn(attack.encounter)).toBe(true);
+    expect(attack.encounter.actionUsed).toBe(true);
+    // No second action
+    expect(playerAction(attack.encounter, attack.character, { type: 'dodge' }, dice(3)).ok).toBe(false);
+    const drink = playerAction(attack.encounter, attack.character, { type: 'potion', itemId: 'p' }, dice(4, 4, 3));
+    expect(drink.encounter.round).toBe(2);
+    expect(drink.encounter.log.some(l => /como acción adicional/.test(l.text))).toBe(true);
+    expect(drink.encounter.log.at(-1).kind).toBe('enemyMiss');
+  });
+
+  it('the hero can end the turn without drinking', () => {
+    const hero = withPotions();
+    const enc = createEncounter([{ monster: tough }], hero, dice(5, 15));
+    const attack = playerAction(enc, hero, { type: 'attack', optionId: swordOf(hero).id, targetUid: 'goblin-1' }, dice(15, 3, 3, 3));
+    const end = playerAction(attack.encounter, attack.character, { type: 'endTurn' }, dice(3));
+    expect(end.encounter.round).toBe(2);
+    expect(end.character.inventory.find(i => i.id === 'p').uses).toBe(2);
+  });
+
+  it('without potions the action ends the turn by itself, as before', () => {
+    const hero = fighter();
+    const enc = createEncounter([{ monster: tough }], hero, dice(5, 15));
+    const attack = playerAction(enc, hero, { type: 'attack', optionId: swordOf(hero).id, targetUid: 'goblin-1' }, dice(15, 3, 3, 3, 3));
+    expect(attack.encounter.round).toBe(2);
+  });
+
+  it('a dodge still protects after drinking in the same turn, and ends at the next turn', () => {
+    const hero = withPotions();
+    const enc = createEncounter([{ monster: tough }], hero, dice(5, 15));
+    const dodge = playerAction(enc, hero, { type: 'dodge' }, dice(3));
+    expect(dodge.encounter.dodging).toBe(true);
+    // The goblin attacks with Disadvantage once the turn ends: two d20, the lower one (19, 2 -> 2) misses
+    const drink = playerAction(dodge.encounter, dodge.character, { type: 'potion', itemId: 'p' }, dice(4, 4, 19, 2));
+    expect(drink.encounter.log.at(-1).kind).toBe('enemyMiss');
+    expect(drink.encounter.log.at(-1).text).toMatch(/2\+4 = 6/);
+  });
+});
+
 describe('morale', () => {
   it('a badly hurt humanoid may surrender, a beast flees, the undead never', () => {
     const hero = fighter();
@@ -256,7 +327,7 @@ describe('active enemies', () => {
   });
 });
 
-describe('changing weapons in a fight (house rule: it takes the turn)', () => {
+describe('changing weapons in a fight (house rule: it takes the action)', () => {
   const idOf = (character, name) => character.inventory.find(i => i.name.includes(name)).id;
 
   it('swaps what is in hand, logs it and lets the enemies act', () => {
@@ -267,7 +338,7 @@ describe('changing weapons in a fight (house rule: it takes the turn)', () => {
     const res = playerAction(enc, hero, { type: 'equip', hands: { main: flail, off: null } }, dice(3));
     expect(res.ok).toBe(true);
     expect(res.character.hands).toEqual({ main: flail, off: null });
-    expect(res.encounter.log.some(l => /cambia de equipo.*Mangual.*Gasta su turno/.test(l.text))).toBe(true);
+    expect(res.encounter.log.some(l => /cambia de equipo.*Mangual.*Gasta su acción/.test(l.text))).toBe(true);
     expect(res.encounter.log.at(-1).kind).toBe('enemyMiss'); // the turn went by
     expect(res.encounter.round).toBe(2);
     expect(res.animations).toEqual([]);

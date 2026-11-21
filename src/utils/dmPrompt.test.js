@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildDMPrompt, parseDMReply, dmResponseSchema, DM_RESPONSE_SCHEMA, cleanLimbChanges } from './dmPrompt';
+import { buildDMPrompt, parseDMReply, dmResponseSchema, DM_RESPONSE_SCHEMA, cleanLimbChanges, cleanShopRequest } from './dmPrompt';
 
 const character = {
   name: 'Kaelen', race: 'Elfo Silvano', class: 'Pícaro (Nivel 3)', hp: 12, maxHp: 28, ac: 15, gold: 10,
@@ -93,6 +93,7 @@ describe('parseDMReply', () => {
       usedRoll: true,
       summary: null,
       combat: null,
+      shop: null,
       limbChanges: []
     });
     expect(parseDMReply(reply({ experiencia: 60 }), character).xpEarned).toBe(60);
@@ -212,5 +213,47 @@ describe('limbs in the structured reply', () => {
     });
     expect(parseDMReply(raw, character).limbChanges).toEqual([{ limb: 'rightArm', status: 'disabled' }]);
     expect(parseDMReply('Texto sin JSON', character).limbChanges).toEqual([]);
+  });
+});
+
+describe('shops in Duncan\'s structured reply', () => {
+  it('the schema only offers "tienda" when a shop may open, with the three types', () => {
+    expect(dmResponseSchema(false, false, false).properties.tienda).toBeUndefined();
+    const schema = dmResponseSchema(false, false, true);
+    expect(schema.properties.tienda.properties.tipo.enum).toEqual(['herrero', 'alquimista', 'general']);
+    expect(schema.properties.tienda.nullable).toBe(true);
+    expect(schema.required).not.toContain('tienda');
+    // The base schema is untouched
+    expect(DM_RESPONSE_SCHEMA.properties.tienda).toBeUndefined();
+  });
+
+  it('the parser accepts only known shop types', () => {
+    const reply = tienda => JSON.stringify({ narracion: 'Entras en la forja.', usaTirada: false, danio: 0, curacion: 0, oro: -20, experiencia: 0, opciones: [], tienda });
+    expect(parseDMReply(reply({ tipo: 'herrero' }), character).shop).toBe('smith');
+    expect(parseDMReply(reply({ tipo: ' Alquimista ' }), character).shop).toBe('alchemist');
+    expect(parseDMReply(reply('general'), character).shop).toBe('general');
+    expect(parseDMReply(reply({ tipo: 'joyero' }), character).shop).toBeNull();
+    expect(parseDMReply(reply(null), character).shop).toBeNull();
+    expect(parseDMReply(reply({ tipo: 7 }), character).shop).toBeNull();
+    expect(cleanShopRequest(undefined)).toBeNull();
+  });
+
+  it('the prompt explains the game sets prices and lists the shops of the place', () => {
+    const prompt = buildDMPrompt({ playerAction: 'Busco una armadura', character, world, history: [], d20: 5, allowShop: true, shopsHere: 'En Molino hay: Herrería y armería ("herrero").' });
+    expect(prompt).toContain('"tienda"');
+    expect(prompt).toContain('no cobras ni pagas nada');
+    expect(prompt).toContain('Herrería y armería ("herrero")');
+    expect(buildDMPrompt({ playerAction: 'x', character, world, history: [], d20: 5 })).not.toContain('"tienda"');
+  });
+
+  it('after a fight Duncan narrates the loot the game gave and moves no gold', () => {
+    const prompt = buildDMPrompt({ playerAction: 'Narra', character, world, history: [], d20: 5, combatResult: '⚔️ Kaelen gana el combate. Botín (ya en la mochila): 3 po y Cimitarra.' });
+    expect(prompt).toContain('Botín (ya en la mochila): 3 po y Cimitarra');
+    expect(prompt).toContain('"oro": 0');
+    expect(prompt).toContain('sin añadir otros objetos ni monedas');
+  });
+
+  it('the hero\'s money is shown with silver and copper', () => {
+    expect(buildDMPrompt({ playerAction: 'x', character: { ...character, gold: 3.5 }, world, history: [], d20: 5 })).toContain('Dinero: 3 po 5 pp');
   });
 });

@@ -17,10 +17,10 @@ export const PRESET_WORLDS = [
       { name: 'Contrabandistas del Río', status: 'Amistoso', rep: 75, color: 'text-amber-400' }
     ],
     mapNodes: [
-      { id: 'tavern', name: 'Taberna del Jabalí', status: 'current', x: 25, y: 50, desc: 'Fuego encendido, olor a estofado de ciervo y cerveza rancia.' },
-      { id: 'mill', name: 'Viejo Molino Quebrado', status: 'discovered', x: 45, y: 30, desc: 'Ruedas atascadas con huesos antiguos. Se oyen murmullos.' },
-      { id: 'dock', name: 'Embarcadero de Niebla', status: 'discovered', x: 55, y: 70, desc: 'Balsas cubiertas de algas y farolillos verdes flotando.' },
-      { id: 'ruins', name: 'Túmulo de Obsidiana', status: 'locked', x: 80, y: 45, desc: 'Runas élficas profanadas por garras no humanas.' }
+      { id: 'tavern', name: 'Taberna del Jabalí', settlement: 'tavern', status: 'current', x: 25, y: 50, desc: 'Fuego encendido, olor a estofado de ciervo y cerveza rancia.' },
+      { id: 'mill', name: 'Viejo Molino Quebrado', settlement: null, status: 'discovered', x: 45, y: 30, desc: 'Ruedas atascadas con huesos antiguos. Se oyen murmullos.' },
+      { id: 'dock', name: 'Embarcadero de Niebla', settlement: 'port', status: 'discovered', x: 55, y: 70, desc: 'Balsas cubiertas de algas y farolillos verdes flotando.' },
+      { id: 'ruins', name: 'Túmulo de Obsidiana', settlement: null, status: 'locked', x: 80, y: 45, desc: 'Runas élficas profanadas por garras no humanas.' }
     ],
     initialStory: `El viento aúlla contra los tablones de roble de la taberna. Fuera, la niebla del bosque de Oakhaven es tan espesa que no se ven ni las botas.
 
@@ -47,10 +47,10 @@ Duncan se apoya con ambos codos y te guiña un ojo:
       { name: 'Parias de las Minas', status: 'Amistoso', rep: 80, color: 'text-emerald-400' }
     ],
     mapNodes: [
-      { id: 'tavern', name: 'El Crisol Agrietado', status: 'current', x: 20, y: 40, desc: 'Calor sofocante, taburetes de hierro forjado y jarras de metal.' },
-      { id: 'gates', name: 'Puertas del Martillo', status: 'discovered', x: 45, y: 25, desc: 'Guardias con armaduras al rojo vivo pidiendo salvoconducto.' },
-      { id: 'mines', name: 'Boca de la Fosa 4', status: 'discovered', x: 60, y: 65, desc: 'Cables chirriantes bajando jaulas al abismo.' },
-      { id: 'sanctum', name: 'Templo de Brasas', status: 'locked', x: 85, y: 35, desc: 'Ecos de cánticos guturales y sacrificios de metal líquido.' }
+      { id: 'tavern', name: 'El Crisol Agrietado', settlement: 'tavern', status: 'current', x: 20, y: 40, desc: 'Calor sofocante, taburetes de hierro forjado y jarras de metal.' },
+      { id: 'gates', name: 'Puertas del Martillo', settlement: 'city', status: 'discovered', x: 45, y: 25, desc: 'Guardias con armaduras al rojo vivo pidiendo salvoconducto.' },
+      { id: 'mines', name: 'Boca de la Fosa 4', settlement: null, status: 'discovered', x: 60, y: 65, desc: 'Cables chirriantes bajando jaulas al abismo.' },
+      { id: 'sanctum', name: 'Templo de Brasas', settlement: null, status: 'locked', x: 85, y: 35, desc: 'Ecos de cánticos guturales y sacrificios de metal líquido.' }
     ],
     initialStory: `El aire sabe a azufre y metal chamuscado. En "El Crisol Agrietado", los enanos y soldados beben cerveza espesa con copos de ceniza flotando en la espuma.
 
@@ -77,10 +77,10 @@ Un grupo de tres mercenarios con marcas de quemaduras en los brazos gira sus cab
       { name: 'Sindicato Neón', status: 'Neutral', rep: 45, color: 'text-amber-400' }
     ],
     mapNodes: [
-      { id: 'tavern', name: 'The Griffin\'s Synth & Brew', status: 'current', x: 25, y: 55, desc: 'Tubos de neón parpadeantes, vapor y música sintetizada Lo-Fi.' },
-      { id: 'market', name: 'Bazar del Cromo Negro', status: 'discovered', x: 45, y: 75, desc: 'Puestos de prótesis de segunda mano y chips de memoria crackeados.' },
-      { id: 'subway', name: 'Línea Maglev Abandonada', status: 'discovered', x: 65, y: 35, desc: 'Graffitis holográficos y pandillas con katanas de plasma.' },
-      { id: 'tower', name: 'Ascensor a Babel Prime', status: 'locked', x: 85, y: 60, desc: 'Torretas automáticas blindadas protegiendo los pisos ejecutivos.' }
+      { id: 'tavern', name: 'The Griffin\'s Synth & Brew', settlement: 'tavern', status: 'current', x: 25, y: 55, desc: 'Tubos de neón parpadeantes, vapor y música sintetizada Lo-Fi.' },
+      { id: 'market', name: 'Bazar del Cromo Negro', settlement: 'city', status: 'discovered', x: 45, y: 75, desc: 'Puestos de prótesis de segunda mano y chips de memoria crackeados.' },
+      { id: 'subway', name: 'Línea Maglev Abandonada', settlement: null, status: 'discovered', x: 65, y: 35, desc: 'Graffitis holográficos y pandillas con katanas de plasma.' },
+      { id: 'tower', name: 'Ascensor a Babel Prime', settlement: null, status: 'locked', x: 85, y: 60, desc: 'Torretas automáticas blindadas protegiendo los pisos ejecutivos.' }
     ],
     initialStory: `Lluvia ácida resbala por el letrero de neón rosa parpadeante: *"GRIFFIN'S - SINCE 2041"*. El humo sintético huele a ozono y especias baratas de ramen.
 
@@ -107,10 +107,10 @@ Duncan te sirve un vaso humeante que brilla en verde eléctrico:
       { name: 'Sociedad de Cartógrafos', status: 'Amistoso', rep: 65, color: 'text-amber-400' }
     ],
     mapNodes: [
-      { id: 'tavern', name: 'La Quilla del Holandés', status: 'current', x: 30, y: 50, desc: 'Maderas crujientes con caracolas y olor a salitre y ron negro.' },
-      { id: 'lighthouse', name: 'El Faro Ciego', status: 'discovered', x: 50, y: 25, desc: 'La linterna rota aún emite un zumbido verdoso a medianoche.' },
-      { id: 'graveyard', name: 'Cementerio de Quillas', status: 'discovered', x: 70, y: 70, desc: 'Mástiles partidos saliendo del agua como costillas de ballena.' },
-      { id: 'trench', name: 'La Fosa de Coral Negro', status: 'locked', x: 88, y: 40, desc: 'Burbujas heladas que traen susurros en una lengua antediluviana.' }
+      { id: 'tavern', name: 'La Quilla del Holandés', settlement: 'tavern', status: 'current', x: 30, y: 50, desc: 'Maderas crujientes con caracolas y olor a salitre y ron negro.' },
+      { id: 'lighthouse', name: 'El Faro Ciego', settlement: null, status: 'discovered', x: 50, y: 25, desc: 'La linterna rota aún emite un zumbido verdoso a medianoche.' },
+      { id: 'graveyard', name: 'Cementerio de Quillas', settlement: null, status: 'discovered', x: 70, y: 70, desc: 'Mástiles partidos saliendo del agua como costillas de ballena.' },
+      { id: 'trench', name: 'La Fosa de Coral Negro', settlement: null, status: 'locked', x: 88, y: 40, desc: 'Burbujas heladas que traen susurros en una lengua antediluviana.' }
     ],
     initialStory: `El mar rompe contra el casco con una violencia sorda. Cada ola hace temblar los candiles de aceite de ballena que cuelgan de las vigas encorvadas de "La Quilla".
 

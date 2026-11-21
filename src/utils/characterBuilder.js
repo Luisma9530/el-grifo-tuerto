@@ -8,7 +8,7 @@ import {
   BASE_LANGUAGE, LANGUAGE_CHOICES
 } from '../data/srd';
 import { sanitizeSpells, spellIssues, buildSpellcasting, randomSpellChoices } from './spellcasting';
-import { normalizeEquipment, SHIELD_BONUS } from './equipment';
+import { normalizeEquipment, isBodyArmor, SHIELD_BONUS } from './equipment';
 
 const ABILITY_IDS = ABILITIES.map(a => a.id);
 
@@ -277,7 +277,9 @@ export function isDraftComplete(draft) {
 
 /**
  * Armor Class from the class's starting armor, without a shield (see CLASSES[].armor).
- * The shield only counts while it is in a hand (see equipment.js).
+ * Used by the creation wizard's preview; in play the AC is computed from the
+ * worn armor, the shield in hand and Unarmored Defense (see equipment.js),
+ * which gives the same number for the starting equipment.
  */
 export function computeBaseArmorClass(cls, scores) {
   const { base, dexCap, unarmored } = cls.armor;
@@ -354,9 +356,11 @@ function buildSheet(draft, id) {
     hp: maxHp,
     maxHp,
     hitDie: cls.hitDie,
-    // Final AC (with the shield in hand) is set by normalizeEquipment
+    // Final AC (worn armor, shield in hand, Unarmored Defense) is set by normalizeEquipment
     acBase: computeBaseArmorClass(cls, stats),
     ac: computeArmorClass(cls, stats),
+    // The class's starting armor is worn
+    wornArmor: inventory.find(isBodyArmor)?.id ?? null,
     speed: option?.speed ?? species.speed,
     size: species.size,
     darkvision: option?.darkvision ?? species.darkvision,

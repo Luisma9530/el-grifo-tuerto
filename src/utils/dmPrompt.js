@@ -5,6 +5,8 @@ import { SKILLS, ABILITIES } from '../data/srd';
 import { spellRows, slotTable } from './spellcasting';
 import { cleanSummary } from './campaignMemory';
 import { describeEquipmentForPrompt, LIMB_IDS } from './equipment';
+import { formatCoins } from './items';
+import { SHOP_REPLY_IDS } from './shops';
 
 /** Limb ids and states in the reply (Spanish, as the model writes them) -> sheet values. */
 export const LIMB_REPLY_IDS = { brazoDerecho: 'rightArm', brazoIzquierdo: 'leftArm', piernaDerecha: 'rightLeg', piernaIzquierda: 'leftLeg' };
@@ -74,12 +76,23 @@ const COMBAT_SCHEMA = {
   required: ['enemigos']
 };
 
+const SHOP_SCHEMA = {
+  type: 'OBJECT',
+  nullable: true,
+  description: 'Solo si el héroe entra en una tienda o trata con un mercader para comprar o vender: el juego abre la tienda con sus precios.',
+  properties: {
+    tipo: { type: 'STRING', enum: Object.keys(SHOP_REPLY_IDS), description: 'herrero: armas y armaduras; alquimista: pociones; general: equipo de aventurero.' }
+  },
+  required: ['tipo']
+};
+
 /**
  * Response schema; with `requestSummary` it also asks for the updated campaign
- * summary, with `allowCombat` it accepts an optional fight to start.
+ * summary, with `allowCombat` it accepts an optional fight to start, with
+ * `allowShop` an optional shop to open.
  */
-export function dmResponseSchema(requestSummary = false, allowCombat = false) {
-  if (!requestSummary && !allowCombat) return DM_RESPONSE_SCHEMA;
+export function dmResponseSchema(requestSummary = false, allowCombat = false, allowShop = false) {
+  if (!requestSummary && !allowCombat && !allowShop) return DM_RESPONSE_SCHEMA;
   const properties = { ...DM_RESPONSE_SCHEMA.properties };
   const required = [...DM_RESPONSE_SCHEMA.required];
   if (requestSummary) {
@@ -87,6 +100,7 @@ export function dmResponseSchema(requestSummary = false, allowCombat = false) {
     required.push('resumen');
   }
   if (allowCombat) properties.combate = COMBAT_SCHEMA;
+  if (allowShop) properties.tienda = SHOP_SCHEMA;
   return { ...DM_RESPONSE_SCHEMA, properties, required };
 }
 
@@ -172,12 +186,15 @@ function formatHistory(history, characterName) {
  * @param {string[]} [params.events]      facts recorded by the game (travel, level ups...)
  * @param {boolean} [params.requestSummary]  ask the model to rewrite the summary in this reply
  * @param {object} [params.bestiary]     { creatures, budget } the model may start a fight with (see encounterCandidates)
- * @param {string} [params.combatResult] summary of a fight the game just finished: narrate its outcome
+ * @param {string} [params.combatResult] summary of a fight the game just finished (and its loot): narrate its outcome
+ * @param {boolean} [params.allowShop]   the model may open a shop with "tienda"
+ * @param {string} [params.shopsHere]    the shops at the hero's location (see describeShopsForPrompt)
  */
 export function buildDMPrompt({
   playerAction, character, world, history, d20, playerRoll = null, structured = true,
   spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
-  summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null
+  summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null,
+  allowShop = false, shopsHere = ''
 }) {
   const name = character.name || 'Aventurero';
   const location = world.mapNodes?.find(n => n.status === 'current')?.name || world.initialLocation;
@@ -190,7 +207,7 @@ export function buildDMPrompt({
 
   const diceRules = combatResult
     ? `El combate ya ha terminado y lo ha resuelto el juego con sus propias tiradas. Resultado: ${combatResult}
-Narra el desenlace (cómo queda el lugar, qué hacen los que se rindieron o huyeron) sin cambiar nada de lo ocurrido ni tirar dados. "usaTirada": false, "danio": 0, "curacion": 0 y "experiencia": 0 (ya está aplicada). En "oro" pon el botín que encuentra si registra a los caídos (razonable para esas criaturas, o 0).`
+Narra el desenlace (cómo queda el lugar, qué hacen los que se rindieron o huyeron) sin cambiar nada de lo ocurrido ni tirar dados. El botín del resultado lo ha calculado el juego y ya está en la mochila: descríbelo cuando registre a los caídos, sin añadir otros objetos ni monedas. "usaTirada": false, "danio": 0, "curacion": 0, "oro": 0 y "experiencia": 0 (ya está aplicado todo).`
     : attackDone
     ? 'El juego YA ha resuelto este ataque con sus propias tiradas, que aparecen en la acción del jugador: narra exactamente esos impactos, fallos y el daño que sufre el enemigo, sin cambiar ningún número ni tirar dados ("usaTirada": false). Tú solo decides cómo reacciona el enemigo: si está muy herido, si huye o se rinde, o si contraataca (en ese caso pon en "danio" lo que pierde el personaje).'
     : noRoll
@@ -218,7 +235,8 @@ Narra el desenlace (cómo queda el lugar, qué hacen los que se rindieron o huye
 - "extremidades": casi siempre una lista vacía. Solo si la historia lo hace inevitable (una trampa que le aplasta el brazo, una maldición, una amputación, un sanador o un milagro que lo cura), indica el cambio: [{"extremidad": "brazoDerecho" | "brazoIzquierdo" | "piernaDerecha" | "piernaIzquierda", "estado": "inutilizada" | "perdida" | "sana"}]. Debe ser excepcional y coincidir con la narración; el juego aplicará el efecto (lo que llevase en esa mano cae a la mochila).${requestSummary ? `
 - "resumen": reescribe el resumen de la campaña juntando el resumen anterior y la crónica reciente (máximo 800 caracteres, frases cortas): hechos clave, personajes no jugadores y su relación con ${name}, misiones abiertas, pistas, deudas y objetos importantes. Es tu memoria para el resto de la partida.` : ''}
 ${bestiary ? `
-- "combate": SOLO si en esta escena empieza una pelea (alguien ataca al héroe, o el héroe ataca a alguien). En ese caso NO resuelvas la pelea: narra solo cómo aparecen los enemigos (sin golpes, aciertos, daño ni tiradas), pon "usaTirada": false y "danio": 0, y devuelve los enemigos; el juego llevará el combate con sus propias tiradas. Usa únicamente estas criaturas: ${describeBestiary(bestiary)}. Para ${name} solo, un combate normal suma unos ${bestiary.budget.moderate} PX (fácil ${bestiary.budget.low}, duro ${bestiary.budget.high}). Puedes dar a un único enemigo un "nombre" propio y un "rasgo" breve, y marcarlo "elite" si es un jefe. Si no empieza ninguna pelea, omite "combate".` : ''}
+- "combate": SOLO si en esta escena empieza una pelea (alguien ataca al héroe, o el héroe ataca a alguien). En ese caso NO resuelvas la pelea: narra solo cómo aparecen los enemigos (sin golpes, aciertos, daño ni tiradas), pon "usaTirada": false y "danio": 0, y devuelve los enemigos; el juego llevará el combate con sus propias tiradas. Usa únicamente estas criaturas: ${describeBestiary(bestiary)}. Para ${name} solo, un combate normal suma unos ${bestiary.budget.moderate} PX (fácil ${bestiary.budget.low}, duro ${bestiary.budget.high}). Puedes dar a un único enemigo un "nombre" propio y un "rasgo" breve, y marcarlo "elite" si es un jefe. Si no empieza ninguna pelea, omite "combate".` : ''}${allowShop ? `
+- "tienda": SOLO si ${name} entra en una tienda, va al mercado o habla con un mercader para comprar o vender: {"tipo": "herrero" (armas y armaduras) | "alquimista" (pociones) | "general" (equipo de aventurero)}. El juego abrirá la tienda con sus propios precios y su género: tú no cobras ni pagas nada ("oro": 0), no inventas precios ni das objetos; narra solo la llegada y al tendero. ${shopsHere || 'Aquí no hay tiendas fijas: sería un buhonero o un puesto improvisado.'} Si el jugador intenta comprar o vender equipo, usa "tienda" en vez de "oro". Si no, omite "tienda".` : ''}
 Lo que cuentes en la narración debe coincidir con "danio", "curacion" y "oro".`
     : `Al final de tu respuesta, en una línea separada que empiece con "OPCIONES:", proporciona 3 o 4 sugerencias breves de acción separadas por una pleca "|". Por ejemplo: OPCIONES: Sacar el arma | Negociar con el tabernero | Escabullirse por la puerta trasera.
 Mantén la respuesta en español, entre 1 y 3 párrafos breves.`;
@@ -227,7 +245,7 @@ Mantén la respuesta en español, entre 1 y 3 párrafos breves.`;
 Estás dirigiendo una partida de rol estilo D&D 5e en el mundo: "${world.name}" (${world.genre || 'fantasía'}).${location ? `\nUbicación actual: ${location}.` : ''}
 
 Personaje del jugador: ${name}, ${character.race || ''} ${character.class || ''}.
-- Puntos de golpe: ${character.hp}/${character.maxHp}. Armadura (CA): ${character.ac ?? '?'}. Oro: ${character.gold} monedas.
+- Puntos de golpe: ${character.hp}/${character.maxHp}. Armadura (CA): ${character.ac ?? '?'}. Dinero: ${formatCoins(character.gold)} (po = oro, pp = plata, pc = cobre).
 - Atributos: ${describeStats(character.stats)}.${inventory ? `\n- Inventario: ${inventory}.` : ''}
 - ${describeEquipmentForPrompt(character)}${describeBuild(character)}
 
@@ -281,6 +299,16 @@ export function cleanLimbChanges(list) {
   return [...byLimb].map(([limb, status]) => ({ limb, status }));
 }
 
+/**
+ * Validate the shop Duncan opens: "herrero" | "alquimista" | "general" (or an
+ * object with that "tipo") -> 'smith' | 'alchemist' | 'general'; null otherwise.
+ */
+export function cleanShopRequest(value) {
+  const raw = value && typeof value === 'object' ? value.tipo : value;
+  if (typeof raw !== 'string') return null;
+  return SHOP_REPLY_IDS[raw.trim().toLowerCase()] || null;
+}
+
 function cleanActions(list) {
   const actions = (Array.isArray(list) ? list : [])
     .filter(a => typeof a === 'string')
@@ -317,6 +345,7 @@ export function parseDMReply(raw, character = {}) {
         usedRoll: data.usaTirada === true,
         summary: cleanSummary(data.resumen),
         combat: data.combate && Array.isArray(data.combate.enemigos) && data.combate.enemigos.length ? data.combate : null,
+        shop: cleanShopRequest(data.tienda),
         limbChanges: cleanLimbChanges(data.extremidades)
       };
     } catch {
@@ -341,6 +370,7 @@ export function parseDMReply(raw, character = {}) {
     xpEarned: 0,
     summary: null,
     combat: null,
+    shop: null,
     limbChanges: [],
     // Plain text can't tell us reliably; look for the dice marker the prompt asks for
     usedRoll: text.includes('🎲')

@@ -20,7 +20,7 @@ import { tavernAudio } from '../utils/audio';
 import { animateRoll, is3DDiceEnabled } from '../dice3d/controller';
 import { applySceneOutcome, rescueKnockedOut } from '../utils/sceneOutcome';
 import { createEncounter, runEnemyTurns, playerAction, describeEncounterResult, injuriesIn } from '../utils/encounter';
-import { normalizeEquipment, applyLimbChanges, limbFact } from '../utils/equipment';
+import { normalizeEquipment, applyLimbChanges, limbFact, armorDisadvantage } from '../utils/equipment';
 import { keyMoments, narrateMoment, MAX_MOMENTS } from '../utils/combatNarration';
 import CombatView from './game/CombatView';
 import { addXp, canLevelUp, describeLevelUp } from '../utils/leveling';
@@ -30,6 +30,12 @@ import {
 } from '../utils/campaignMemory';
 import { resolveAttack, describeAttack, attackOptions } from '../utils/combat';
 import { skillModifier, getSkill } from '../utils/characterBuilder';
+import {
+  openShop, shopKey, currentNode, shopsAt, buyItem, sellItem, describeTrade, describeShopsForPrompt, normalizeShops, SHOP_TYPES
+} from '../utils/shops';
+import { drinkPotion, healingDice, addItem, roundCoins } from '../utils/items';
+import { generateLoot, describeLoot } from '../utils/loot';
+import ShopModal from './game/ShopModal';
 
 // The bestiary (and its builder) is only needed when a fight is being prepared
 const EncounterBuilder = lazy(() => import('./game/EncounterBuilder'));
@@ -126,6 +132,10 @@ export default function TavernApp({
   // Combat encounter in progress (null outside combat); saved with the campaign
   const [encounter, setEncounter] = useState(() => storedCampaign()?.encounter || null);
   const [isEncounterBuilderOpen, setIsEncounterBuilderOpen] = useState(false);
+
+  // Shops visited (their stock is kept) and the one open now; saved with the campaign
+  const [shops, setShops] = useState(() => normalizeShops(storedCampaign()?.shops));
+  const [activeShopKey, setActiveShopKey] = useState(null);
   const [combatBusy, setCombatBusy] = useState(false);
 
   const [saveStatus, setSaveStatus] = useState('saved'); // 'saved' | 'error' | 'quota'
@@ -178,6 +188,8 @@ export default function TavernApp({
       setSummaryCoverage(activeCampaign.summaryCoverage || 0);
       setEvents(activeCampaign.events || []);
       setEncounter(activeCampaign.encounter || null);
+      setShops(normalizeShops(activeCampaign.shops));
+      setActiveShopKey(null);
       if (activeCampaign.suggestedActions?.length > 0) {
         setSuggestedActions(activeCampaign.suggestedActions);
       }
@@ -218,14 +230,15 @@ export default function TavernApp({
       summary,
       summaryCoverage,
       events,
-      encounter
+      encounter,
+      shops
     });
     if (saved) {
       setSaveStatus('saved');
     } else {
       setSaveStatus(isQuotaError(getLastSaveError()) ? 'quota' : 'error');
     }
-  }, [messages, character, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter]);
+  }, [messages, character, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter, shops]);
 
   const toggleSound = () => {
     const newState = tavernAudio.toggleTavernAmbience();
@@ -239,7 +252,7 @@ export default function TavernApp({
   // `effectsApplied`: HP / gold for this action were already changed here (drinks, rests, healing)
   const handleSendAction = async (actionText, {
     playerRoll = null, sheet = character, spellCast = null, rest = null, effectsApplied = false,
-    weaponAttack = null, combatResult = null
+    weaponAttack = null, combatResult = null, loot = null
   } = {}) => {
     if (!actionText || isGenerating) return;
 
@@ -262,6 +275,8 @@ export default function TavernApp({
 
       // A plain action outside combat may start a fight: Duncan gets a short list of creatures
       const mayStartFight = !encounter && !combatResult && !playerRoll && !spellCast && !rest && !weaponAttack;
+      // ...or open a shop (the game sets the prices)
+      const here = currentNode(world);
       const bestiaryModule = mayStartFight ? await loadBestiary().catch(() => null) : null;
       const bestiary = bestiaryModule
         ? bestiaryModule.encounterCandidates(sheet.level || 1, { tags: bestiaryModule.WORLD_TAGS[world?.id] || null })
@@ -285,7 +300,11 @@ export default function TavernApp({
         events: eventsForPrompt(events),
         requestSummary,
         bestiary,
-        combatResult
+        combatResult,
+        allowShop: mayStartFight,
+        shopsHere: describeShopsForPrompt(here, world),
+        shopTypesHere: shopsAt(here, world),
+        loot
       });
       // A fight starts: the game resolves it, so nothing from this reply touches the sheet
       const fightGroups = response.combat && bestiaryModule
@@ -380,6 +399,7 @@ export default function TavernApp({
       }
 
       if (fightGroups.length) startEncounter(fightGroups, sheet, { byDuncan: true });
+      else if (response.shop && SHOP_TYPES[response.shop]) handleOpenShop(response.shop, { byDuncan: true });
     } catch (err) {
       console.error(err);
     } finally {
@@ -403,6 +423,7 @@ export default function TavernApp({
       return g.count > 1 ? `${g.count} × ${label}` : label;
     }).join(', ');
     pushSystemMessage(`⚔️ ¡Combate! ${sheet.name} se enfrenta a: ${names}.`);
+    setActiveShopKey(null);
     setEncounter(next);
     if (hero !== sheet) setCharacter(hero);
     setMobileTab('story');
@@ -452,16 +473,26 @@ export default function TavernApp({
     }
   };
 
-  // Close a finished fight: chronicle line, XP, recorded fact, rescue if the hero fell
+  // Close a finished fight: chronicle line, XP, loot, recorded fact, rescue if the hero fell
   const handleFinishEncounter = () => {
     if (!encounter || encounter.status === 'active') return;
-    const line = describeEncounterResult(encounter, character);
+    const loot = generateLoot(encounter);
+    const won = encounter.status === 'victory';
+    const line = `${describeEncounterResult(encounter, character)}${won ? ` Botín (ya en la mochila): ${describeLoot(loot)}.` : ''}`;
     pushSystemMessage(line);
     const defeated = encounter.enemies.filter(e => e.status !== 'active').map(e => e.name);
     if (encounter.status === 'victory') recordEvent(`Vence en combate a ${defeated.slice(0, 3).join(', ')}${defeated.length > 3 ? '…' : ''}`);
     if (encounter.status === 'fled') recordEvent('Huye de un combate');
 
     let hero = character;
+    if (won) {
+      hero = {
+        ...hero,
+        gold: roundCoins((Number(hero.gold) || 0) + loot.coins),
+        inventory: loot.items.reduce((list, item) => addItem(list, item), hero.inventory || [])
+      };
+      if (loot.items.length) recordEvent(`Botín: ${loot.items.map(i => i.name).join(', ')}`);
+    }
     if (encounter.xp > 0) {
       const leveledBefore = canLevelUp(hero);
       hero = addXp(hero, encounter.xp);
@@ -478,7 +509,7 @@ export default function TavernApp({
     setCharacter(hero);
     setEncounter(null);
     // Duncan narrates the outcome (and any loot) from the result the game computed
-    handleSendAction('Narra el final del combate', { sheet: hero, combatResult: line });
+    handleSendAction('Narra el final del combate', { sheet: hero, combatResult: line, loot: won ? loot : null });
   };
 
   // Weapon attack resolved by the game: Duncan only narrates the result
@@ -535,16 +566,18 @@ export default function TavernApp({
   // Shortcut under the chronicle: a skill check with the hero's sheet
   const handleQuickCheck = (skillId) => {
     const skill = getSkill(skillId);
-    if (skill) handleRollCheck({ label: skill.name, modifier: skillModifier(character, skillId) });
+    if (skill) handleRollCheck({ label: skill.name, modifier: skillModifier(character, skillId), ability: skill.ability, skillId });
   };
 
   // When rolling an ability or skill check from the character sheet
-  const handleRollCheck = async ({ label, modifier }) => {
+  // `ability` / `skillId`: the armor may give Disadvantage (no training, or Stealth in heavy armor)
+  const handleRollCheck = async ({ label, modifier, ability = null, skillId = null }) => {
     if (isGenerating || isRollingCheckRef.current) return;
     isRollingCheckRef.current = true;
 
     try {
-      const check = rollCheck({ modifier, statName: label, silent: true });
+      const disadvantage = armorDisadvantage(character, { ability, skillId });
+      const check = rollCheck({ modifier, statName: disadvantage ? `${label} con desventaja` : label, silent: true, disadvantage: Boolean(disadvantage) });
       await animateRoll({
         sides: 20,
         value: check.rawRoll,
@@ -554,7 +587,7 @@ export default function TavernApp({
         label: `Tirada de ${label}`
       });
 
-      const textDesc = `Realizo una tirada de ${label} [🎲 D20: ${check.rawRoll} (${check.modifier >= 0 ? `+${check.modifier}` : check.modifier}) = ${check.total} vs CD ${check.dc}].`;
+      const textDesc = `Realizo una tirada de ${label}${disadvantage ? ` con desventaja (${disadvantage})` : ''} [🎲 D20: ${check.rawRoll} (${check.modifier >= 0 ? `+${check.modifier}` : check.modifier}) = ${check.total} vs CD ${check.dc}].`;
       handleSendAction(textDesc, { playerRoll: check });
     } finally {
       isRollingCheckRef.current = false;
@@ -671,6 +704,59 @@ export default function TavernApp({
     setCharacter(updated);
 
     handleSendAction(`Pido a Maese Duncan un/a "${drink.name}" (${drink.cost} po). ${drink.effect}`, { sheet: updated, effectsApplied: true });
+  };
+
+  // ---------------------------------------------------------------- shops
+  // Open a shop of the current location (from the map, or because Duncan took the hero there).
+  // The stock is generated the first time and kept in the campaign.
+  const handleOpenShop = (type, { byDuncan = false } = {}) => {
+    if (encounter && encounter.status === 'active') return;
+    const node = currentNode(world);
+    setShops(prev => openShop(prev, { node, world, type }).shops);
+    setActiveShopKey(shopKey(node?.id, type));
+    if (byDuncan) pushSystemMessage(`🛒 Se abre ${SHOP_TYPES[type].name.toLowerCase()}: los precios los pone el juego (los del SRD; vendes a la mitad).`);
+  };
+
+  const activeShop = activeShopKey ? shops[activeShopKey] : null;
+
+  // Buy / sell at the open shop: returns an error for the shop window, or null
+  const trade = (result, kind) => {
+    if (!result.ok) return result.error;
+    setCharacter(normalizeEquipment(result.character));
+    setShops(prev => ({ ...prev, [result.shop.key]: result.shop }));
+    pushSystemMessage(describeTrade(kind, result.item, result.price, result.shop));
+    if (result.price >= 100) recordEvent(`${kind === 'buy' ? 'Compra' : 'Vende'} ${result.item.name}`);
+    tavernAudio.playTankardClink();
+    return null;
+  };
+  const handleBuy = key => (activeShop ? trade(buyItem(character, activeShop, key), 'buy') : 'La tienda está cerrada.');
+  const handleSell = itemId => (activeShop ? trade(sellItem(character, activeShop, itemId), 'sell') : 'La tienda está cerrada.');
+
+  // Using a consumable from the sheet (outside combat): potions roll their healing,
+  // anything else is told to Duncan
+  const handleUseItem = async (item) => {
+    if (isGenerating || isRollingCheckRef.current) return;
+    if (healingDice(item)) {
+      const result = drinkPotion(character, item.id, sides => rollDie(sides, { silent: true }));
+      if (!result.ok) { pushSystemMessage(`🧪 ${result.error}`); return; }
+      isRollingCheckRef.current = true;
+      try {
+        await animateRoll({ dice: result.roll.dice.map(value => ({ sides: result.roll.sides, value })), modifier: result.roll.bonus, label: `${item.name} · curación` });
+      } finally {
+        isRollingCheckRef.current = false;
+      }
+      setCharacter(result.character);
+      pushSystemMessage(`🧪 ${character.name} bebe ${item.name} y recupera ${result.healed} puntos de golpe (${result.character.hp}/${result.character.maxHp}).`);
+      return;
+    }
+    const updated = {
+      ...character,
+      inventory: character.inventory
+        .map(i => (i.id === item.id && i.uses !== undefined ? { ...i, uses: i.uses - 1 } : i))
+        .filter(i => i.id !== item.id || (i.uses !== undefined && i.uses > 0))
+    };
+    setCharacter(updated);
+    handleSendAction(`Uso ${item.name}.${item.effect ? ` ${item.effect}.` : ''}`, { sheet: updated, effectsApplied: true });
   };
 
   // When traveling to another node on the world map
@@ -862,6 +948,7 @@ export default function TavernApp({
             onRest={handleRest}
             onLevelUp={() => setIsLevelUpOpen(true)}
             onAttack={handleAttack}
+            onUseItem={handleUseItem}
             busy={isGenerating}
             inCombat={Boolean(encounter && encounter.status === 'active')}
           />
@@ -901,6 +988,8 @@ export default function TavernApp({
             onTravelToNode={handleTravelToNode}
             summary={summary}
             events={events}
+            onOpenShop={handleOpenShop}
+            shopsLocked={encounter ? 'No hay tiempo para compras en mitad de un combate.' : null}
           />
         </div>
 
@@ -916,6 +1005,16 @@ export default function TavernApp({
             onClose={() => setIsEncounterBuilderOpen(false)}
           />
         </Suspense>
+      )}
+
+      {activeShop && !encounter && (
+        <ShopModal
+          shop={activeShop}
+          character={character}
+          onBuy={handleBuy}
+          onSell={handleSell}
+          onClose={() => setActiveShopKey(null)}
+        />
       )}
 
       {isLevelUpOpen && canLevelUp(character) && (

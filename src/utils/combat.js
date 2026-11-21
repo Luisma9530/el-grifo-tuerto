@@ -3,7 +3,7 @@
 
 import { WEAPON_PROFICIENCY, EXTRA_ATTACK, MARTIAL_ARTS_DIE, RAGE_DAMAGE, PROPERTY_NAMES } from '../data/weapons';
 import { parseDice } from './spellcasting';
-import { getWeapon, weaponForItem, heldWeapons, canStrikeUnarmed } from './equipment';
+import { getWeapon, weaponForItem, heldWeapons, canStrikeUnarmed, armorDisadvantage } from './equipment';
 
 const mod = score => Math.floor(((Number(score) || 10) - 10) / 2);
 const byLevel = (table, level) => Object.entries(table)
@@ -140,9 +140,11 @@ export function resolveAttack(character, optionId, rollDie, { targetAC = DEFAULT
   const sneakEligible = sneakDice > 0 && option.weapon
     && (option.weapon.properties.includes('finesse') || option.weapon.kind === 'ranged');
 
+  // Armor without training: Disadvantage on Strength and Dexterity attacks
+  const disadvantage = armorDisadvantage(character, { ability: option.ability });
   let sneak = null;
   const rolls = Array.from({ length: count }, () => {
-    const raw = rollDie(20);
+    const raw = disadvantage ? Math.min(rollDie(20), rollDie(20)) : rollDie(20);
     const total = raw + option.attackBonus;
     const crit = raw === 20;
     const fumble = raw === 1;
@@ -162,7 +164,7 @@ export function resolveAttack(character, optionId, rollDie, { targetAC = DEFAULT
 
   const hits = rolls.filter(r => r.hit).length;
   const totalDamage = rolls.reduce((sum, r) => sum + (r.damage?.total || 0), 0) + (sneak?.total || 0);
-  return { ok: true, attack: { option, targetAC: ac, rolls, sneak, rage, totalDamage, hits } };
+  return { ok: true, attack: { option, targetAC: ac, rolls, sneak, rage, totalDamage, hits, disadvantage } };
 }
 
 /** The line written in the chronicle (and sent to the Dungeon Master). */
@@ -171,7 +173,7 @@ export function describeAttack(attack, target = '') {
   // Spanish contraction: "a el encapuchado" -> "al encapuchado"
   const who = target.trim().replace(/^el\s+/i, 'l ');
   const on = who ? (who.startsWith('l ') ? ` a${who}` : ` a ${who}`) : '';
-  const head = `Ataco${on} con ${option.weapon ? `mi ${option.name.toLowerCase()}` : 'un golpe sin armas'}${attack.rage ? ' en plena furia' : ''}.`;
+  const head = `Ataco${on} con ${option.weapon ? `mi ${option.name.toLowerCase()}` : 'un golpe sin armas'}${attack.rage ? ' en plena furia' : ''}.${attack.disadvantage ? ` Con desventaja (${attack.disadvantage}).` : ''}`;
   const parts = attack.rolls.map((r, i) => {
     const label = attack.rolls.length > 1 ? `Ataque ${i + 1}` : 'Ataque';
     const roll = `[🎲 ${label} D20: ${r.raw} (${r.total - r.raw >= 0 ? '+' : ''}${r.total - r.raw}) = ${r.total} vs CA ${attack.targetAC}]`;
