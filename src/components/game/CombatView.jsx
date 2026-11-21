@@ -1,22 +1,49 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FlaskConical, Footprints, Shield, Skull, Swords, Wand2, Heart, Flag } from 'lucide-react';
+import { FlaskConical, Footprints, Shield, Skull, Swords, Wand2, Heart, Flag, Hand } from 'lucide-react';
 import { attackOptions, damageLabel, rageBonus } from '../../utils/combat';
 import { spellRows, spellSummary } from '../../utils/spellcasting';
 import { formatModifier } from '../../utils/characterBuilder';
 import { activeEnemies, isPlayerTurn } from '../../utils/encounter';
+import { normalizeEquipment, fleeDC } from '../../utils/equipment';
+import EquipmentPanel from './EquipmentPanel';
 
 const LOG_COLORS = {
   info: 'text-stone-400', hit: 'text-emerald-300', crit: 'text-emerald-200 font-semibold', miss: 'text-stone-400',
   heal: 'text-sky-300', down: 'text-amber-300 font-semibold', morale: 'text-amber-200', end: 'text-amber-100 font-semibold',
   enemyHit: 'text-red-300', enemyCrit: 'text-red-200 font-semibold', enemyMiss: 'text-stone-500',
-  duncan: 'text-amber-100/90 italic font-serif'
+  duncan: 'text-amber-100/90 italic font-serif', injury: 'text-red-400 font-bold'
 };
 
 const ACTION_TABS = [
   { id: 'attacks', label: 'Atacar', icon: Swords },
   { id: 'spells', label: 'Conjuros', icon: Wand2 },
+  { id: 'gear', label: 'Equipo', icon: Hand },
   { id: 'other', label: 'Otras', icon: Shield }
 ];
+
+/**
+ * Change what the hero holds. House rule: it takes the whole turn, so the
+ * choice is staged here and confirmed with one button.
+ */
+function SwapGear({ character, disabled, onSwap }) {
+  const current = normalizeEquipment(character);
+  const [draft, setDraft] = useState(current);
+  const changed = draft.hands.main !== current.hands.main || draft.hands.off !== current.hands.off;
+  return (
+    <div className="space-y-2">
+      <EquipmentPanel character={draft} onChange={setDraft} showLimbs={false} />
+      <div className="flex items-center gap-2">
+        <button disabled={disabled || !changed} onClick={() => onSwap(draft.hands)}
+          className="flex-1 px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:bg-stone-800 disabled:text-stone-500 text-stone-950 text-xs font-bold">
+          Cambiar de equipo · gasta el turno
+        </button>
+        {changed && (
+          <button onClick={() => setDraft(current)} className="px-3 py-2 rounded-lg border border-stone-700 text-stone-300 text-xs">Deshacer</button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const STATUS_LABELS = { dead: 'Abatido', fled: 'Ha huido', surrendered: 'Se ha rendido' };
 
@@ -180,7 +207,7 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
               </span>
             </div>
 
-            <div className="max-h-48 overflow-y-auto">
+            <div className="max-h-64 overflow-y-auto">
               {tab === 'attacks' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                   {rageBonus(character) > 0 && (
@@ -188,6 +215,9 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
                       <input type="checkbox" checked={raging} onChange={e => setRaging(e.target.checked)} className="accent-red-500" />
                       En furia (+{rageBonus(character)} al daño con Fuerza)
                     </label>
+                  )}
+                  {attackOptions(character).length === 0 && (
+                    <p className="sm:col-span-2 text-[11px] text-stone-500">No tienes con qué atacar: cambia de equipo en la pestaña «Equipo» (gasta el turno).</p>
                   )}
                   {attackOptions(character).map(option => (
                     <button key={option.id} disabled={!playerTurn || !targetUid}
@@ -213,6 +243,15 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
                 </div>
               )}
 
+              {tab === 'gear' && (
+                <SwapGear
+                  key={JSON.stringify([normalizeEquipment(character).hands, character.limbs])}
+                  character={character}
+                  disabled={!playerTurn}
+                  onSwap={hands => act({ type: 'equip', hands })}
+                />
+              )}
+
               {tab === 'other' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                   {potions.map(item => (
@@ -227,10 +266,10 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
                     <Shield className="w-4 h-4 text-stone-300" />
                     <span className="text-xs text-stone-100">Esquivar <span className="text-stone-500">· desventaja a sus ataques</span></span>
                   </button>
-                  <button disabled={!playerTurn} onClick={() => act({ type: 'flee' })}
+                  <button disabled={!playerTurn || fleeDC(character) == null} onClick={() => act({ type: 'flee' })}
                     className="text-left p-2 rounded-lg bg-[#1c1614] border border-stone-800 hover:border-amber-600/60 disabled:opacity-40 flex items-center gap-2">
                     <Footprints className="w-4 h-4 text-amber-300" />
-                    <span className="text-xs text-stone-100">Huir <span className="text-stone-500">· Destreza CD 12</span></span>
+                    <span className="text-xs text-stone-100">Huir <span className="text-stone-500">· {fleeDC(character) == null ? 'imposible con las dos piernas heridas' : `Destreza CD ${fleeDC(character)}`}</span></span>
                   </button>
                 </div>
               )}

@@ -63,6 +63,9 @@ export default function AttacksPanel({ character, onAttack, busy }) {
       )}
 
       <div className="space-y-1.5">
+        {options.length === 0 && (
+          <p className="text-[11px] text-stone-500">No llevas armas en las manos ni tienes una mano libre. Cámbialo en la pestaña «Equipo».</p>
+        )}
         {options.map(option => (
           <div key={option.id} className="p-2.5 rounded-xl bg-[#17131f] border border-stone-800 flex items-center justify-between gap-2">
             <div className="min-w-0">
