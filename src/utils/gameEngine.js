@@ -25,10 +25,13 @@ export function rollDie(sides = 20, { silent = false } = {}) {
 }
 
 // Roll a d20 check with any modifier (ability, or skill with proficiency) against a DC
-// `disadvantage`: roll two d20 and keep the lower one (e.g. armor without training)
-export function rollCheck({ modifier = 0, statName = 'Tirada', dc = 12, silent = false, disadvantage = false } = {}) {
+// `disadvantage`: roll two d20 and keep the lower one (e.g. armor without training, poisoned)
+// `advantage`: keep the higher one (both at once cancel out)
+export function rollCheck({ modifier = 0, statName = 'Tirada', dc = 12, silent = false, disadvantage = false, advantage = false } = {}) {
   const first = rollDie(20, { silent });
-  const rawRoll = disadvantage ? Math.min(first, rollDie(20, { silent: true })) : first;
+  const twoDice = Boolean(disadvantage) !== Boolean(advantage);
+  const second = twoDice ? rollDie(20, { silent: true }) : first;
+  const rawRoll = !twoDice ? first : disadvantage ? Math.min(first, second) : Math.max(first, second);
   const total = rawRoll + modifier;
 
   const isNat20 = rawRoll === 20;
@@ -228,6 +231,8 @@ export async function generateDMResponse({
               shop,
               // A finished fight is narrated as it happened: no new wounds from the narration
               limbChanges: combatResult ? [] : parsed.limbChanges || [],
+              // Same for conditions; a fight that starts handles its own
+              conditionChanges: combatResult || startsFight ? [] : parsed.conditionChanges || [],
               // A fight that starts is rolled by the game, not by Duncan
               roll: parsed.usedRoll && !playerRoll && !needsNoRoll && !startsFight ? { sides: 20, value: d20 } : null,
               source: 'gemini',
@@ -494,6 +499,7 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     combat,
     shop,
     limbChanges: [],
+    conditionChanges: [],
     // Set when Gemini keys exist but the AI could not answer this turn
     notice: aiFailure ? AI_FAILURE_NOTICES[aiFailure] || AI_FAILURE_NOTICES.overloaded : null,
     // Only when Duncan's own roll is mentioned in the narration

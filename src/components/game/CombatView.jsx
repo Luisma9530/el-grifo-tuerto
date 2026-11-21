@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FlaskConical, Footprints, Shield, Skull, Swords, Wand2, Heart, Flag, Hand } from 'lucide-react';
+import { FlaskConical, Footprints, Shield, Skull, Swords, Wand2, Heart, Flag, Hand, Unlock, Brain } from 'lucide-react';
 import { attackOptions, damageLabel, rageBonus } from '../../utils/combat';
 import { spellRows, spellSummary } from '../../utils/spellcasting';
 import { formatModifier } from '../../utils/characterBuilder';
-import { activeEnemies, isPlayerTurn } from '../../utils/encounter';
+import { activeEnemies, isPlayerTurn, escapableCondition, escapeBonus } from '../../utils/encounter';
+import { speedZeroReason, conditionName } from '../../utils/conditions';
+import ConditionBadges from './ConditionBadges';
 import { normalizeEquipment, fleeDC } from '../../utils/equipment';
 import EquipmentPanel from './EquipmentPanel';
 import { healingDice } from '../../utils/items';
@@ -12,7 +14,8 @@ const LOG_COLORS = {
   info: 'text-stone-400', hit: 'text-emerald-300', crit: 'text-emerald-200 font-semibold', miss: 'text-stone-400',
   heal: 'text-sky-300', down: 'text-amber-300 font-semibold', morale: 'text-amber-200', end: 'text-amber-100 font-semibold',
   enemyHit: 'text-red-300', enemyCrit: 'text-red-200 font-semibold', enemyMiss: 'text-stone-500',
-  duncan: 'text-amber-100/90 italic font-serif', injury: 'text-red-400 font-bold'
+  duncan: 'text-amber-100/90 italic font-serif', injury: 'text-red-400 font-bold',
+  condition: 'text-fuchsia-300', conditionEnd: 'text-teal-300'
 };
 
 const ACTION_TABS = [
@@ -48,7 +51,7 @@ function SwapGear({ character, disabled, onSwap }) {
 
 const STATUS_LABELS = { dead: 'Abatido', fled: 'Ha huido', surrendered: 'Se ha rendido' };
 
-function EnemyCard({ enemy, selected, onSelect, isTurn }) {
+function EnemyCard({ enemy, selected, onSelect, isTurn, nameOf }) {
   const out = enemy.status !== 'active';
   const percent = Math.max(0, Math.round((enemy.hp / enemy.maxHp) * 100));
   return (
@@ -79,7 +82,8 @@ function EnemyCard({ enemy, selected, onSelect, isTurn }) {
           <div className="mt-1.5 h-1.5 rounded-full bg-stone-900 overflow-hidden">
             <div className={`h-full ${percent > 50 ? 'bg-emerald-500' : percent > 25 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${percent}%` }} />
           </div>
-          <p className="text-[10px] font-mono text-stone-500 mt-0.5">{enemy.hp}/{enemy.maxHp} PG{enemy.skipTurns ? ' · aturdido' : ''}</p>
+          <p className="text-[10px] font-mono text-stone-500 mt-0.5">{enemy.hp}/{enemy.maxHp} PG{enemy.skipTurns ? ' · pierde su turno' : ''}</p>
+          <ConditionBadges creature={enemy} nameOf={nameOf} focusable={false} size="xs" className="mt-1" />
         </>
       )}
     </button>
@@ -112,6 +116,9 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
   const spells = spellRows(character).filter(s => !s.blocked);
   const potions = (character.inventory || []).filter(i => healingDice(i));
   const act = action => onAction({ ...action, targetUid });
+  const nameOf = uid => (uid === 'player' ? character.name : encounter.enemies.find(e => e.uid === uid)?.name || 'alguien');
+  const held = escapableCondition(character);
+  const stuck = speedZeroReason(character);
   // Drinking a potion is a Bonus Action: one per turn, and the turn goes on
   const bonusUsed = Boolean(encounter.bonusUsed);
   const actionUsed = Boolean(encounter.actionUsed);
@@ -153,6 +160,7 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
               selected={enemy.uid === targetUid}
               isTurn={currentTurn?.uid === enemy.uid && !over}
               onSelect={() => setTargetUid(enemy.uid)}
+              nameOf={nameOf}
             />
           ))}
         </div>
@@ -167,6 +175,15 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
             </div>
             <div className="mt-1 h-1.5 rounded-full bg-stone-900 overflow-hidden">
               <div className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400" style={{ width: `${Math.max(0, Math.round((character.hp / character.maxHp) * 100))}%` }} />
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              <ConditionBadges creature={character} nameOf={nameOf} />
+              {encounter.concentration && (
+                <span className="inline-flex items-center gap-1 rounded border border-purple-600/60 bg-purple-950/40 px-1.5 py-0.5 text-[10px] font-semibold text-purple-200"
+                  title={`Te concentras en ${encounter.concentration.name}: si recibes daño, salvación de Constitución (CD 10 o la mitad del daño) para mantenerlo.`}>
+                  <Brain className="w-3 h-3" /> Concentración: {encounter.concentration.name}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -296,10 +313,17 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
                     <Shield className="w-4 h-4 text-stone-300" />
                     <span className="text-xs text-stone-100">Esquivar <span className="text-stone-500">· desventaja a sus ataques</span></span>
                   </button>
-                  <button disabled={!canAct || fleeDC(character) == null} onClick={() => act({ type: 'flee' })}
+                  {held && (
+                    <button disabled={!canAct} onClick={() => act({ type: 'escape' })}
+                      className="text-left p-2 rounded-lg bg-[#1a1416] border border-fuchsia-900/60 hover:border-fuchsia-500/60 disabled:opacity-40 flex items-center gap-2">
+                      <Unlock className="w-4 h-4 text-fuchsia-300" />
+                      <span className="text-xs text-stone-100">Liberarte <span className="text-stone-500">· {conditionName(held.id).toLowerCase()}, {escapeBonus(character).name} CD {held.duration.dc} · gasta tu acción</span></span>
+                    </button>
+                  )}
+                  <button disabled={!canAct || fleeDC(character) == null || Boolean(stuck)} onClick={() => act({ type: 'flee' })}
                     className="text-left p-2 rounded-lg bg-[#1c1614] border border-stone-800 hover:border-amber-600/60 disabled:opacity-40 flex items-center gap-2">
                     <Footprints className="w-4 h-4 text-amber-300" />
-                    <span className="text-xs text-stone-100">Huir <span className="text-stone-500">· {fleeDC(character) == null ? 'imposible con las dos piernas heridas' : `Destreza CD ${fleeDC(character)}`}</span></span>
+                    <span className="text-xs text-stone-100">Huir <span className="text-stone-500">· {stuck ? `imposible: ${stuck.toLowerCase()} (velocidad 0)` : fleeDC(character) == null ? 'imposible con las dos piernas heridas' : `Destreza CD ${fleeDC(character)}`}</span></span>
                   </button>
                 </div>
               )}

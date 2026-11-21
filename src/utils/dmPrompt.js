@@ -7,11 +7,18 @@ import { cleanSummary } from './campaignMemory';
 import { describeEquipmentForPrompt, LIMB_IDS } from './equipment';
 import { formatCoins } from './items';
 import { SHOP_REPLY_IDS } from './shops';
+import { STORY_CONDITION_IDS, EXHAUSTION_MAX, describeConditionsForPrompt } from './conditions';
 
 /** Limb ids and states in the reply (Spanish, as the model writes them) -> sheet values. */
 export const LIMB_REPLY_IDS = { brazoDerecho: 'rightArm', brazoIzquierdo: 'leftArm', piernaDerecha: 'rightLeg', piernaIzquierda: 'leftLeg' };
 export const LIMB_REPLY_STATUSES = { sana: 'ok', inutilizada: 'disabled', perdida: 'lost' };
 const MAX_LIMB_CHANGES = LIMB_IDS.length;
+
+/** Condition changes in the reply: "aplicar" / "quitar", and how long they last. */
+export const CONDITION_REPLY_ACTIONS = { aplicar: 'add', quitar: 'remove' };
+export const CONDITION_REPLY_DURATIONS = { descansoCorto: { rest: 'short' }, descansoLargo: { rest: 'long' }, permanente: 'permanent' };
+const MAX_CONDITION_CHANGES = 4;
+const CONDITION_CAUSE_MAX = 60;
 
 // The caller already trims the chronicle to the messages not covered by the
 // campaign summary (see campaignMemory.js); these are just safety limits.
@@ -47,6 +54,22 @@ export const DM_RESPONSE_SCHEMA = {
           estado: { type: 'STRING', enum: Object.keys(LIMB_REPLY_STATUSES) }
         },
         required: ['extremidad', 'estado']
+      }
+    },
+    condiciones: {
+      type: 'ARRAY',
+      nullable: true,
+      description: 'Solo si la historia aplica o quita una condición al personaje (veneno, agotamiento, ceguera, un sanador...). Casi siempre vacío.',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          condicion: { type: 'STRING', enum: STORY_CONDITION_IDS },
+          accion: { type: 'STRING', enum: Object.keys(CONDITION_REPLY_ACTIONS) },
+          duracion: { type: 'STRING', enum: Object.keys(CONDITION_REPLY_DURATIONS), nullable: true },
+          niveles: { type: 'INTEGER', nullable: true, description: 'Solo para agotamiento: niveles que se ganan o se quitan (1 a 6).' },
+          causa: { type: 'STRING', nullable: true, description: 'Causa breve: "veneno de la ciénaga".' }
+        },
+        required: ['condicion', 'accion']
       }
     }
   },
@@ -197,6 +220,7 @@ export function buildDMPrompt({
   allowShop = false, shopsHere = ''
 }) {
   const name = character.name || 'Aventurero';
+  const conditions = describeConditionsForPrompt(character);
   const location = world.mapNodes?.find(n => n.status === 'current')?.name || world.initialLocation;
   const inventory = (character.inventory || []).map(i => i.name).filter(Boolean).join(', ');
 
@@ -232,7 +256,8 @@ Narra el desenlace (cómo queda el lugar, qué hacen los que se rindieron o huye
 - "oro": monedas de oro que gana (positivo) o que gasta o pierde (negativo); 0 si nada.
 - "experiencia": puntos de experiencia por superar un reto en esta escena: 0 si no superó nada (charlar, comprar, descansar, fallar sin aprender nada), 10-30 por un reto menor, 40-80 por vencer un combate o descubrir algo importante, 100-200 solo por un logro excepcional.
 - "opciones": 3 o 4 sugerencias breves de lo que puede hacer ahora.
-- "extremidades": casi siempre una lista vacía. Solo si la historia lo hace inevitable (una trampa que le aplasta el brazo, una maldición, una amputación, un sanador o un milagro que lo cura), indica el cambio: [{"extremidad": "brazoDerecho" | "brazoIzquierdo" | "piernaDerecha" | "piernaIzquierda", "estado": "inutilizada" | "perdida" | "sana"}]. Debe ser excepcional y coincidir con la narración; el juego aplicará el efecto (lo que llevase en esa mano cae a la mochila).${requestSummary ? `
+- "extremidades": casi siempre una lista vacía. Solo si la historia lo hace inevitable (una trampa que le aplasta el brazo, una maldición, una amputación, un sanador o un milagro que lo cura), indica el cambio: [{"extremidad": "brazoDerecho" | "brazoIzquierdo" | "piernaDerecha" | "piernaIzquierda", "estado": "inutilizada" | "perdida" | "sana"}]. Debe ser excepcional y coincidir con la narración; el juego aplicará el efecto (lo que llevase en esa mano cae a la mochila).
+- "condiciones": casi siempre una lista vacía. Solo si la historia aplica o quita una condición a ${name} (un veneno, una maldición, días sin dormir o una marcha forzada, una explosión que lo deja sordo, un sanador o un antídoto que lo cura): [{"condicion": ${STORY_CONDITION_IDS.map(id => `"${id}"`).join(' | ')}, "accion": "aplicar" | "quitar", "duracion": "descansoCorto" | "descansoLargo" | "permanente", "niveles": 1 (solo para agotamiento), "causa": "texto breve"}]. Por defecto duran hasta un descanso largo; el agotamiento se acumula por niveles (máximo ${EXHAUSTION_MAX}, y cada descanso largo quita uno). El juego aplica los efectos a las tiradas; tú no los resuelvas. En los combates el juego gestiona las condiciones por su cuenta.${requestSummary ? `
 - "resumen": reescribe el resumen de la campaña juntando el resumen anterior y la crónica reciente (máximo 800 caracteres, frases cortas): hechos clave, personajes no jugadores y su relación con ${name}, misiones abiertas, pistas, deudas y objetos importantes. Es tu memoria para el resto de la partida.` : ''}
 ${bestiary ? `
 - "combate": SOLO si en esta escena empieza una pelea (alguien ataca al héroe, o el héroe ataca a alguien). En ese caso NO resuelvas la pelea: narra solo cómo aparecen los enemigos (sin golpes, aciertos, daño ni tiradas), pon "usaTirada": false y "danio": 0, y devuelve los enemigos; el juego llevará el combate con sus propias tiradas. Usa únicamente estas criaturas: ${describeBestiary(bestiary)}. Para ${name} solo, un combate normal suma unos ${bestiary.budget.moderate} PX (fácil ${bestiary.budget.low}, duro ${bestiary.budget.high}). Puedes dar a un único enemigo un "nombre" propio y un "rasgo" breve, y marcarlo "elite" si es un jefe. Si no empieza ninguna pelea, omite "combate".` : ''}${allowShop ? `
@@ -247,7 +272,7 @@ Estás dirigiendo una partida de rol estilo D&D 5e en el mundo: "${world.name}" 
 Personaje del jugador: ${name}, ${character.race || ''} ${character.class || ''}.
 - Puntos de golpe: ${character.hp}/${character.maxHp}. Armadura (CA): ${character.ac ?? '?'}. Dinero: ${formatCoins(character.gold)} (po = oro, pp = plata, pc = cobre).
 - Atributos: ${describeStats(character.stats)}.${inventory ? `\n- Inventario: ${inventory}.` : ''}
-- ${describeEquipmentForPrompt(character)}${describeBuild(character)}
+- ${describeEquipmentForPrompt(character)}${conditions ? `\n- Condiciones: ${conditions}. El juego ya aplica sus efectos a las tiradas; tenlas en cuenta al narrar.` : ''}${describeBuild(character)}
 
 ${summary ? `Resumen de la campaña hasta ahora:
 """
@@ -300,6 +325,31 @@ export function cleanLimbChanges(list) {
 }
 
 /**
+ * Validate the condition changes of a reply: known conditions Duncan may use
+ * (see STORY_CONDITION_IDS), "aplicar" / "quitar", a known duration (default
+ * until a long rest), Exhaustion levels 1-6 and a short cause. One change per
+ * condition (the last one wins), at most MAX_CONDITION_CHANGES.
+ * @returns {{ id, action: 'add' | 'remove', duration, level, cause }[]}
+ */
+export function cleanConditionChanges(list) {
+  if (!Array.isArray(list)) return [];
+  const byId = new Map();
+  list.slice(0, MAX_CONDITION_CHANGES * 2).forEach(entry => {
+    if (!entry || typeof entry !== 'object') return;
+    const id = String(entry.condicion || '').trim().toLowerCase();
+    const action = CONDITION_REPLY_ACTIONS[String(entry.accion || '').trim().toLowerCase()];
+    if (!STORY_CONDITION_IDS.includes(id) || !action) return;
+    const duration = CONDITION_REPLY_DURATIONS[String(entry.duracion || '').trim()] || { rest: 'long' };
+    const levels = Math.round(Number(entry.niveles));
+    const level = id === 'agotamiento' ? Math.min(EXHAUSTION_MAX, Math.max(1, Number.isFinite(levels) ? levels : 1)) : null;
+    const cause = typeof entry.causa === 'string' ? entry.causa.trim().replace(/\s+/g, ' ').slice(0, CONDITION_CAUSE_MAX) : '';
+    byId.delete(id);
+    byId.set(id, { id, action, duration, level, cause });
+  });
+  return [...byId.values()].slice(-MAX_CONDITION_CHANGES);
+}
+
+/**
  * Validate the shop Duncan opens: "herrero" | "alquimista" | "general" (or an
  * object with that "tipo") -> 'smith' | 'alchemist' | 'general'; null otherwise.
  */
@@ -346,7 +396,8 @@ export function parseDMReply(raw, character = {}) {
         summary: cleanSummary(data.resumen),
         combat: data.combate && Array.isArray(data.combate.enemigos) && data.combate.enemigos.length ? data.combate : null,
         shop: cleanShopRequest(data.tienda),
-        limbChanges: cleanLimbChanges(data.extremidades)
+        limbChanges: cleanLimbChanges(data.extremidades),
+        conditionChanges: cleanConditionChanges(data.condiciones)
       };
     } catch {
       // Not valid JSON: treat it as plain text below
@@ -372,6 +423,7 @@ export function parseDMReply(raw, character = {}) {
     combat: null,
     shop: null,
     limbChanges: [],
+    conditionChanges: [],
     // Plain text can't tell us reliably; look for the dice marker the prompt asks for
     usedRoll: text.includes('🎲')
   };

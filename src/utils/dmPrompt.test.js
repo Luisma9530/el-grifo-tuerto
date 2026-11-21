@@ -94,7 +94,8 @@ describe('parseDMReply', () => {
       summary: null,
       combat: null,
       shop: null,
-      limbChanges: []
+      limbChanges: [],
+      conditionChanges: []
     });
     expect(parseDMReply(reply({ experiencia: 60 }), character).xpEarned).toBe(60);
     expect(parseDMReply(reply({ experiencia: 5000 }), character).xpEarned).toBe(300);

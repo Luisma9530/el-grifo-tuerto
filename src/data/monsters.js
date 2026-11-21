@@ -7,8 +7,9 @@
 //
 // Names are in Spanish and trait descriptions are our own one-line summaries.
 // Numbers (AC, HP, initiative, attacks, saves, CR and XP) follow the SRD stat blocks.
-// speed is the walking speed in metres. Attack and save actions only cover damage:
-// conditions, spells and special abilities are narrated by the Dungeon Master from `traits`.
+// speed is the walking speed in metres. Attack and save actions only cover damage;
+// the conditions they apply are in monsterConditions.js (merged when a fight starts).
+// Spells and other special abilities are narrated by the Dungeon Master from `traits`.
 // `extra`/`extraType`: a second damage of a different type dealt by the same hit.
 
 export const MONSTERS = [
@@ -796,6 +797,31 @@ export const MONSTERS = [
     tags: ['bosque', 'montaña', 'ártico']
   },
   {
+    id: 'giantSpider',
+    name: 'Araña Gigante',
+    type: 'bestia',
+    size: 'Grande',
+    cr: 1,
+    xp: 200,
+    ac: 14,
+    hp: 26,
+    hitDice: '4d10+4',
+    initiative: 3,
+    speed: 9,
+    stats: { fue: 14, des: 16, con: 12, int: 2, sab: 11, car: 4 },
+    saves: {},
+    actions: [
+      { id: 'bite', name: 'Mordisco', kind: 'melee', bonus: 5, damage: '1d8+3', type: 'perforante', extra: '2d6', extraType: 'veneno' },
+      { id: 'web', name: 'Telaraña', kind: 'save', save: 'des', dc: 13, type: 'telaraña', recharge: [5, 6] }
+    ],
+    traits: [
+      { name: 'Trepar como Arácnido', desc: 'Camina por paredes y techos sin esfuerzo.' },
+      { name: 'Caminante de Telarañas', desc: 'Se mueve por las telarañas sin quedar atrapada.' }
+    ],
+    fearless: false,
+    tags: ['bosque', 'subterráneo', 'ruinas']
+  },
+  {
     id: 'animatedArmor',
     name: 'Armadura Animada',
     type: 'constructo',
@@ -1327,9 +1353,10 @@ export const MONSTERS = [
     stats: { fue: 16, des: 8, con: 15, int: 6, sab: 12, car: 12 },
     saves: { sab: 3 },
     actions: [
-      { id: 'rottingFist', name: 'Puño Putrefacto', kind: 'melee', bonus: 5, damage: '1d10+3', type: 'contundente', extra: '3d6', extraType: 'necrótico' }
+      { id: 'rottingFist', name: 'Puño Putrefacto', kind: 'melee', bonus: 5, damage: '1d10+3', type: 'contundente', extra: '3d6', extraType: 'necrótico' },
+      { id: 'dreadfulGlare', name: 'Mirada Aterradora', kind: 'save', save: 'sab', dc: 11, type: 'miedo' }
     ],
-    multiattack: ['rottingFist', 'rottingFist'],
+    multiattack: ['rottingFist', 'rottingFist', 'dreadfulGlare'],
     traits: [
       { name: 'Mirada Aterradora', desc: 'Su mirada paraliza de miedo.' },
       { name: 'Podredumbre', desc: 'Sus golpes transmiten una maldición que pudre la carne.' }

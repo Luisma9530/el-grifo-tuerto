@@ -6,6 +6,7 @@ import { TAVERN_MENU } from '../../data/gameData';
 import { tavernAudio } from '../../utils/audio';
 import SpellsTab, { RestButtons } from './SpellsTab';
 import AttacksPanel from './AttacksPanel';
+import ConditionBadges from './ConditionBadges';
 import EquipmentPanel from './EquipmentPanel';
 import { normalizeEquipment, HANDS, isWorn } from '../../utils/equipment';
 import { formatCoins, healingDice, inventoryWeight, formatKg } from '../../utils/items';
@@ -71,6 +72,7 @@ export default function PartyPanel({
                   {[character.subclass, character.background].filter(Boolean).join(' · ')}
                 </p>
               )}
+              <ConditionBadges creature={character} nameOf={() => 'un enemigo'} className="mt-1" />
             </div>
           </div>
 

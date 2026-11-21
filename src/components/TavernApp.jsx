@@ -20,7 +20,11 @@ import { tavernAudio } from '../utils/audio';
 import { animateRoll, is3DDiceEnabled } from '../dice3d/controller';
 import { applySceneOutcome, rescueKnockedOut } from '../utils/sceneOutcome';
 import { createEncounter, runEnemyTurns, playerAction, describeEncounterResult, injuriesIn } from '../utils/encounter';
-import { normalizeEquipment, applyLimbChanges, limbFact, armorDisadvantage } from '../utils/equipment';
+import { normalizeEquipment, applyLimbChanges, limbFact } from '../utils/equipment';
+import {
+  checkModifiers, applyConditionChanges, describeConditionChange, conditionFact, endCombatConditions,
+  restConditions, reduceExhaustion, isIncapacitated, activeIds, conditionName
+} from '../utils/conditions';
 import { keyMoments, narrateMoment, MAX_MOMENTS } from '../utils/combatNarration';
 import CombatView from './game/CombatView';
 import { addXp, canLevelUp, describeLevelUp } from '../utils/leveling';
@@ -350,6 +354,22 @@ export default function TavernApp({
         limbs.applied.forEach(change => recordEvent(limbFact(sheet.name, change)));
       }
 
+      // Conditions applied or removed by the story (validated by parseDMReply)
+      const conditionResult = fightGroups.length ? { applied: [], collapsed: false } : applyConditionChanges(sheet, response.conditionChanges || []);
+      if (conditionResult.applied.length) {
+        setCharacter(prev => {
+          const next = applyConditionChanges(prev, response.conditionChanges).character;
+          // Exhaustion 6: the hero collapses and Duncan picks them up (level 5 left)
+          if (!conditionResult.collapsed) return next;
+          const rescue = rescueKnockedOut(next);
+          return { ...reduceExhaustion(next, 1).creature, hp: Math.min(next.hp, rescue.hp), gold: rescue.gold };
+        });
+        conditionResult.applied.forEach(change => {
+          const fact = conditionFact(sheet.name, change);
+          if (fact) recordEvent(fact);
+        });
+      }
+
       // Experience: tell the player once when they can go up a level
       const xpGained = response.xpEarned || 0;
       const reachesNewLevel = xpGained > 0 && !canLevelUp(sheet) && canLevelUp(addXp(sheet, xpGained));
@@ -376,6 +396,12 @@ export default function TavernApp({
           : /Arm$/.test(change.limb) ? ' Esa mano ya no puede sostener nada.' : ' Huir de un combate será más difícil.';
         pushSystemMessage(`${icon} ${limbFact(sheet.name, change)}.${effect}${dropped}`);
       });
+
+      conditionResult.applied.forEach(change => pushSystemMessage(describeConditionChange(sheet.name, change)));
+      if (conditionResult.collapsed) {
+        recordEvent(`${sheet.name} se desplomó de agotamiento y Duncan lo recogió`);
+        pushSystemMessage(`💀 ${sheet.name} llega al sexto nivel de agotamiento y se desploma. Maese Duncan te recoge y te mete en un catre: sigues con agotamiento de nivel 5 y la mitad de tu oro se va en cuidados.`);
+      }
 
       if (reachesNewLevel) {
         pushSystemMessage(`✨ ¡${sheet.name} tiene experiencia suficiente para subir a nivel ${(sheet.level || 1) + 1}! Pulsa «Subir de nivel» en tu ficha.`);
@@ -484,7 +510,13 @@ export default function TavernApp({
     if (encounter.status === 'victory') recordEvent(`Vence en combate a ${defeated.slice(0, 3).join(', ')}${defeated.length > 3 ? '…' : ''}`);
     if (encounter.status === 'fled') recordEvent('Huye de un combate');
 
-    let hero = character;
+    // Effects that lasted turns or depended on the enemies end with the fight
+    const { creature: afterFight, removed: endedConditions } = endCombatConditions(character);
+    let hero = afterFight;
+    if (endedConditions.length) {
+      const names = [...new Set(endedConditions.map(c => conditionName(c.id).toLowerCase()))];
+      pushSystemMessage(`🩹 Al acabar el combate, ${hero.name} deja de estar ${names.join(', ')}.`);
+    }
     if (won) {
       hero = {
         ...hero,
@@ -512,9 +544,18 @@ export default function TavernApp({
     handleSendAction('Narra el final del combate', { sheet: hero, combatResult: line, loot: won ? loot : null });
   };
 
+  // Paralyzed, stunned, petrified...: no attacks or spells outside a fight either
+  const blockedByConditions = () => {
+    if (!isIncapacitated(character)) return false;
+    const why = ['petrificado', 'paralizado', 'aturdido', 'incapacitado'].find(id => activeIds(character).has(id));
+    pushSystemMessage(`⛔ ${character.name} está ${conditionName(why || 'incapacitado').toLowerCase()} y no puede actuar.`);
+    return true;
+  };
+
   // Weapon attack resolved by the game: Duncan only narrates the result
   const handleAttack = async ({ optionId, target = '', targetAC, raging = false }) => {
     if (isGenerating || isRollingCheckRef.current) return;
+    if (blockedByConditions()) return;
     const result = resolveAttack(character, optionId, sides => rollDie(sides, { silent: true }), { targetAC, raging });
     if (!result.ok) {
       pushSystemMessage(`⚔️ ${result.error}`);
@@ -576,8 +617,18 @@ export default function TavernApp({
     isRollingCheckRef.current = true;
 
     try {
-      const disadvantage = armorDisadvantage(character, { ability, skillId });
-      const check = rollCheck({ modifier, statName: disadvantage ? `${label} con desventaja` : label, silent: true, disadvantage: Boolean(disadvantage) });
+      // Armor without training, poisoned, frightened, exhausted... (see checkModifiers)
+      const mods = checkModifiers(character, { ability, skillId });
+      const both = mods.advantage.length > 0 && mods.disadvantage.length > 0;
+      const disadvantage = !both && mods.disadvantage.length ? mods.disadvantage.join(', ') : null;
+      const advantage = !both && mods.advantage.length ? mods.advantage.join(', ') : null;
+      const check = rollCheck({
+        modifier: modifier - mods.penalty,
+        statName: disadvantage ? `${label} con desventaja` : advantage ? `${label} con ventaja` : label,
+        silent: true,
+        disadvantage: Boolean(disadvantage),
+        advantage: Boolean(advantage)
+      });
       await animateRoll({
         sides: 20,
         value: check.rawRoll,
@@ -587,7 +638,8 @@ export default function TavernApp({
         label: `Tirada de ${label}`
       });
 
-      const textDesc = `Realizo una tirada de ${label}${disadvantage ? ` con desventaja (${disadvantage})` : ''} [🎲 D20: ${check.rawRoll} (${check.modifier >= 0 ? `+${check.modifier}` : check.modifier}) = ${check.total} vs CD ${check.dc}].`;
+      const tired = mods.penalty ? ` (agotamiento: −${mods.penalty})` : '';
+      const textDesc = `Realizo una tirada de ${label}${disadvantage ? ` con desventaja (${disadvantage})` : advantage ? ` con ventaja (${advantage})` : ''}${tired} [🎲 D20: ${check.rawRoll} (${check.modifier >= 0 ? `+${check.modifier}` : check.modifier}) = ${check.total} vs CD ${check.dc}].`;
       handleSendAction(textDesc, { playerRoll: check });
     } finally {
       isRollingCheckRef.current = false;
@@ -604,6 +656,7 @@ export default function TavernApp({
   // Casting a spell from the sheet: roll its dice, spend the slot and tell the Dungeon Master
   const handleCastSpell = async (spellId, target = '') => {
     if (isGenerating || isRollingCheckRef.current) return;
+    if (blockedByConditions()) return;
 
     const result = castSpell(character, spellId, sides => rollDie(sides, { silent: true }));
     if (!result.ok) {
@@ -640,6 +693,7 @@ export default function TavernApp({
       }
 
       setCharacter(result.character);
+      if (cast.cured?.length) pushSystemMessage(`✨ ${character.name} se libra de: ${cast.cured.join(', ')}.`);
       setMobileTab('story');
       handleSendAction(describeCast(cast, { target, dc: SPELL_ATTACK_DC }), {
         sheet: result.character,
@@ -664,16 +718,35 @@ export default function TavernApp({
   const handleRest = (kind) => {
     if (isGenerating || isRollingCheckRef.current) return;
 
+    // What the rest does to the conditions (longRest / shortRest apply it): chronicle and memory
+    const describeRestConditions = () => {
+      const { removed, exhaustion } = restConditions(character, kind);
+      const parts = [];
+      const names = [...new Set(removed.map(c => conditionName(c.id).toLowerCase()))];
+      if (names.length) parts.push(`deja de estar ${names.join(', ')}`);
+      if (exhaustion.before > exhaustion.after) {
+        parts.push(exhaustion.after ? `su agotamiento baja a nivel ${exhaustion.after}` : 'ya no sufre agotamiento');
+        recordEvent(exhaustion.after ? `El agotamiento de ${character.name} baja a nivel ${exhaustion.after}` : `${character.name} se recupera del agotamiento`);
+      }
+      removed.forEach(c => {
+        const fact = conditionFact(character.name, { id: c.id, action: 'remove', level: null, condition: c });
+        if (fact && c.id !== 'agotamiento') recordEvent(fact);
+      });
+      if (parts.length) pushSystemMessage(`🛏️ Tras el descanso, ${character.name} ${parts.join(' y ')}.`);
+      return parts.length ? ` Además, ${parts.join(' y ')}.` : '';
+    };
+
     if (kind === 'long') {
       if (character.gold < LONG_REST_COST) {
         pushSystemMessage(`🛏️ Necesitas ${LONG_REST_COST} monedas de oro para una habitación.`);
         return;
       }
       const rested = { ...longRest(character), gold: character.gold - LONG_REST_COST };
+      const extra = describeRestConditions();
       setCharacter(rested);
       setMobileTab('story');
       handleSendAction(
-        `Pago ${LONG_REST_COST} monedas de oro por una habitación y hago un descanso largo hasta el amanecer. Recupero todos mis puntos de golpe${rested.spellcasting ? ' y mi magia' : ''}.`,
+        `Pago ${LONG_REST_COST} monedas de oro por una habitación y hago un descanso largo hasta el amanecer. Recupero todos mis puntos de golpe${rested.spellcasting ? ' y mi magia' : ''}.${extra}`,
         { sheet: rested, rest: 'long', effectsApplied: true }
       );
       return;
@@ -684,10 +757,11 @@ export default function TavernApp({
       healed > 0 && `gasto mi dado de golpe (d${character.hitDie}: ${die}) y recupero ${healed} puntos de golpe`,
       slotsRecovered && 'recupero mi magia de pacto'
     ].filter(Boolean);
+    const extra = describeRestConditions();
     setCharacter(rested);
     setMobileTab('story');
     handleSendAction(
-      `Hago un descanso corto de una hora junto al fuego${gains.length ? `: ${gains.join(' y ')}` : ''}.`,
+      `Hago un descanso corto de una hora junto al fuego${gains.length ? `: ${gains.join(' y ')}` : ''}.${extra}`,
       { sheet: rested, rest: 'short', effectsApplied: true }
     );
   };

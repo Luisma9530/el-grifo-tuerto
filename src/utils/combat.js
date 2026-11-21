@@ -4,6 +4,7 @@
 import { WEAPON_PROFICIENCY, EXTRA_ATTACK, MARTIAL_ARTS_DIE, RAGE_DAMAGE, PROPERTY_NAMES } from '../data/weapons';
 import { parseDice } from './spellcasting';
 import { getWeapon, weaponForItem, heldWeapons, canStrikeUnarmed, armorDisadvantage } from './equipment';
+import { attackModifiers, rollD20 } from './conditions';
 
 const mod = score => Math.floor(((Number(score) || 10) - 10) / 2);
 const byLevel = (table, level) => Object.entries(table)
@@ -122,14 +123,18 @@ function rollDice(notation, rollDie, multiplier = 1) {
 /**
  * Resolve an Attack action with one of the hero's attack options.
  * @param {(sides: number) => number} rollDie
- * @param {{ targetAC?: number, raging?: boolean }} [options]
+ * @param {{ targetAC?: number, raging?: boolean, target?: object, targetUid?: string }} [options]
+ *   target: the creature attacked, with its `conditions` (in a fight); without it only the
+ *   hero's own conditions count (see attackModifiers in conditions.js)
  * @returns {{ ok: false, error: string } | { ok: true, attack: object }}
- *   attack: { option, targetAC, rolls: [{ raw, total, hit, crit, fumble, damage: { dice, sides, bonus, total } | null }],
- *             sneak: { dice, sides, total } | null, rage: number, totalDamage, hits }
- *   Natural 20: hit, damage dice doubled. Natural 1: miss. Sneak Attack is added
- *   once, to the first hit with a finesse or ranged weapon.
+ *   attack: { option, targetAC, rolls: [{ raw, dice, total, hit, crit, fumble, damage: { dice, sides, bonus, total } | null }],
+ *             sneak: { dice, sides, total } | null, rage: number, totalDamage, hits,
+ *             mode, advantage, disadvantage (reasons, or null), penalty, ranged }
+ *   Natural 20: hit, damage dice doubled. Natural 1: miss. A hit in melee against a
+ *   paralyzed or unconscious target is a critical too. Sneak Attack is added once,
+ *   to the first hit with a finesse or ranged weapon.
  */
-export function resolveAttack(character, optionId, rollDie, { targetAC = DEFAULT_TARGET_AC, raging = false } = {}) {
+export function resolveAttack(character, optionId, rollDie, { targetAC = DEFAULT_TARGET_AC, raging = false, target = null, targetUid = null } = {}) {
   const option = attackOptions(character).find(o => o.id === optionId);
   if (!option) return { ok: false, error: 'No llevas esa arma en la mano.' };
 
@@ -140,15 +145,21 @@ export function resolveAttack(character, optionId, rollDie, { targetAC = DEFAULT
   const sneakEligible = sneakDice > 0 && option.weapon
     && (option.weapon.properties.includes('finesse') || option.weapon.kind === 'ranged');
 
-  // Armor without training: Disadvantage on Strength and Dexterity attacks
-  const disadvantage = armorDisadvantage(character, { ability: option.ability });
+  // Conditions of both sides, and armor without training (Disadvantage on Strength and Dexterity attacks)
+  const ranged = option.weapon?.kind === 'ranged';
+  const mods = attackModifiers(character, target, { ranged, targetUid });
+  const armor = armorDisadvantage(character, { ability: option.ability });
+  if (armor) mods.disadvantage.unshift(armor);
   let sneak = null;
+  let mode = 'normal';
   const rolls = Array.from({ length: count }, () => {
-    const raw = disadvantage ? Math.min(rollDie(20), rollDie(20)) : rollDie(20);
-    const total = raw + option.attackBonus;
-    const crit = raw === 20;
+    const d20 = rollD20(rollDie, mods);
+    mode = d20.mode;
+    const raw = d20.raw;
+    const total = raw + option.attackBonus - mods.penalty;
     const fumble = raw === 1;
-    const hit = crit || (!fumble && total >= ac);
+    const hit = raw === 20 || (!fumble && total >= ac);
+    const crit = raw === 20 || (hit && mods.autoCrit);
     let damage = null;
     if (hit) {
       const rolled = rollDice(option.damage, rollDie, crit ? 2 : 1);
@@ -159,12 +170,19 @@ export function resolveAttack(character, optionId, rollDie, { targetAC = DEFAULT
         sneak = { dice: extra.dice, sides: 6, total: extra.dice.reduce((a, b) => a + b, 0) };
       }
     }
-    return { raw, total, hit, crit, fumble, damage };
+    return { raw, dice: d20.rolls, total, hit, crit, fumble, damage };
   });
 
   const hits = rolls.filter(r => r.hit).length;
   const totalDamage = rolls.reduce((sum, r) => sum + (r.damage?.total || 0), 0) + (sneak?.total || 0);
-  return { ok: true, attack: { option, targetAC: ac, rolls, sneak, rage, totalDamage, hits, disadvantage } };
+  return {
+    ok: true,
+    attack: {
+      option, targetAC: ac, rolls, sneak, rage, totalDamage, hits, mode, ranged, penalty: mods.penalty,
+      advantage: mode === 'advantage' ? mods.advantage.join(', ') : null,
+      disadvantage: mode === 'disadvantage' ? mods.disadvantage.join(', ') : null
+    }
+  };
 }
 
 /** The line written in the chronicle (and sent to the Dungeon Master). */
@@ -173,7 +191,9 @@ export function describeAttack(attack, target = '') {
   // Spanish contraction: "a el encapuchado" -> "al encapuchado"
   const who = target.trim().replace(/^el\s+/i, 'l ');
   const on = who ? (who.startsWith('l ') ? ` a${who}` : ` a ${who}`) : '';
-  const head = `Ataco${on} con ${option.weapon ? `mi ${option.name.toLowerCase()}` : 'un golpe sin armas'}${attack.rage ? ' en plena furia' : ''}.${attack.disadvantage ? ` Con desventaja (${attack.disadvantage}).` : ''}`;
+  const mode = attack.disadvantage ? ` Con desventaja (${attack.disadvantage}).` : attack.advantage ? ` Con ventaja (${attack.advantage}).` : '';
+  const tired = attack.penalty ? ` Agotamiento: −${attack.penalty} al ataque.` : '';
+  const head = `Ataco${on} con ${option.weapon ? `mi ${option.name.toLowerCase()}` : 'un golpe sin armas'}${attack.rage ? ' en plena furia' : ''}.${mode}${tired}`;
   const parts = attack.rolls.map((r, i) => {
     const label = attack.rolls.length > 1 ? `Ataque ${i + 1}` : 'Ataque';
     const roll = `[🎲 ${label} D20: ${r.raw} (${r.total - r.raw >= 0 ? '+' : ''}${r.total - r.raw}) = ${r.total} vs CA ${attack.targetAC}]`;

@@ -5,6 +5,8 @@ import { CLASSES, FEATS, BACKGROUNDS, SPECIES, ABILITIES, LEVEL_1_PROFICIENCY_BO
 import { SPELLS, CLASS_SPELLCASTING, MAGIC_INITIATE, SPECIES_CANTRIPS } from '../data/spells';
 import { SPELL_PROGRESSION, CANTRIP_UPGRADE_LEVELS } from '../data/progression';
 import { wearsUntrainedArmor } from './equipment';
+import { attackModifiers, rollD20, removeConditions, reduceExhaustion, restConditions, conditionName } from './conditions';
+import { spellConditions, TOUCH_SPELLS } from '../data/spellConditions';
 
 const mod = score => Math.floor(((Number(score) || 10) - 10) / 2);
 const abilityName = id => ABILITIES.find(a => a.id === id)?.name || id;
@@ -320,15 +322,19 @@ export function spellRows(character) {
  * @param {(sides: number) => number} rollDie
  * @returns {{ok: false, error: string} | {ok: true, character: object, cast: object}}
  *   cast: { spell, modifier, saveDC, attackBonus, usedSlot, slotLevel, usedFreeCast,
- *           attack: {raw, total, isNat20, isNat1} | null,
+ *           attack: {raw, rolls, total, isNat20, isNat1, mode, advantage, disadvantage, autoCrit, penalty} | null,
  *           damage: {dice, sides, bonus, total, type} | null,
- *           heal: {dice, sides, bonus, total, applied} | null }
- *   Healing spells heal the caster. A natural 20 on a spell attack doubles the damage dice.
+ *           heal: {dice, sides, bonus, total, applied} | null,
+ *           cured: string[] (condition names removed from the caster) }
+ *   Healing spells heal the caster; spells that cure conditions (Lesser Restoration...)
+ *   cure the caster too. A natural 20 on a spell attack doubles the damage dice.
+ *   `options.target` / `options.targetUid`: the creature attacked, so its conditions
+ *   give advantage or disadvantage (the caster's own conditions always count).
  *   A spell uses the lowest free slot of its level or higher; cast with a higher slot,
  *   damage and healing gain one die per level above (a simplification of each spell's
  *   own "at higher levels" rule). Cantrips gain dice with character level.
  */
-export function castSpell(character, spellId, rollDie) {
+export function castSpell(character, spellId, rollDie, { target = null, targetUid = null } = {}) {
   const casting = character.spellcasting;
   const entry = casting?.known.find(k => k.id === spellId);
   const spell = getSpell(spellId);
@@ -361,8 +367,15 @@ export function castSpell(character, spellId, rollDie) {
   const numbers = spellNumbers(character, entry);
   let attack = null;
   if (spell.kind === 'attack') {
-    const raw = rollDie(20);
-    attack = { raw, total: raw + numbers.attackBonus, isNat20: raw === 20, isNat1: raw === 1 };
+    const mods = attackModifiers(character, target, { ranged: !TOUCH_SPELLS.includes(spellId), targetUid });
+    const d20 = rollD20(rollDie, mods);
+    const raw = d20.raw;
+    attack = {
+      raw, rolls: d20.rolls, total: raw + numbers.attackBonus - mods.penalty, isNat20: raw === 20, isNat1: raw === 1,
+      mode: d20.mode, penalty: mods.penalty, autoCrit: mods.autoCrit,
+      advantage: d20.mode === 'advantage' ? mods.advantage.join(', ') : null,
+      disadvantage: d20.mode === 'disadvantage' ? mods.disadvantage.join(', ') : null
+    };
   }
 
   const rolledDamage = spell.damage
@@ -379,10 +392,32 @@ export function castSpell(character, spellId, rollDie) {
     heal = { ...rolled, bonus: rolled.bonus + (spell.addMod ? numbers.modifier : 0), total, applied: hp - character.hp };
   }
 
+  // Spells that end conditions (on the caster: the hero is alone)
+  const cures = spellConditions(spellId)?.cures;
+  let next = { ...character, hp, spellcasting: nextCasting };
+  const cured = [];
+  if (cures) {
+    let left = cures.count || Infinity;
+    const { creature, removed } = removeConditions(next, c => {
+      if (left <= 0 || !cures.ids.includes(c.id)) return false;
+      left -= 1;
+      return true;
+    });
+    next = creature;
+    removed.forEach(c => cured.push(conditionName(c.id)));
+    if (cures.exhaustion && left > 0) {
+      const tired = reduceExhaustion(next, cures.exhaustion);
+      if (tired.before > tired.after) {
+        next = tired.creature;
+        cured.push(tired.after ? `un nivel de Agotamiento (queda en ${tired.after})` : 'el Agotamiento');
+      }
+    }
+  }
+
   return {
     ok: true,
-    character: { ...character, hp, spellcasting: nextCasting },
-    cast: { spell, ...numbers, usedSlot, slotLevel, usedFreeCast, attack, damage, heal }
+    character: next,
+    cast: { spell, ...numbers, usedSlot, slotLevel, usedFreeCast, attack, damage, heal, cured }
   };
 }
 
@@ -396,6 +431,8 @@ export function describeCast(cast, { target = '', dc = 12 } = {}) {
   const what = spell.level === 0 ? 'el truco' : 'el conjuro';
   const upcast = cast.slotLevel && cast.slotLevel > spell.level ? ` con un espacio de nivel ${cast.slotLevel}` : '';
   const parts = [`Lanzo ${what} **${spell.name}**${on}${upcast}.`];
+  if (cast.attack?.advantage) parts.push(`Con ventaja (${cast.attack.advantage}).`);
+  if (cast.attack?.disadvantage) parts.push(`Con desventaja (${cast.attack.disadvantage}).`);
   const dmg = cast.damage ? `${cast.damage.total} de daño ${cast.damage.type}` : null;
 
   if (cast.attack) {
@@ -415,6 +452,7 @@ export function describeCast(cast, { target = '', dc = 12 } = {}) {
   } else {
     parts.push(`Efecto: ${spell.desc}`);
   }
+  if (cast.cured?.length) parts.push(`Me libro de: ${cast.cured.join(', ')}.`);
   return parts.join(' ');
 }
 
@@ -425,11 +463,14 @@ export function describeCast(cast, { target = '', dc = 12 } = {}) {
 /** Gold a room at the inn costs: the price of a long rest. */
 export const LONG_REST_COST = 5;
 
-/** Long rest: full hit points, all spell slots, free casts and the hit die back. */
+/**
+ * Long rest: full hit points, all spell slots, free casts and the hit die back;
+ * conditions that last until a rest end and Exhaustion drops one level.
+ */
 export function longRest(character) {
   const casting = character.spellcasting;
   return {
-    ...character,
+    ...restConditions(character, 'long').creature,
     hp: character.maxHp,
     hitDiceUsed: 0,
     spellcasting: casting ? { ...restoreSlots(casting), freeCastsUsed: [] } : casting
@@ -446,7 +487,8 @@ export const hasHitDie = character => hitDiceLeft(character) > 0;
  * @returns {{ character: object, healed: number, die: number | null, slotsRecovered: boolean }}
  */
 export function shortRest(character, rollDie) {
-  let next = { ...character };
+  // Conditions that last "until a short rest" end
+  let next = restConditions(character, 'short').creature;
   let healed = 0;
   let die = null;
 
