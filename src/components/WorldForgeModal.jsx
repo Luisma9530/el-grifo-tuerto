@@ -36,9 +36,9 @@ export default function WorldForgeModal({ isOpen, onClose, onCreateWorld }) {
           { name: 'Parroquianos de la Barra', status: 'Amistoso', rep: 80, color: 'text-amber-400' }
         ],
         mapNodes: [
-          { id: 'tavern', name: tavernName || 'La Vieja Posada', status: 'current', x: 25, y: 50, desc: 'Fuego ardiente y jarras de cerveza.' },
-          { id: 'ruins', name: 'Alrededores Prohibidos', status: 'discovered', x: 50, y: 35, desc: 'Ecos de extrañas criaturas.' },
-          { id: 'fortress', name: 'Bastión del Tirano', status: 'locked', x: 80, y: 60, desc: 'Muros infranqueables y guardias armados.' }
+          { id: 'tavern', name: tavernName || 'La Vieja Posada', settlement: 'tavern', status: 'current', x: 25, y: 50, desc: 'Fuego ardiente y jarras de cerveza.' },
+          { id: 'ruins', name: 'Alrededores Prohibidos', settlement: null, status: 'discovered', x: 50, y: 35, desc: 'Ecos de extrañas criaturas.' },
+          { id: 'fortress', name: 'Bastión del Tirano', settlement: null, status: 'locked', x: 80, y: 60, desc: 'Muros infranqueables y guardias armados.' }
         ],
         initialStory: `El viento susurra historias olvidadas por las rendijas de "${tavernName || 'La Vieja Posada'}". 
 

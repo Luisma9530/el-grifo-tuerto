@@ -3,7 +3,7 @@ import { tavernAudio } from './audio';
 import { buildDMPrompt, parseDMReply, dmResponseSchema } from './dmPrompt';
 import { requestGemini } from './geminiClient';
 import { narrateSpell, narrateRest, narrateAttack } from './spellNarration';
-import { narrateCombatEnd, startLocalFight, isAggressive } from './combatNarration';
+import { narrateCombatEnd, startLocalFight, isAggressive, shopForAction, narrateShopOpening } from './combatNarration';
 
 // Helper to calculate D&D stat modifier from score (e.g. 16 -> +3, 10 -> 0, 8 -> -1)
 export function getModifier(score) {
@@ -25,8 +25,10 @@ export function rollDie(sides = 20, { silent = false } = {}) {
 }
 
 // Roll a d20 check with any modifier (ability, or skill with proficiency) against a DC
-export function rollCheck({ modifier = 0, statName = 'Tirada', dc = 12, silent = false } = {}) {
-  const rawRoll = rollDie(20, { silent });
+// `disadvantage`: roll two d20 and keep the lower one (e.g. armor without training)
+export function rollCheck({ modifier = 0, statName = 'Tirada', dc = 12, silent = false, disadvantage = false } = {}) {
+  const first = rollDie(20, { silent });
+  const rawRoll = disadvantage ? Math.min(first, rollDie(20, { silent: true })) : first;
   const total = rawRoll + modifier;
 
   const isNat20 = rawRoll === 20;
@@ -117,7 +119,7 @@ export async function testGeminiKey(key) {
 async function askGemini(key, context) {
   const structured = await requestGemini(key, {
     prompt: buildDMPrompt({ ...context, structured: true }),
-    generationConfig: { responseMimeType: 'application/json', responseSchema: dmResponseSchema(context.requestSummary, Boolean(context.bestiary)) }
+    generationConfig: { responseMimeType: 'application/json', responseSchema: dmResponseSchema(context.requestSummary, Boolean(context.bestiary), Boolean(context.allowShop)) }
   });
   if (structured.ok || structured.reason !== 'bad-request') return structured;
 
@@ -161,7 +163,8 @@ let currentKeyRotationIndex = 0;
 export async function generateDMResponse({
   playerAction, character, world, history = [], apiKey = null, apiKeys = [], playerRoll = null,
   spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
-  summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null
+  summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null,
+  allowShop = false, shopsHere = '', shopTypesHere = [], loot = null
 }) {
   // Rests, finished fights and spells without an attack or a saving throw involve no d20 at all
   const needsNoRoll = Boolean(rest) || Boolean(weaponAttack) || Boolean(combatResult)
@@ -199,7 +202,7 @@ export async function generateDMResponse({
       try {
         const reply = await askGemini(keyToUse, {
           playerAction, character, world, history, d20, playerRoll, spellCast, rest, effectsApplied,
-          weaponAttack, summary, events, requestSummary, bestiary, combatResult
+          weaponAttack, summary, events, requestSummary, bestiary, combatResult, allowShop, shopsHere
         });
 
         if (reply.ok) {
@@ -209,16 +212,20 @@ export async function generateDMResponse({
             currentKeyRotationIndex = (activeIdx + 1) % pool.length;
             // A fight starts: the game rolls it, so no dice tag in the narration
             const startsFight = Boolean(bestiary && parsed.combat);
+            // A shop opens: the game sets prices and gold, so the narration moves no money
+            const shop = allowShop && !startsFight ? parsed.shop : null;
             return {
               text: startsFight ? stripRollTags(parsed.text) : parsed.text,
               suggestedActions: parsed.suggestedActions,
               // After a finished fight: no damage, healing or XP from the narration (already resolved)
               damageTaken: combatResult ? 0 : parsed.damageTaken,
               healing: combatResult ? 0 : parsed.healing,
-              goldEarned: parsed.goldEarned,
+              // After a fight the loot was given by the game; in a shop the game handles the gold
+              goldEarned: combatResult || shop ? 0 : parsed.goldEarned,
               xpEarned: rest || combatResult ? 0 : parsed.xpEarned,
               summary: parsed.summary,
               combat: bestiary ? parsed.combat : null,
+              shop,
               // A finished fight is narrated as it happened: no new wounds from the narration
               limbChanges: combatResult ? [] : parsed.limbChanges || [],
               // A fight that starts is rolled by the game, not by Duncan
@@ -261,8 +268,9 @@ export async function generateDMResponse({
   // Rests and spells have their own narration
   let spellXp = null;
   let combat = null;
+  let shop = null;
   if (combatResult) {
-    ({ text, suggestedActions, goldEarned } = narrateCombatEnd(combatResult, { character, rng: Math.random }));
+    ({ text, suggestedActions, goldEarned } = narrateCombatEnd(combatResult, { character, rng: Math.random, loot }));
     spellXp = 0;
   } else if (bestiary && !playerRoll && isAggressive(actionLower)) {
     // A fight starts: the game resolves it with creatures of the bestiary
@@ -324,6 +332,12 @@ La prueba de ${stat} no sale: te quedas corto por poco y la ocasión se te escap
           'Disimular y pedir una jarra',
           'Preguntar a Duncan por otra opción'
         ];
+  }
+
+  // Shops: the game opens the counter with its own prices
+  else if (allowShop && (shop = shopForAction(actionLower, shopTypesHere))) {
+    ({ text, suggestedActions } = narrateShopOpening(shop, { character, world }));
+    spellXp = 0;
   }
 
   // Combat / Attack actions
@@ -478,6 +492,7 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     goldEarned,
     xpEarned: localXp({ text, rest, spellXp, isCrit, isCritFail, isHighRoll }),
     combat,
+    shop,
     limbChanges: [],
     // Set when Gemini keys exist but the AI could not answer this turn
     notice: aiFailure ? AI_FAILURE_NOTICES[aiFailure] || AI_FAILURE_NOTICES.overloaded : null,

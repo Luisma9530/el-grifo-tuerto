@@ -168,3 +168,54 @@ describe('generateDMResponse (procedural engine, no API keys)', () => {
     expect(fumble.damageTaken).toBeGreaterThan(0);
   });
 });
+
+describe('shops with the local engine', () => {
+  it('opens the shop the action asks for, without moving gold', async () => {
+    forceD20(10);
+    const smith = await generateDMResponse({ playerAction: 'Quiero comprar una armadura en la herrería', character, world, allowShop: true, shopTypesHere: ['smith', 'general'] });
+    expect(smith.shop).toBe('smith');
+    expect(smith.goldEarned).toBe(0);
+    const potion = await generateDMResponse({ playerAction: 'Voy al boticario a por pociones', character, world, allowShop: true });
+    expect(potion.shop).toBe('alchemist');
+    const plain = await generateDMResponse({ playerAction: 'Quiero comprar cosas', character, world, allowShop: true, shopTypesHere: ['general'] });
+    expect(plain.shop).toBe('general');
+  });
+
+  it('does not open shops when they are not allowed or the hero is not trading', async () => {
+    forceD20(10);
+    expect((await generateDMResponse({ playerAction: 'Comprar una espada', character, world })).shop).toBeNull();
+    expect((await generateDMResponse({ playerAction: 'Miro la armadura del guardia', character, world, allowShop: true })).shop).toBeNull();
+  });
+
+  it('after a fight the local engine tells the loot and adds no gold', async () => {
+    forceD20(10);
+    const reply = await generateDMResponse({
+      playerAction: 'Narra el final del combate', character, world,
+      combatResult: '⚔️ Kaelen gana el combate en 2 rondas.', loot: { coins: 7, items: [{ name: 'Daga' }] }
+    });
+    expect(reply.goldEarned).toBe(0);
+    expect(reply.text).toContain('7 po y Daga');
+  });
+});
+
+describe('shops with Gemini', () => {
+  const reply = payload => ({ ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }] }) });
+  const base = { narracion: 'Entras en la forja de Brann.', usaTirada: false, danio: 0, curacion: 0, oro: -40, experiencia: 0, opciones: ['Mirar'] };
+
+  it('a shop Duncan opens comes back validated and the narration moves no gold', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(reply({ ...base, tienda: { tipo: 'herrero' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await generateDMResponse({ playerAction: 'Voy a la forja', character, world, apiKeys: ['clave-de-prueba-123'], allowShop: true });
+    expect(res.shop).toBe('smith');
+    expect(res.goldEarned).toBe(0);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.generationConfig.responseSchema.properties.tienda).toBeDefined();
+  });
+
+  it('ignores a shop when it was not allowed', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply({ ...base, tienda: { tipo: 'herrero' } })));
+    const res = await generateDMResponse({ playerAction: 'Voy a la forja', character, world, apiKeys: ['clave-de-prueba-123'] });
+    expect(res.shop).toBeNull();
+    expect(res.goldEarned).toBe(-10); // clamped to the gold the hero has
+  });
+});

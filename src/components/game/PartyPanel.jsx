@@ -7,7 +7,8 @@ import { tavernAudio } from '../../utils/audio';
 import SpellsTab, { RestButtons } from './SpellsTab';
 import AttacksPanel from './AttacksPanel';
 import EquipmentPanel from './EquipmentPanel';
-import { normalizeEquipment, HANDS } from '../../utils/equipment';
+import { normalizeEquipment, HANDS, isWorn } from '../../utils/equipment';
+import { formatCoins, healingDice, inventoryWeight, formatKg } from '../../utils/items';
 
 const HELD_LABELS = { main: 'En la mano principal', off: 'En la mano secundaria', both: 'En las dos manos' };
 import { xpProgress, canLevelUp, canAdvance } from '../../utils/leveling';
@@ -21,6 +22,7 @@ export default function PartyPanel({
   onRest,
   onLevelUp,
   onAttack,
+  onUseItem,
   busy = false,
   inCombat = false
 }) {
@@ -35,21 +37,13 @@ export default function PartyPanel({
   };
   const hpPercent = Math.max(0, Math.min(100, Math.round((character.hp / character.maxHp) * 100)));
 
+  // Potions roll their own healing; other consumables are narrated by Duncan
   const handleUseItem = (item) => {
-    if (item.type === 'consumable' && item.uses > 0) {
-      tavernAudio.playTankardClink();
-      // Heal 6 hp on average
-      const healAmt = 6;
-      const newHp = Math.min(character.maxHp, character.hp + healAmt);
-      onUpdateCharacter({
-        ...character,
-        hp: newHp,
-        inventory: character.inventory.map(inv => 
-          inv.id === item.id ? { ...inv, uses: inv.uses - 1 } : inv
-        ).filter(inv => inv.uses === undefined || inv.uses > 0)
-      });
-    }
+    if (item.type !== 'consumable' || (item.uses !== undefined && item.uses <= 0)) return;
+    tavernAudio.playTankardClink();
+    onUseItem(item);
   };
+  const weight = inventoryWeight(character);
 
   return (
     <div className="h-full flex flex-col bg-[#120f18] border-r border-amber-950/60 overflow-hidden text-stone-200">
@@ -153,7 +147,7 @@ export default function PartyPanel({
                 <span>Oro</span>
               </div>
               <span className="font-mono font-bold text-amber-300 text-sm">
-                {character.gold} po
+                {formatCoins(character.gold)}
               </span>
             </div>
           </div>
@@ -232,7 +226,7 @@ export default function PartyPanel({
                 ].map(({ key, name, stat }) => (
                   <button
                     key={key}
-                    onClick={() => onRollCheck({ label: name, modifier: getModifierNumber(stat) })}
+                    onClick={() => onRollCheck({ label: name, modifier: getModifierNumber(stat), ability: key })}
                     className="p-2.5 rounded-xl bg-[#17131f] hover:bg-amber-950/40 border border-stone-800 hover:border-amber-600/50 flex items-center justify-between text-left transition-all group"
                   >
                     <div>
@@ -260,7 +254,7 @@ export default function PartyPanel({
                 {skillRows(character).map((skill, index) => (
                   <button
                     key={skill.id}
-                    onClick={() => onRollCheck({ label: skill.name, modifier: skill.modifier })}
+                    onClick={() => onRollCheck({ label: skill.name, modifier: skill.modifier, ability: skill.ability, skillId: skill.id })}
                     title={`Tirar ${skill.name} (${skill.abilityShort})${skill.proficient ? ', con competencia' : ''}`}
                     className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-amber-950/40 transition-colors group ${
                       index % 2 ? 'bg-[#15111c]' : 'bg-[#17131f]'
@@ -330,9 +324,14 @@ export default function PartyPanel({
               locked={inCombat ? 'En combate, cambia de arma desde la vista de combate: gasta tu turno.' : null}
             />
 
-            <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block pt-1">
-              Inventario (lo que no está en tus manos va en la mochila):
-            </span>
+            <div className="flex items-baseline justify-between gap-2 pt-1">
+              <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider">
+                Inventario (lo que no llevas puesto ni en las manos va en la mochila):
+              </span>
+              <span className="text-[10px] font-mono text-stone-400 shrink-0" title={weight.unknown ? `${weight.unknown} objetos sin peso conocido no cuentan` : 'Peso del equipo según el SRD'}>
+                ⚖️ {formatKg(weight.kg)}{weight.unknown ? '*' : ''}
+              </span>
+            </div>
 
             {character.inventory?.map((item) => (
               <div
@@ -359,12 +358,20 @@ export default function PartyPanel({
                   </span>
                 )}
 
+                {isWorn(character, item.id) && (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold shrink-0 border bg-sky-950/50 border-sky-700/60 text-sky-200">
+                    👕 Puesta
+                  </span>
+                )}
+
                 {item.type === 'consumable' && (
                   <button
                     onClick={() => handleUseItem(item)}
-                    className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-stone-950 text-xs font-bold shrink-0 transition-colors shadow-sm"
+                    disabled={busy || inCombat}
+                    title={inCombat ? 'En combate, usa las pociones desde la vista de combate' : healingDice(item) ? `Recupera ${healingDice(item)} PG` : 'Usar'}
+                    className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-stone-950 text-xs font-bold shrink-0 transition-colors shadow-sm"
                   >
-                    Usar
+                    {healingDice(item) ? 'Beber' : 'Usar'}
                   </button>
                 )}
               </div>

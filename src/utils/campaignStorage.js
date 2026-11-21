@@ -3,6 +3,7 @@
 
 import { markCampaignsExported } from './backupReminder';
 import { normalizeEquipment } from './equipment';
+import { normalizeShops } from './shops';
 
 const CAMPAIGNS_STORAGE_KEY = 'tavern_saved_campaigns';
 const ACTIVE_CAMPAIGN_ID_KEY = 'tavern_active_campaign_id';
@@ -35,11 +36,13 @@ export function generateCampaignId() {
 
 /**
  * Bring a campaign saved by an older version up to date. Characters without
- * hands get a valid set (first weapon and shield) and healthy limbs.
+ * hands get a valid set (first weapon and shield) and healthy limbs; without
+ * an armor slot they wear their starting armor (same AC). Shops (stock kept
+ * per shop) start empty.
  */
 export function migrateCampaign(campaign) {
   if (!campaign || typeof campaign !== 'object' || !campaign.character || typeof campaign.character !== 'object') return campaign;
-  return { ...campaign, character: normalizeEquipment(campaign.character) };
+  return { ...campaign, character: normalizeEquipment(campaign.character), shops: normalizeShops(campaign.shops) };
 }
 
 /**
