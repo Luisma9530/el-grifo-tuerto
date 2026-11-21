@@ -1,10 +1,9 @@
 // Weapon attacks resolved by the game (no AI needed): attack rolls, damage,
 // critical hits, Extra Attack, Sneak Attack, Rage and the monk's Martial Arts.
 
-import {
-  WEAPONS, WEAPON_PROFICIENCY, EXTRA_ATTACK, MARTIAL_ARTS_DIE, RAGE_DAMAGE, WEAPON_NAME_HINTS, PROPERTY_NAMES
-} from '../data/weapons';
+import { WEAPON_PROFICIENCY, EXTRA_ATTACK, MARTIAL_ARTS_DIE, RAGE_DAMAGE, PROPERTY_NAMES } from '../data/weapons';
 import { parseDice } from './spellcasting';
+import { getWeapon, weaponForItem, heldWeapons, canStrikeUnarmed } from './equipment';
 
 const mod = score => Math.floor(((Number(score) || 10) - 10) / 2);
 const byLevel = (table, level) => Object.entries(table)
@@ -12,31 +11,9 @@ const byLevel = (table, level) => Object.entries(table)
   .reduce((value, [, v]) => v, null);
 
 export const DEFAULT_TARGET_AC = 12;
-export const getWeapon = id => WEAPONS.find(w => w.id === id) || null;
-
-/** The weapon an inventory item is (null for non-weapons). */
-export function weaponForItem(item) {
-  if (!item) return null;
-  if (item.weaponId) return getWeapon(item.weaponId);
-  if (item.type && item.type !== 'weapon') return null;
-  const name = String(item.name || '').toLowerCase();
-  const hint = WEAPON_NAME_HINTS.find(([words]) => name.includes(words));
-  return hint ? getWeapon(hint[1]) : null;
-}
-
-/** Weapons are ready to use unless the player unequipped them. */
-export const isEquipped = item => item.equipped !== false;
-
-/** Mark an inventory item as equipped or not. */
-export function setEquipped(character, itemId, equipped) {
-  return {
-    ...character,
-    inventory: (character.inventory || []).map(item => (item.id === itemId ? { ...item, equipped } : item))
-  };
-}
+export { getWeapon, weaponForItem };
 
 const level = character => Number(character.level) || 1;
-const hasShield = character => (character.inventory || []).some(item => /escudo/i.test(item.name || '') && isEquipped(item));
 
 export function isProficient(character, weapon) {
   if (weapon.category === 'simple') return true;
@@ -57,7 +34,9 @@ const isMonkWeapon = weapon => weapon.kind === 'melee'
   && (weapon.category === 'simple' || weapon.properties.includes('light'));
 
 /**
- * Everything the hero can attack with: equipped weapons plus an unarmed strike.
+ * Everything the hero can attack with: the weapons in their hands, plus an
+ * unarmed strike if a hand is free (monks can always strike unarmed).
+ * A versatile weapon uses its bigger die only when held with both hands.
  * Each option: { id, itemId, name, weapon, ability, attackBonus, damage, damageBonus, type, proficient, notes }
  */
 export function attackOptions(character) {
@@ -65,12 +44,9 @@ export function attackOptions(character) {
   const dex = mod(character.stats?.des);
   const pb = Number(character.proficiencyBonus) || 2;
   const maDie = martialArtsDie(character);
-  const twoHands = !hasShield(character);
   const options = [];
 
-  (character.inventory || []).forEach(item => {
-    const weapon = weaponForItem(item);
-    if (!weapon || !isEquipped(item)) return;
+  heldWeapons(character).forEach(({ item, weapon, twoHands }) => {
     const monk = maDie && isMonkWeapon(weapon);
     const finesse = weapon.properties.includes('finesse') || monk;
     const ability = weapon.kind === 'ranged' && !weapon.properties.includes('thrown')
@@ -105,7 +81,9 @@ export function attackOptions(character) {
     });
   });
 
-  // Unarmed strike: always available (monks use their Martial Arts die and Dexterity)
+  if (!canStrikeUnarmed(character)) return options;
+
+  // Unarmed strike (monks use their Martial Arts die and Dexterity)
   const unarmedAbility = maDie && dex > str ? 'des' : 'fue';
   const unarmedMod = unarmedAbility === 'des' ? dex : str;
   options.push({
@@ -153,7 +131,7 @@ function rollDice(notation, rollDie, multiplier = 1) {
  */
 export function resolveAttack(character, optionId, rollDie, { targetAC = DEFAULT_TARGET_AC, raging = false } = {}) {
   const option = attackOptions(character).find(o => o.id === optionId);
-  if (!option) return { ok: false, error: 'No tienes ese arma equipada.' };
+  if (!option) return { ok: false, error: 'No llevas esa arma en la mano.' };
 
   const ac = Number(targetAC) > 0 ? Math.round(Number(targetAC)) : DEFAULT_TARGET_AC;
   const rage = raging && option.ability === 'fue' && option.weapon?.kind !== 'ranged' ? rageBonus(character) : 0;

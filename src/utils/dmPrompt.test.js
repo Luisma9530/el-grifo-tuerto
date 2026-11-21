@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildDMPrompt, parseDMReply, dmResponseSchema, DM_RESPONSE_SCHEMA } from './dmPrompt';
+import { buildDMPrompt, parseDMReply, dmResponseSchema, DM_RESPONSE_SCHEMA, cleanLimbChanges } from './dmPrompt';
 
 const character = {
   name: 'Kaelen', race: 'Elfo Silvano', class: 'Pícaro (Nivel 3)', hp: 12, maxHp: 28, ac: 15, gold: 10,
@@ -92,7 +92,8 @@ describe('parseDMReply', () => {
       xpEarned: 0,
       usedRoll: true,
       summary: null,
-      combat: null
+      combat: null,
+      limbChanges: []
     });
     expect(parseDMReply(reply({ experiencia: 60 }), character).xpEarned).toBe(60);
     expect(parseDMReply(reply({ experiencia: 5000 }), character).xpEarned).toBe(300);
@@ -169,5 +170,47 @@ describe('campaign memory and resolved attacks in the prompt', () => {
     const prompt = buildDMPrompt({ playerAction: 'Ataco con mi espadón...', character, world, history: [], d20: 10, weaponAttack: { hits: 1 } });
     expect(prompt).toContain('El juego YA ha resuelto este ataque');
     expect(prompt).not.toContain('YA se ha lanzado para esta acción');
+  });
+});
+
+describe('limbs in the structured reply', () => {
+  it('the schema and the prompt ask for them', () => {
+    const limbs = DM_RESPONSE_SCHEMA.properties.extremidades;
+    expect(limbs.items.properties.extremidad.enum).toEqual(['brazoDerecho', 'brazoIzquierdo', 'piernaDerecha', 'piernaIzquierda']);
+    expect(limbs.items.properties.estado.enum).toEqual(['sana', 'inutilizada', 'perdida']);
+    expect(DM_RESPONSE_SCHEMA.required).not.toContain('extremidades');
+    expect(dmResponseSchema(true, true).properties.extremidades).toBe(limbs);
+    const prompt = buildDMPrompt({ playerAction: 'x', character, world, d20: 10 });
+    expect(prompt).toContain('"extremidades"');
+    expect(prompt).toContain('En las manos: Daga de Acero.'); // older sheet: the first weapon goes in hand
+  });
+
+  it('tells Duncan what is in hand and which limbs are injured', () => {
+    const armed = { ...character, inventory: [{ id: 'd', name: 'Daga de Acero', type: 'weapon' }], limbs: { leftArm: 'lost', rightLeg: 'disabled' } };
+    const prompt = buildDMPrompt({ playerAction: 'x', character: armed, world, d20: 10 });
+    expect(prompt).toContain('En las manos: Daga de Acero.');
+    expect(prompt).toContain('Extremidades heridas: brazo izquierdo perdido, pierna derecha inutilizada.');
+  });
+
+  it('keeps only valid changes, one per limb', () => {
+    expect(cleanLimbChanges([
+      { extremidad: 'brazoIzquierdo', estado: 'perdida' },
+      { extremidad: 'cola', estado: 'perdida' },
+      { extremidad: 'piernaDerecha', estado: 'rota' },
+      { extremidad: 'piernaDerecha', estado: 'Inutilizada' },
+      'nada', null,
+      { extremidad: 'brazoIzquierdo', estado: 'sana' }
+    ])).toEqual([{ limb: 'leftArm', status: 'ok' }, { limb: 'rightLeg', status: 'disabled' }]);
+    expect(cleanLimbChanges('brazo')).toEqual([]);
+    expect(cleanLimbChanges(undefined)).toEqual([]);
+  });
+
+  it('parses them from the reply', () => {
+    const raw = JSON.stringify({
+      narracion: 'La trampa se cierra sobre tu brazo.', usaTirada: false, danio: 4, curacion: 0, oro: 0, experiencia: 0,
+      opciones: ['Gritar'], extremidades: [{ extremidad: 'brazoDerecho', estado: 'inutilizada' }]
+    });
+    expect(parseDMReply(raw, character).limbChanges).toEqual([{ limb: 'rightArm', status: 'disabled' }]);
+    expect(parseDMReply('Texto sin JSON', character).limbChanges).toEqual([]);
   });
 });

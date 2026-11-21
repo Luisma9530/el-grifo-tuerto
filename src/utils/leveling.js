@@ -13,7 +13,8 @@ export const EPIC_MAX_ABILITY_SCORE = 30;
 
 /** Short description of a class or subclass feature (empty if unknown). */
 export const featureInfo = name => FEATURE_INFO?.[name] || '';
-import { getClass, getSpecies, abilityModifier, computeArmorClass } from './characterBuilder';
+import { getClass, getSpecies, abilityModifier, computeBaseArmorClass } from './characterBuilder';
+import { normalizeEquipment } from './equipment';
 import { spellsFor, slotsForLevel, slotTable, maxSlotLevel, getSpell } from './spellcasting';
 
 const ABILITY_IDS = ABILITIES.map(a => a.id);
@@ -294,7 +295,8 @@ export function applyLevelUp(character, choices) {
     maxHp: character.maxHp + gained,
     hp: character.hp + gained,
     proficiencyBonus: plan.proficiencyAfter,
-    ac: computeArmorClass(cls, stats),
+    // The shield (if in hand) is added by normalizeEquipment
+    acBase: computeBaseArmorClass(cls, stats),
     subclass: plan.subclass ? plan.subclass.name : character.subclass || null,
     classFeatures: [
       ...(character.classFeatures || []),
@@ -305,7 +307,7 @@ export function applyLevelUp(character, choices) {
   };
 
   return {
-    character: next,
+    character: normalizeEquipment(next),
     summary: { level, hpGain: gained, features: plan.features.filter(f => f !== 'Don Épico').concat(boon ? [boon.name] : []), learned, asi: bonuses }
   };
 }

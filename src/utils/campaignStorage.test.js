@@ -194,7 +194,8 @@ describe('createNewCampaign', () => {
     expect(created.suggestedActions).toHaveLength(4);
     expect(created.world).toEqual(world);
     expect(created.world).not.toBe(world);
-    expect(created.character).toEqual(character);
+    expect(created.character).toMatchObject(character); // plus hands and limbs (see equipment.js)
+    expect(created.character.hands).toEqual({ main: null, off: null });
     expect(created.character).not.toBe(character);
     expect(getAllCampaigns()).toHaveLength(1);
     expect(getActiveCampaignId()).toBe(created.id);
@@ -353,5 +354,40 @@ describe('importCampaignsFromJson', () => {
     const noValid = importCampaignsFromJson(JSON.stringify([null, { foo: 1 }]));
     expect(noValid.success).toBe(false);
     expect(getAllCampaigns()).toEqual([]);
+  });
+});
+
+describe('older saves', () => {
+  const oldHero = {
+    name: 'Valeria', ac: 18,
+    inventory: [
+      { id: 'espada', name: 'Espada Larga Consagrada', type: 'weapon' },
+      { id: 'escudo', name: 'Escudo de Acero', type: 'armor' },
+      { id: 'arco', name: 'Arco largo', type: 'weapon', equipped: false }
+    ]
+  };
+
+  it('load with a valid set of hands, healthy limbs and the same AC', () => {
+    storeRaw([{ id: 'old', world, character: oldHero, messages: [] }]);
+    const loaded = getCampaignById('old').character;
+    expect(loaded.hands).toEqual({ main: 'espada', off: 'escudo' });
+    expect(loaded.limbs).toEqual({ rightArm: 'ok', leftArm: 'ok', rightLeg: 'ok', leftLeg: 'ok' });
+    expect(loaded).toMatchObject({ ac: 18, acBase: 16 });
+    expect(loaded.inventory.find(i => i.id === 'arco')).not.toHaveProperty('equipped');
+  });
+
+  it('keep hands and limbs when saved again', () => {
+    storeRaw([{ id: 'old', world, character: oldHero, messages: [] }]);
+    const hurt = { ...getCampaignById('old').character, limbs: { rightArm: 'ok', leftArm: 'lost', rightLeg: 'ok', leftLeg: 'ok' }, hands: { main: 'espada', off: null } };
+    saveCampaign({ id: 'old', world, character: hurt, messages: [] });
+    const raw = JSON.parse(localStorage.getItem(CAMPAIGNS_KEY))[0].character;
+    expect(raw).toMatchObject({ hands: { main: 'espada', off: null }, limbs: { leftArm: 'lost' }, ac: 16 });
+  });
+
+  it('are migrated when imported from JSON', () => {
+    const res = importCampaignsFromJson(JSON.stringify({ campaign: { world, character: oldHero, messages: [] } }));
+    expect(res.success).toBe(true);
+    const raw = JSON.parse(localStorage.getItem(CAMPAIGNS_KEY))[0].character;
+    expect(raw.hands).toEqual({ main: 'espada', off: 'escudo' });
   });
 });

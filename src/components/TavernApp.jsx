@@ -19,7 +19,8 @@ import {
 import { tavernAudio } from '../utils/audio';
 import { animateRoll, is3DDiceEnabled } from '../dice3d/controller';
 import { applySceneOutcome, rescueKnockedOut } from '../utils/sceneOutcome';
-import { createEncounter, runEnemyTurns, playerAction, describeEncounterResult } from '../utils/encounter';
+import { createEncounter, runEnemyTurns, playerAction, describeEncounterResult, injuriesIn } from '../utils/encounter';
+import { normalizeEquipment, applyLimbChanges, limbFact } from '../utils/equipment';
 import { keyMoments, narrateMoment, MAX_MOMENTS } from '../utils/combatNarration';
 import CombatView from './game/CombatView';
 import { addXp, canLevelUp, describeLevelUp } from '../utils/leveling';
@@ -71,13 +72,14 @@ export default function TavernApp({
     return activeWorld;
   });
 
+  // Older saves get hands and limbs (see equipment.js)
   const [character, setCharacter] = useState(() => {
-    if (activeCampaign?.character) return activeCampaign.character;
+    if (activeCampaign?.character) return normalizeEquipment(activeCampaign.character);
     if (currentCampaignId) {
       const camp = getCampaignById(currentCampaignId);
-      if (camp?.character) return camp.character;
+      if (camp?.character) return normalizeEquipment(camp.character);
     }
-    return activeCharacter;
+    return normalizeEquipment(activeCharacter);
   });
 
   const [isAudioActive, setIsAudioActive] = useState(false);
@@ -170,7 +172,7 @@ export default function TavernApp({
       setCurrentCampaignId(activeCampaign.id);
       setCampaignTitle(activeCampaign.title);
       setWorld(activeCampaign.world);
-      setCharacter(activeCampaign.character);
+      setCharacter(normalizeEquipment(activeCampaign.character));
       setMessages(activeCampaign.messages || []);
       setSummary(activeCampaign.summary || '');
       setSummaryCoverage(activeCampaign.summaryCoverage || 0);
@@ -188,7 +190,7 @@ export default function TavernApp({
     if (prevActiveCharacterRef.current === activeCharacter) return;
     prevActiveCharacterRef.current = activeCharacter;
     if (activeCharacter) {
-      setCharacter(activeCharacter);
+      setCharacter(normalizeEquipment(activeCharacter));
     }
   }, [activeCharacter]);
 
@@ -322,6 +324,13 @@ export default function TavernApp({
         });
       }
 
+      // Limbs lost, disabled or healed in the story (validated by parseDMReply)
+      const limbs = fightGroups.length ? { applied: [] } : applyLimbChanges(sheet, response.limbChanges || []);
+      if (limbs.applied.length) {
+        setCharacter(prev => applyLimbChanges(prev, response.limbChanges).character);
+        limbs.applied.forEach(change => recordEvent(limbFact(sheet.name, change)));
+      }
+
       // Experience: tell the player once when they can go up a level
       const xpGained = response.xpEarned || 0;
       const reachesNewLevel = xpGained > 0 && !canLevelUp(sheet) && canLevelUp(addXp(sheet, xpGained));
@@ -340,6 +349,14 @@ export default function TavernApp({
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);
+
+      limbs.applied.forEach(change => {
+        const icon = change.status === 'ok' ? '🩹' : '🦴';
+        const dropped = change.dropped.length ? ` ${change.dropped.join(' y ')} va${change.dropped.length > 1 ? 'n' : ''} a la mochila.` : '';
+        const effect = change.status === 'ok' ? ''
+          : /Arm$/.test(change.limb) ? ' Esa mano ya no puede sostener nada.' : ' Huir de un combate será más difícil.';
+        pushSystemMessage(`${icon} ${limbFact(sheet.name, change)}.${effect}${dropped}`);
+      });
 
       if (reachesNewLevel) {
         pushSystemMessage(`✨ ¡${sheet.name} tiene experiencia suficiente para subir a nivel ${(sheet.level || 1) + 1}! Pulsa «Subir de nivel» en tu ficha.`);
@@ -378,7 +395,9 @@ export default function TavernApp({
     let next = { ...createEncounter(groups, sheet, combatDie), byDuncan, narrated: 0 };
     let hero = sheet;
     // Enemies that won initiative act before the hero
+    const logStart = next.log.length;
     ({ encounter: next, character: hero } = runEnemyTurns(next, hero, combatDie));
+    recordInjuries(next.log.slice(logStart), sheet.name);
     const names = groups.map(g => {
       const label = g.name ? `${g.name} (${g.monster.name}${g.elite ? ', élite' : ''})` : g.monster.name;
       return g.count > 1 ? `${g.count} × ${label}` : label;
@@ -408,6 +427,11 @@ export default function TavernApp({
     return { ...after, narrated: (after.narrated || 0) + 1 };
   };
 
+  // Grave wounds suffered in a fight are facts of the campaign
+  const recordInjuries = (entries, name) => {
+    injuriesIn(entries).forEach(injury => recordEvent(limbFact(name, injury, injury.by ? `en combate contra ${injury.by}` : 'en combate')));
+  };
+
   const handleCombatAction = async (action) => {
     if (!encounter || combatBusy) return;
     const result = playerAction(encounter, character, action, combatDie);
@@ -415,6 +439,7 @@ export default function TavernApp({
       setEncounter(prev => ({ ...prev, log: [...prev.log, { round: prev.round, kind: 'info', text: `⚠️ ${result.error}` }] }));
       return;
     }
+    recordInjuries(result.encounter.log.slice(encounter.log.length), character.name);
     setCombatBusy(true);
     try {
       for (const roll of result.animations) {
@@ -496,10 +521,14 @@ export default function TavernApp({
     }
   };
 
-  // Shortcut under the chronicle: attack with the first equipped weapon
+  // Shortcut under the chronicle: attack with the first weapon in hand
   const handleQuickAttack = () => {
     const options = attackOptions(character);
     const option = options.find(o => o.weapon) || options[0];
+    if (!option) {
+      pushSystemMessage('⚔️ No tienes nada con lo que atacar: equipa un arma o deja una mano libre (pestaña «Equipo» de tu ficha).');
+      return;
+    }
     handleAttack({ optionId: option.id });
   };
 
@@ -826,7 +855,7 @@ export default function TavernApp({
         <div className={`w-full lg:w-72 xl:w-80 2xl:w-88 shrink-0 ${mobileTab === 'party' ? 'block' : 'hidden lg:block'}`}>
           <PartyPanel
             character={character}
-            onUpdateCharacter={setCharacter}
+            onUpdateCharacter={next => setCharacter(normalizeEquipment(next))}
             onOrderDrink={handleOrderDrink}
             onRollCheck={handleRollCheck}
             onCastSpell={handleCastSpell}
@@ -834,6 +863,7 @@ export default function TavernApp({
             onLevelUp={() => setIsLevelUpOpen(true)}
             onAttack={handleAttack}
             busy={isGenerating}
+            inCombat={Boolean(encounter && encounter.status === 'active')}
           />
         </div>
 

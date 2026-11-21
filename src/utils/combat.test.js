@@ -1,8 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
   weaponForItem, attackOptions, damageLabel, resolveAttack, describeAttack, attacksPerAction, sneakAttackDice, rageBonus,
-  setEquipped, isProficient, getWeapon, DEFAULT_TARGET_AC
+  isProficient, getWeapon, DEFAULT_TARGET_AC
 } from './combat';
+import { equipItem, unequipHand } from './equipment';
+
+const holding = (character, name, hand = 'main', twoHands = false) => {
+  const item = character.inventory.find(i => i.name.includes(name));
+  const result = equipItem(character, item.id, hand, { twoHands });
+  if (!result.ok) throw new Error(result.error);
+  return result.character;
+};
 import { buildCharacter, emptyDraft, sanitizeDraft } from './characterBuilder';
 import { WEAPONS } from '../data/weapons';
 import { CLASSES, BACKGROUNDS } from '../data/srd';
@@ -67,7 +75,11 @@ describe('attack options', () => {
     const greatsword = options.find(o => o.weapon?.id === 'greatsword');
     // Str 17 (+3), proficiency +2
     expect(greatsword).toMatchObject({ ability: 'fue', attackBonus: 5, damage: '2d6', damageBonus: 3, proficient: true });
-    expect(options.at(-1)).toMatchObject({ id: 'unarmed', damage: '0d4+1', attackBonus: 5 });
+    // The greatsword takes both hands: no unarmed strike and nothing else to attack with
+    expect(options.map(o => o.weapon?.id || o.id)).toEqual(['greatsword']);
+    const oneHand = holding(fighter, 'Mangual');
+    expect(attackOptions(oneHand).map(o => o.weapon?.id || o.id)).toEqual(['flail', 'unarmed']);
+    expect(attackOptions(oneHand).at(-1)).toMatchObject({ id: 'unarmed', damage: '0d4+1', attackBonus: 5 });
   });
 
   it('finesse and ranged weapons use Dexterity when it is better', () => {
@@ -76,24 +88,35 @@ describe('attack options', () => {
       bonus: { mode: 'twoOne', plus2: 'des', plus1: 'con' },
       classSkills: ['acrobatics', 'athletics', 'deception', 'insight']
     }));
-    const options = attackOptions(rogue);
+    const armed = holding(holding(rogue, 'Espada corta', 'main'), 'Dagas', 'off');
+    const options = attackOptions(armed);
+    expect(options.map(o => o.weapon?.id || o.id)).toEqual(['shortsword', 'dagger']); // no free hand
     expect(options.find(o => o.weapon?.id === 'shortsword')).toMatchObject({ ability: 'des', attackBonus: 5 }); // Dex 17 (+3) + 2
-    expect(options.find(o => o.weapon?.id === 'shortbow')).toMatchObject({ ability: 'des' });
+    expect(attackOptions(holding(rogue, 'Arco corto')).find(o => o.weapon?.id === 'shortbow')).toMatchObject({ ability: 'des' });
   });
 
-  it('versatile weapons use the bigger die without a shield', () => {
+  it('versatile weapons use the bigger die only when held with both hands', () => {
     const paladin = hero('paladin', { classSkills: ['insight', 'medicine'], spells: { class: { cantrips: [], spells: ['bless', 'cureWounds'] } } });
-    expect(attackOptions(paladin).find(o => o.weapon?.id === 'longsword').damage).toBe('1d8'); // carries a shield
-    const noShield = setEquipped(paladin, paladin.inventory.find(i => /Escudo/.test(i.name)).id, false);
-    expect(attackOptions(noShield).find(o => o.weapon?.id === 'longsword').damage).toBe('1d10');
+    expect(attackOptions(paladin).find(o => o.weapon?.id === 'longsword').damage).toBe('1d8'); // sword and shield
+    const noShield = unequipHand(paladin, 'off');
+    expect(attackOptions(noShield).find(o => o.weapon?.id === 'longsword').damage).toBe('1d8'); // still one hand
+    const twoHands = holding(paladin, 'Espada larga', 'main', true);
+    expect(attackOptions(twoHands).find(o => o.weapon?.id === 'longsword')).toMatchObject({ damage: '1d10' });
+    expect(attackOptions(twoHands).find(o => o.weapon?.id === 'longsword').notes).toContain('a dos manos');
   });
 
-  it('only equipped weapons can be used', () => {
+  it('only weapons in hand can be used', () => {
     const fighter = hero('fighter', { classSkills: ['acrobatics', 'survival'] });
     const item = fighter.inventory.find(i => weaponForItem(i)?.id === 'greatsword');
-    const unequipped = setEquipped(fighter, item.id, false);
+    const unequipped = unequipHand(fighter, 'main');
     expect(attackOptions(unequipped).some(o => o.weapon?.id === 'greatsword')).toBe(false);
-    expect(resolveAttack(unequipped, item.id, fixedDice([15])).ok).toBe(false);
+    expect(resolveAttack(unequipped, item.id, fixedDice([15]))).toMatchObject({ ok: false, error: 'No llevas esa arma en la mano.' });
+    expect(attackOptions(unequipped).map(o => o.id)).toEqual(['unarmed']);
+  });
+
+  it('monks can strike unarmed even with both hands busy', () => {
+    const monk = { classId: 'monk', level: 1, stats: { fue: 10, des: 16 }, inventory: [{ id: 'q', name: 'Bastón', type: 'weapon' }], hands: { main: 'q', off: 'q' } };
+    expect(attackOptions(monk).map(o => o.id)).toEqual(['q', 'unarmed']);
   });
 
   it('knows weapon proficiencies by class', () => {
@@ -147,11 +170,12 @@ describe('resolving attacks', () => {
   it('rogues add Sneak Attack once, with finesse or ranged weapons', () => {
     expect([1, 2, 3, 5, 20].map(l => sneakAttackDice({ classId: 'rogue', level: l }))).toEqual([1, 1, 2, 3, 10]);
     const rogue = { classId: 'rogue', level: 3, proficiencyBonus: 2, stats: { fue: 10, des: 16 }, inventory: [{ id: 'r', name: 'Estoque', type: 'weapon' }, { id: 'c', name: 'Garrote', type: 'weapon' }] };
-    const sneak = resolveAttack(rogue, 'r', fixedDice([15, 5, 6, 4])).attack;
+    const sneak = resolveAttack(rogue, 'r', fixedDice([15, 5, 6, 4])).attack; // the rapier is in hand (first weapon)
     expect(sneak.sneak).toMatchObject({ dice: [6, 4], total: 10 });
     expect(sneak.totalDamage).toBe(5 + 3 + 10);
     expect(describeAttack(sneak)).toContain('Ataque Furtivo: +10');
-    expect(resolveAttack(rogue, 'c', fixedDice([15, 3])).attack.sneak).toBeNull(); // a club is not finesse
+    const club = { ...rogue, hands: { main: 'c', off: null } };
+    expect(resolveAttack(club, 'c', fixedDice([15, 3])).attack.sneak).toBeNull(); // a club is not finesse
   });
 
   it('raging barbarians add Rage damage to Strength attacks', () => {

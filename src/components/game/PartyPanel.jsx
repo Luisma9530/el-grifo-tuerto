@@ -6,7 +6,10 @@ import { TAVERN_MENU } from '../../data/gameData';
 import { tavernAudio } from '../../utils/audio';
 import SpellsTab, { RestButtons } from './SpellsTab';
 import AttacksPanel from './AttacksPanel';
-import { weaponForItem, isEquipped, setEquipped } from '../../utils/combat';
+import EquipmentPanel from './EquipmentPanel';
+import { normalizeEquipment, HANDS } from '../../utils/equipment';
+
+const HELD_LABELS = { main: 'En la mano principal', off: 'En la mano secundaria', both: 'En las dos manos' };
 import { xpProgress, canLevelUp, canAdvance } from '../../utils/leveling';
 
 export default function PartyPanel({
@@ -18,12 +21,18 @@ export default function PartyPanel({
   onRest,
   onLevelUp,
   onAttack,
-  busy = false
+  busy = false,
+  inCombat = false
 }) {
   const progress = xpProgress(character);
   const levelUpReady = canLevelUp(character);
   const [activeTab, setActiveTab] = useState('sheet'); // 'sheet' | 'spells' | 'inventory' | 'menu'
   const hasMagic = Boolean(character.spellcasting);
+  const hands = normalizeEquipment(character).hands;
+  const heldIn = itemId => {
+    const where = HANDS.filter(h => hands[h] === itemId);
+    return where.length === 2 ? 'both' : where[0] || null;
+  };
   const hpPercent = Math.max(0, Math.min(100, Math.round((character.hp / character.maxHp) * 100)));
 
   const handleUseItem = (item) => {
@@ -185,7 +194,7 @@ export default function PartyPanel({
           }`}
         >
           <Backpack className="w-3.5 h-3.5" />
-          <span>Mochila</span>
+          <span>Equipo</span>
         </button>
         <button
           onClick={() => setActiveTab('menu')}
@@ -315,8 +324,14 @@ export default function PartyPanel({
         {/* INVENTORY TAB */}
         {activeTab === 'inventory' && (
           <div className="space-y-2.5">
-            <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block">
-              Equipo & Objetos en Mochila:
+            <EquipmentPanel
+              character={character}
+              onChange={onUpdateCharacter}
+              locked={inCombat ? 'En combate, cambia de arma desde la vista de combate: gasta tu turno.' : null}
+            />
+
+            <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block pt-1">
+              Inventario (lo que no está en tus manos va en la mochila):
             </span>
 
             {character.inventory?.map((item) => (
@@ -338,19 +353,10 @@ export default function PartyPanel({
                   )}
                 </div>
 
-                {weaponForItem(item) && (
-                  <button
-                    onClick={() => onUpdateCharacter(setEquipped(character, item.id, !isEquipped(item)))}
-                    aria-pressed={isEquipped(item)}
-                    title={isEquipped(item) ? 'Equipada: aparece en tus ataques' : 'En la mochila: no la usarás al atacar'}
-                    className={`px-2.5 py-1 rounded text-xs font-bold shrink-0 transition-colors border ${
-                      isEquipped(item)
-                        ? 'bg-red-950/50 border-red-700/60 text-red-200 hover:bg-red-900/50'
-                        : 'bg-stone-900 border-stone-700 text-stone-400 hover:text-stone-200'
-                    }`}
-                  >
-                    {isEquipped(item) ? '⚔ Equipada' : 'Equipar'}
-                  </button>
+                {heldIn(item.id) && (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold shrink-0 border bg-red-950/50 border-red-700/60 text-red-200">
+                    ✋ {HELD_LABELS[heldIn(item.id)]}
+                  </span>
                 )}
 
                 {item.type === 'consumable' && (

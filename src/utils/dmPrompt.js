@@ -4,6 +4,12 @@
 import { SKILLS, ABILITIES } from '../data/srd';
 import { spellRows, slotTable } from './spellcasting';
 import { cleanSummary } from './campaignMemory';
+import { describeEquipmentForPrompt, LIMB_IDS } from './equipment';
+
+/** Limb ids and states in the reply (Spanish, as the model writes them) -> sheet values. */
+export const LIMB_REPLY_IDS = { brazoDerecho: 'rightArm', brazoIzquierdo: 'leftArm', piernaDerecha: 'rightLeg', piernaIzquierda: 'leftLeg' };
+export const LIMB_REPLY_STATUSES = { sana: 'ok', inutilizada: 'disabled', perdida: 'lost' };
+const MAX_LIMB_CHANGES = LIMB_IDS.length;
 
 // The caller already trims the chronicle to the messages not covered by the
 // campaign summary (see campaignMemory.js); these are just safety limits.
@@ -27,7 +33,20 @@ export const DM_RESPONSE_SCHEMA = {
     curacion: { type: 'INTEGER', description: 'Puntos de golpe que recupera el personaje (0 si ninguno).' },
     oro: { type: 'INTEGER', description: 'Monedas de oro ganadas (positivo) o gastadas/perdidas (negativo).' },
     experiencia: { type: 'INTEGER', description: 'Puntos de experiencia ganados por superar un reto (0 si ninguno).' },
-    opciones: { type: 'ARRAY', items: { type: 'STRING' }, description: '3 o 4 sugerencias breves de acción.' }
+    opciones: { type: 'ARRAY', items: { type: 'STRING' }, description: '3 o 4 sugerencias breves de acción.' },
+    extremidades: {
+      type: 'ARRAY',
+      nullable: true,
+      description: 'Solo si en esta escena el personaje pierde, queda sin poder usar o recupera un brazo o una pierna. Casi siempre vacío.',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          extremidad: { type: 'STRING', enum: Object.keys(LIMB_REPLY_IDS) },
+          estado: { type: 'STRING', enum: Object.keys(LIMB_REPLY_STATUSES) }
+        },
+        required: ['extremidad', 'estado']
+      }
+    }
   },
   required: ['narracion', 'usaTirada', 'danio', 'curacion', 'oro', 'experiencia', 'opciones']
 };
@@ -195,7 +214,8 @@ Narra el desenlace (cómo queda el lugar, qué hacen los que se rindieron o huye
 - "curacion": puntos de golpe que recupera (entero, 0 si nada).
 - "oro": monedas de oro que gana (positivo) o que gasta o pierde (negativo); 0 si nada.
 - "experiencia": puntos de experiencia por superar un reto en esta escena: 0 si no superó nada (charlar, comprar, descansar, fallar sin aprender nada), 10-30 por un reto menor, 40-80 por vencer un combate o descubrir algo importante, 100-200 solo por un logro excepcional.
-- "opciones": 3 o 4 sugerencias breves de lo que puede hacer ahora.${requestSummary ? `
+- "opciones": 3 o 4 sugerencias breves de lo que puede hacer ahora.
+- "extremidades": casi siempre una lista vacía. Solo si la historia lo hace inevitable (una trampa que le aplasta el brazo, una maldición, una amputación, un sanador o un milagro que lo cura), indica el cambio: [{"extremidad": "brazoDerecho" | "brazoIzquierdo" | "piernaDerecha" | "piernaIzquierda", "estado": "inutilizada" | "perdida" | "sana"}]. Debe ser excepcional y coincidir con la narración; el juego aplicará el efecto (lo que llevase en esa mano cae a la mochila).${requestSummary ? `
 - "resumen": reescribe el resumen de la campaña juntando el resumen anterior y la crónica reciente (máximo 800 caracteres, frases cortas): hechos clave, personajes no jugadores y su relación con ${name}, misiones abiertas, pistas, deudas y objetos importantes. Es tu memoria para el resto de la partida.` : ''}
 ${bestiary ? `
 - "combate": SOLO si en esta escena empieza una pelea (alguien ataca al héroe, o el héroe ataca a alguien). En ese caso NO resuelvas la pelea: narra solo cómo aparecen los enemigos (sin golpes, aciertos, daño ni tiradas), pon "usaTirada": false y "danio": 0, y devuelve los enemigos; el juego llevará el combate con sus propias tiradas. Usa únicamente estas criaturas: ${describeBestiary(bestiary)}. Para ${name} solo, un combate normal suma unos ${bestiary.budget.moderate} PX (fácil ${bestiary.budget.low}, duro ${bestiary.budget.high}). Puedes dar a un único enemigo un "nombre" propio y un "rasgo" breve, y marcarlo "elite" si es un jefe. Si no empieza ninguna pelea, omite "combate".` : ''}
@@ -208,7 +228,8 @@ Estás dirigiendo una partida de rol estilo D&D 5e en el mundo: "${world.name}" 
 
 Personaje del jugador: ${name}, ${character.race || ''} ${character.class || ''}.
 - Puntos de golpe: ${character.hp}/${character.maxHp}. Armadura (CA): ${character.ac ?? '?'}. Oro: ${character.gold} monedas.
-- Atributos: ${describeStats(character.stats)}.${inventory ? `\n- Inventario: ${inventory}.` : ''}${describeBuild(character)}
+- Atributos: ${describeStats(character.stats)}.${inventory ? `\n- Inventario: ${inventory}.` : ''}
+- ${describeEquipmentForPrompt(character)}${describeBuild(character)}
 
 ${summary ? `Resumen de la campaña hasta ahora:
 """
@@ -241,6 +262,23 @@ function toInt(value, min, max) {
   const n = Math.round(Number(value));
   if (!Number.isFinite(n)) return 0;
   return Math.min(max, Math.max(min, n));
+}
+
+/**
+ * Validate the limb changes of a reply: known limbs and states only, one change
+ * per limb (the last one wins), at most one per limb.
+ * @returns {{limb, status}[]}
+ */
+export function cleanLimbChanges(list) {
+  if (!Array.isArray(list)) return [];
+  const byLimb = new Map();
+  list.slice(0, MAX_LIMB_CHANGES * 2).forEach(entry => {
+    if (!entry || typeof entry !== 'object') return;
+    const limb = LIMB_REPLY_IDS[String(entry.extremidad || '').trim()];
+    const status = LIMB_REPLY_STATUSES[String(entry.estado || '').trim().toLowerCase()];
+    if (limb && status) byLimb.set(limb, status);
+  });
+  return [...byLimb].map(([limb, status]) => ({ limb, status }));
 }
 
 function cleanActions(list) {
@@ -278,7 +316,8 @@ export function parseDMReply(raw, character = {}) {
         xpEarned: toInt(data.experiencia, 0, 300),
         usedRoll: data.usaTirada === true,
         summary: cleanSummary(data.resumen),
-        combat: data.combate && Array.isArray(data.combate.enemigos) && data.combate.enemigos.length ? data.combate : null
+        combat: data.combate && Array.isArray(data.combate.enemigos) && data.combate.enemigos.length ? data.combate : null,
+        limbChanges: cleanLimbChanges(data.extremidades)
       };
     } catch {
       // Not valid JSON: treat it as plain text below
@@ -302,6 +341,7 @@ export function parseDMReply(raw, character = {}) {
     xpEarned: 0,
     summary: null,
     combat: null,
+    limbChanges: [],
     // Plain text can't tell us reliably; look for the dice marker the prompt asks for
     usedRoll: text.includes('🎲')
   };

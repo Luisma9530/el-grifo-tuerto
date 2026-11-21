@@ -219,6 +219,8 @@ export async function generateDMResponse({
               xpEarned: rest || combatResult ? 0 : parsed.xpEarned,
               summary: parsed.summary,
               combat: bestiary ? parsed.combat : null,
+              // A finished fight is narrated as it happened: no new wounds from the narration
+              limbChanges: combatResult ? [] : parsed.limbChanges || [],
               // A fight that starts is rolled by the game, not by Duncan
               roll: parsed.usedRoll && !playerRoll && !needsNoRoll && !startsFight ? { sides: 20, value: d20 } : null,
               source: 'gemini',
@@ -476,6 +478,7 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     goldEarned,
     xpEarned: localXp({ text, rest, spellXp, isCrit, isCritFail, isHighRoll }),
     combat,
+    limbChanges: [],
     // Set when Gemini keys exist but the AI could not answer this turn
     notice: aiFailure ? AI_FAILURE_NOTICES[aiFailure] || AI_FAILURE_NOTICES.overloaded : null,
     // Only when Duncan's own roll is mentioned in the narration

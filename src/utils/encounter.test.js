@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   createEncounter, runEnemyTurns, playerAction, isPlayerTurn, activeEnemies, enemySaveBonus, playerSaveBonus,
-  describeEncounterResult, MORALE_DC
+  describeEncounterResult, MORALE_DC, injuriesIn
 } from './encounter';
+import { setLimbStatus } from './equipment';
 import { buildCharacter, emptyDraft, sanitizeDraft } from './characterBuilder';
 import { attackOptions } from './combat';
 
@@ -252,5 +253,98 @@ describe('active enemies', () => {
     enc.enemies[0].status = 'dead';
     enc.enemies[1].status = 'fled';
     expect(activeEnemies(enc).map(e => e.uid)).toEqual(['goblin-3']);
+  });
+});
+
+describe('changing weapons in a fight (house rule: it takes the turn)', () => {
+  const idOf = (character, name) => character.inventory.find(i => i.name.includes(name)).id;
+
+  it('swaps what is in hand, logs it and lets the enemies act', () => {
+    const hero = fighter();
+    const flail = idOf(hero, 'Mangual');
+    const enc = createEncounter([{ monster: goblin }], hero, dice(5, 15));
+    // the goblin answers: 3 + 4 = 7 misses
+    const res = playerAction(enc, hero, { type: 'equip', hands: { main: flail, off: null } }, dice(3));
+    expect(res.ok).toBe(true);
+    expect(res.character.hands).toEqual({ main: flail, off: null });
+    expect(res.encounter.log.some(l => /cambia de equipo.*Mangual.*Gasta su turno/.test(l.text))).toBe(true);
+    expect(res.encounter.log.at(-1).kind).toBe('enemyMiss'); // the turn went by
+    expect(res.encounter.round).toBe(2);
+    expect(res.animations).toEqual([]);
+    // Now the flail is the weapon to attack with
+    expect(attackOptions(res.character).map(o => o.weapon?.id || o.id)).toEqual(['flail', 'unarmed']);
+  });
+
+  it('refuses an impossible or identical set without spending the turn', () => {
+    const hero = fighter();
+    const enc = createEncounter([{ monster: goblin }], hero, dice(5, 15));
+    const greatsword = idOf(hero, 'Espadón');
+    expect(playerAction(enc, hero, { type: 'equip', hands: { main: greatsword, off: greatsword } }, dice(3)))
+      .toMatchObject({ ok: false, error: 'Ya llevas eso en las manos.' });
+    expect(playerAction(enc, hero, { type: 'equip', hands: { main: greatsword, off: idOf(hero, 'Mangual') } }, dice(3)).ok).toBe(false);
+  });
+
+  it('the shield taken up mid-fight raises the AC the enemies attack', () => {
+    const base = fighter();
+    const hero = { ...base, inventory: [...base.inventory, { id: 'shield', name: 'Escudo', type: 'armor' }] };
+    const enc = createEncounter([{ monster: goblin }], hero, dice(5, 15));
+    const res = playerAction(enc, hero, { type: 'equip', hands: { main: idOf(hero, 'Mangual'), off: 'shield' } }, dice(10));
+    expect(res.character.ac).toBe(hero.ac + 2);
+    expect(res.encounter.log.at(-1).text).toContain(`vs CA ${hero.ac + 2}`);
+  });
+});
+
+describe('grave wounds', () => {
+  // The goblin wins initiative (18+2) and attacks first
+  const start = hero => createEncounter([{ monster: goblin }], hero, dice(18, 2));
+
+  it('a slashing critical may disable a limb (d20 of 1-2), and what it held falls', () => {
+    const hero = fighter();
+    // attack 20 (crit), damage 1+1+2 = 4, wound d20 = 1, limb d4 = 2 (left arm)
+    const { encounter, character } = runEnemyTurns(start(hero), hero, dice(20, 1, 1, 1, 2));
+    expect(character.hp).toBe(hero.hp - 4);
+    expect(character.limbs.leftArm).toBe('disabled');
+    expect(character.hands).toEqual({ main: null, off: null }); // the greatsword needs both arms
+    const wound = encounter.log.find(l => l.kind === 'injury');
+    expect(wound.text).toContain('deja inutilizado el brazo izquierdo de Brega');
+    expect(wound.text).toContain('Espadón cae a la mochila');
+    expect(injuriesIn(encounter.log)).toEqual([{ limb: 'leftArm', status: 'disabled', by: 'Goblin' }]);
+  });
+
+  it('is rare: a 3 or more on the d20 leaves the hero whole', () => {
+    const hero = fighter();
+    const { encounter, character } = runEnemyTurns(start(hero), hero, dice(20, 1, 1, 3));
+    expect(character.limbs).toEqual(hero.limbs);
+    expect(injuriesIn(encounter.log)).toEqual([]);
+  });
+
+  it('only slashing criticals count', () => {
+    const hero = fighter();
+    const enc = createEncounter([{ monster: wolf }], hero, dice(18, 2));
+    const { character } = runEnemyTurns(enc, hero, dice(20, 1, 1, 1, 1));
+    expect(character.limbs.rightArm).toBe('ok');
+  });
+
+  it('is likelier (1-4) when the blow drops the hero, and a disabled limb is then lost', () => {
+    const hurt = { ...setLimbStatus(fighter(), 'rightLeg', 'disabled').character, hp: 3 };
+    // crit for 4 drops the hero to 0; wound d20 = 4; d4 = 3 (right leg, already disabled)
+    const { encounter, character } = runEnemyTurns(start(hurt), hurt, dice(20, 1, 1, 4, 3));
+    expect(character.hp).toBe(0);
+    expect(character.limbs.rightLeg).toBe('lost');
+    expect(encounter.log.find(l => l.kind === 'injury').text).toContain('cercena la pierna derecha');
+    expect(encounter.status).toBe('defeat');
+  });
+});
+
+describe('fleeing with injured legs', () => {
+  it('each injured leg adds 5 to the DC; with both the hero cannot flee', () => {
+    const one = setLimbStatus(fighter(), 'leftLeg', 'lost').character; // Dex 14 (+2)
+    const enc = createEncounter([{ monster: goblin }], one, dice(5, 15));
+    expect(playerAction(enc, one, { type: 'flee' }, dice(15)).encounter.status).toBe('fled'); // 17 vs CD 17
+    const bad = playerAction(enc, one, { type: 'flee' }, dice(14, 3));
+    expect(bad.encounter.status).toBe('active');
+    expect(bad.encounter.log.some(l => l.text.includes('vs CD 17'))).toBe(true);
+    const both = setLimbStatus(one, 'rightLeg', 'disabled').character;
+    expect(playerAction(enc, both, { type: 'flee' }, dice(20))).toMatchObject({ ok: false, error: 'Con las dos piernas heridas no puedes huir.' });
   });
 });
