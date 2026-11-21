@@ -6,6 +6,7 @@ import { formatModifier } from '../../utils/characterBuilder';
 import { activeEnemies, isPlayerTurn } from '../../utils/encounter';
 import { normalizeEquipment, fleeDC } from '../../utils/equipment';
 import EquipmentPanel from './EquipmentPanel';
+import { healingDice } from '../../utils/items';
 
 const LOG_COLORS = {
   info: 'text-stone-400', hit: 'text-emerald-300', crit: 'text-emerald-200 font-semibold', miss: 'text-stone-400',
@@ -109,7 +110,7 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
   }, [encounter.log.length]);
 
   const spells = spellRows(character).filter(s => !s.blocked);
-  const potions = (character.inventory || []).filter(i => i.type === 'consumable' && (i.uses === undefined || i.uses > 0));
+  const potions = (character.inventory || []).filter(i => healingDice(i));
   const act = action => onAction({ ...action, targetUid });
 
   return (
@@ -258,7 +259,7 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
                     <button key={item.id} disabled={!playerTurn} onClick={() => act({ type: 'potion', itemId: item.id })}
                       className="text-left p-2 rounded-lg bg-[#121a1a] border border-stone-800 hover:border-sky-600/60 disabled:opacity-40 flex items-center gap-2">
                       <FlaskConical className="w-4 h-4 text-sky-300" />
-                      <span className="text-xs text-stone-100">{item.name}{item.uses !== undefined ? ` (${item.uses})` : ''}</span>
+                      <span className="text-xs text-stone-100">{item.name}{item.uses !== undefined ? ` (${item.uses})` : ''} <span className="text-stone-500">· {healingDice(item)} PG</span></span>
                     </button>
                   ))}
                   <button disabled={!playerTurn} onClick={() => act({ type: 'dodge' })}

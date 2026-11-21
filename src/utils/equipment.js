@@ -7,11 +7,22 @@
 //           (a two-handed weapon, or a versatile one gripped with two hands)
 //           has its id in both slots.
 //   limbs:  { rightArm, leftArm, rightLeg, leftLeg }: 'ok' | 'disabled' | 'lost'
+//   wornArmor: itemId | null   the body armor worn (light, medium or heavy)
+//   acLegacy:  { item, bonus } (older saves only): the difference between the
+//           Armor Class the save had and the one its items give, kept while the
+//           hero wears the same armor (or none, if it had none) so migrating
+//           never changes the AC.
 //   acBase: Armor Class without a shield (armour, Dexterity, Unarmored Defense).
-//   ac:     acBase + 2 while a shield is held. Kept in sync by normalizeEquipment.
-// Everything in the inventory that is not in a hand is in the backpack.
+//   ac:     acBase + 2 while a shield is held (and the hero is trained with shields).
+//           Both are recomputed by normalizeEquipment from the items: never edit them.
+// Everything in the inventory that is not in a hand or worn is in the backpack.
 
 import { WEAPONS, WEAPON_NAME_HINTS } from '../data/weapons';
+import {
+  ARMORS, ARMOR_NAME_HINTS, ARMOR_PROFICIENCY, UNARMORED_DEFENSE, HEAVY_ARMOR_SPEED_PENALTY, ARMOR_CATEGORY_NAMES
+} from '../data/armor';
+
+const abilityMod = score => Math.floor(((Number(score) || 10) - 10) / 2);
 
 export const HANDS = ['main', 'off'];
 export const HAND_LABELS = { main: 'Mano principal (derecha)', off: 'Mano secundaria (izquierda)' };
@@ -57,7 +68,26 @@ export function weaponForItem(item) {
   return hint ? getWeapon(hint[1]) : null;
 }
 
-export const isShield = item => Boolean(item) && !weaponForItem(item) && /escudo/i.test(item.name || '');
+export const getArmor = id => ARMORS.find(a => a.id === id) || null;
+
+/** The SRD armor (or shield) an inventory item is (null for anything else). */
+export function armorForItem(item) {
+  if (!item) return null;
+  if (item.armorId) return getArmor(item.armorId);
+  if (item.type !== 'armor') return null;
+  const name = String(item.name || '').toLowerCase();
+  const hint = ARMOR_NAME_HINTS.find(([words]) => name.includes(words));
+  return hint ? getArmor(hint[1]) : null;
+}
+
+/** Light, medium or heavy armor (what goes in the armor slot). */
+export const isBodyArmor = item => {
+  const armor = armorForItem(item);
+  return Boolean(armor) && armor.category !== 'shield';
+};
+
+export const isShield = item => Boolean(item) && !weaponForItem(item)
+  && (item.armorId ? item.armorId === 'shield' : /escudo/i.test(item.name || ''));
 
 // Things you carry in a hand besides weapons and shields: foci, lights, instruments
 const HOLDABLE_NAMES = /antorcha|linterna|l[aá]mpara|farol|orbe|cristal arcano|s[ií]mbolo sagrado|varita|\bvara\b|cetro|instrumento|ramita de mu[eé]rdago|amuleto|relicario|la[uú]d|flauta/i;
@@ -99,7 +129,8 @@ export function fleeDC(character) {
 
 /** Walking speed in metres: halved with one injured leg, crawling (1,5 m) with both. */
 export function speedInMetres(character) {
-  const metres = (Number(character?.speed) || 30) * 0.3;
+  const feet = (Number(character?.speed) || 30) - (lacksStrengthForArmor(character) ? HEAVY_ARMOR_SPEED_PENALTY : 0);
+  const metres = Math.max(5, feet) * 0.3;
   const legs = injuredLegs(character);
   if (legs >= 2) return 1.5;
   return legs === 1 ? Math.floor(metres / 2 / 1.5) * 1.5 : metres;
@@ -189,16 +220,118 @@ export const hasFreeHand = character => {
 /** Unarmed strikes need a free hand, except for monks (kicks, knees, elbows...). */
 export const canStrikeUnarmed = character => character.classId === 'monk' || hasFreeHand(character);
 
-export const armorClass = character => (Number(character.acBase) || 10) + (holdsShield(character) ? SHIELD_BONUS : 0);
+// ---------------------------------------------------------------------------
+// Armor
+// ---------------------------------------------------------------------------
+
+/** Armor categories the hero is trained in (null = everything: preset heroes and older saves without a class id). */
+export const armorTraining = character => ARMOR_PROFICIENCY[character?.classId] ?? null;
+
+/** Is the hero trained with this armor (or shield)? */
+export function isArmorTrained(character, armor) {
+  const training = armorTraining(character);
+  return !armor || training === null || training.includes(armor.category);
+}
+
+/** The body armor item worn (null when none). */
+export function wornArmorItem(character) {
+  const item = itemById(character || {}, character?.wornArmor);
+  return isBodyArmor(item) ? item : null;
+}
+
+export const wornArmor = character => armorForItem(wornArmorItem(character));
+
+/** Wearing armor without training: Disadvantage on Strength and Dexterity d20 tests, no spellcasting. */
+export function wearsUntrainedArmor(character) {
+  const armor = wornArmor(character);
+  return Boolean(armor) && !isArmorTrained(character, armor);
+}
+
+/** Heavy armor without the Strength it asks for: speed drops by 3 m. */
+export function lacksStrengthForArmor(character) {
+  const armor = wornArmor(character);
+  return Boolean(armor?.strength) && (Number(character?.stats?.fue) || 10) < armor.strength;
+}
 
 /**
- * Bring a sheet up to date: limbs, item ids, valid hands and Armor Class.
+ * Why a d20 test has Disadvantage because of the armor (null when it doesn't).
+ * @param {{ ability?: string, skillId?: string }} test
+ */
+export function armorDisadvantage(character, { ability = null, skillId = null } = {}) {
+  const armor = wornArmor(character);
+  if (!armor) return null;
+  if (wearsUntrainedArmor(character) && (ability === 'fue' || ability === 'des')) return `${armor.name} sin competencia`;
+  if (skillId === 'stealth' && armor.stealth) return `${armor.name}: desventaja en Sigilo`;
+  return null;
+}
+
+/** Body armor the hero carries that could go in the armor slot. */
+export const armorsInInventory = character => (character?.inventory || []).filter(isBodyArmor);
+
+/**
+ * Armor Class and where it comes from.
+ * @returns {{ base, total, parts: {label, value}[], shield: boolean, untrainedArmor: boolean,
+ *             untrainedShield: boolean, unarmored: string | null }}
+ *   base: without the shield; total: with it (what the enemies roll against).
+ */
+export function armorClassBreakdown(character) {
+  const sheet = character || {};
+  const dex = abilityMod(sheet.stats?.des);
+  const armor = wornArmor(sheet);
+  const shieldHeld = holdsShield(sheet);
+  const parts = [];
+  let base;
+  let unarmored = null;
+  if (armor) {
+    const dexBonus = armor.dexCap == null ? dex : Math.min(dex, armor.dexCap);
+    base = armor.ac + dexBonus;
+    parts.push({ label: armor.name, value: armor.ac });
+    if (armor.dexCap !== 0) parts.push({ label: armor.dexCap == null ? 'Destreza' : `Destreza (máx. ${armor.dexCap})`, value: dexBonus });
+  } else {
+    base = 10 + dex;
+    parts.push({ label: 'Sin armadura', value: 10 }, { label: 'Destreza', value: dex });
+    const defense = UNARMORED_DEFENSE[sheet.classId];
+    if (defense && (defense.shieldAllowed || !shieldHeld)) {
+      const extra = abilityMod(sheet.stats?.[defense.ability]);
+      base += extra;
+      unarmored = defense.ability;
+      parts.push({ label: `Defensa sin Armadura (${defense.ability === 'con' ? 'Constitución' : 'Sabiduría'})`, value: extra });
+    }
+  }
+  const legacy = sheet.acLegacy;
+  if (legacy && Number(legacy.bonus) && (legacy.item ?? null) === (wornArmorItem(sheet)?.id ?? null)) {
+    base += Number(legacy.bonus);
+    parts.push({ label: 'Ajuste de partida antigua', value: Number(legacy.bonus) });
+  }
+  const shieldTrained = isArmorTrained(sheet, getArmor('shield'));
+  const shieldBonus = shieldHeld && shieldTrained ? SHIELD_BONUS : 0;
+  if (shieldHeld) parts.push({ label: shieldTrained ? 'Escudo' : 'Escudo (sin competencia)', value: shieldBonus });
+  return {
+    base,
+    total: base + shieldBonus,
+    parts,
+    shield: shieldHeld,
+    untrainedArmor: Boolean(armor) && !isArmorTrained(sheet, armor),
+    untrainedShield: shieldHeld && !shieldTrained,
+    unarmored
+  };
+}
+
+export const armorClass = character => armorClassBreakdown(character).total;
+
+/** The armor an older save starts wearing: its first body armor (the class's starting armor). */
+const defaultWornArmor = character => armorsInInventory(character)[0]?.id ?? null;
+
+/**
+ * Bring a sheet up to date: limbs, item ids, valid hands, worn armor and Armor Class.
  * Older saves have no hands: they get a valid set (first weapon + shield) and
- * healthy limbs, and keep their Armor Class. Safe to call many times.
+ * healthy limbs. Older saves without an armor slot wear their first armor.
+ * Either way they keep their Armor Class (see acLegacy). Safe to call many times.
  */
 export function normalizeEquipment(character) {
   if (!character || typeof character !== 'object') return character;
   const legacy = !character.hands;
+  const legacyArmor = !('wornArmor' in character);
   let n = 0;
   const inventory = (Array.isArray(character.inventory) ? character.inventory : []).filter(i => i && typeof i === 'object')
     .map(item => (item.id ? item : { ...item, id: `item_m${n++}` }));
@@ -206,14 +339,6 @@ export function normalizeEquipment(character) {
   let sheet = { ...character, inventory, limbs };
 
   const hands = legacy ? validHands(sheet, defaultHands(sheet)) : validHands(sheet, sheet.hands);
-  let acBase = Number(sheet.acBase);
-  if (!Number.isFinite(acBase) || sheet.acBase == null) {
-    // The stored AC of an older save already counts its shield if it was equipped
-    const hadShield = legacy
-      ? inventory.some(i => isShield(i) && i.equipped !== false)
-      : heldItemIds(sheet).some(id => isShield(itemById(sheet, id)));
-    acBase = (Number(sheet.ac) || 10) - (hadShield ? SHIELD_BONUS : 0);
-  }
   sheet = {
     ...sheet,
     inventory: inventory.map(item => {
@@ -221,10 +346,59 @@ export function normalizeEquipment(character) {
       const { equipped: _drop, ...rest } = item;
       return rest;
     }),
-    hands,
-    acBase
+    hands
   };
-  return { ...sheet, ac: armorClass(sheet) };
+
+  if (legacyArmor) {
+    // The Armor Class the save had, without its shield
+    let storedBase = Number(character.acBase);
+    if (!Number.isFinite(storedBase) || character.acBase == null) {
+      // The stored AC of an older save already counts its shield if it was equipped
+      const hadShield = legacy
+        ? inventory.some(i => isShield(i) && i.equipped !== false)
+        : heldItemIds(sheet).some(id => isShield(itemById(sheet, id)));
+      storedBase = (Number(character.ac) || 10) - (hadShield ? SHIELD_BONUS : 0);
+    }
+    const worn = defaultWornArmor(sheet);
+    const natural = armorClassBreakdown({ ...sheet, wornArmor: worn, acLegacy: null });
+    // The stored AC counted a held shield as +2 whatever the training: keep that too
+    const shieldGap = natural.untrainedShield ? SHIELD_BONUS : 0;
+    const bonus = storedBase - natural.base + shieldGap;
+    sheet = { ...sheet, wornArmor: worn, acLegacy: bonus ? { item: worn, bonus } : null };
+  } else {
+    sheet = { ...sheet, wornArmor: isBodyArmor(itemById(sheet, sheet.wornArmor)) ? sheet.wornArmor : null };
+  }
+  if (!sheet.acLegacy) delete sheet.acLegacy;
+
+  const ac = armorClassBreakdown(sheet);
+  return { ...sheet, acBase: ac.base, ac: ac.total };
+}
+
+/**
+ * Put on a body armor from the backpack (or take it off with null).
+ * Out of combat only: armor takes minutes to don.
+ * @returns {{ ok: true, character } | { ok: false, error }}
+ */
+export function setWornArmor(character, itemId) {
+  const sheet = normalizeEquipment(character);
+  if (!itemId) return { ok: true, character: normalizeEquipment({ ...sheet, wornArmor: null }) };
+  const item = itemById(sheet, itemId);
+  if (!item) return { ok: false, error: 'No tienes ese objeto.' };
+  if (!isBodyArmor(item)) return { ok: false, error: `${item.name} no es una armadura.` };
+  return { ok: true, character: normalizeEquipment({ ...sheet, wornArmor: itemId }) };
+}
+
+export const isWorn = (character, itemId) => Boolean(itemId) && wornArmorItem(character)?.id === itemId;
+
+/** One line about the worn armor: "Cota de mallas (pesada, CA 16, desventaja en Sigilo)". */
+export function describeArmor(character) {
+  const armor = wornArmor(character);
+  if (!armor) return 'sin armadura';
+  const notes = [ARMOR_CATEGORY_NAMES[armor.category], `CA ${armor.ac}${armor.dexCap === 0 ? '' : armor.dexCap ? ' + Des (máx. 2)' : ' + Des'}`];
+  if (armor.stealth) notes.push('desventaja en Sigilo');
+  if (!isArmorTrained(character, armor)) notes.push('SIN COMPETENCIA');
+  if (lacksStrengthForArmor(character)) notes.push(`le falta Fuerza ${armor.strength}: velocidad −3 m`);
+  return `${wornArmorItem(character).name} (${notes.join(', ')})`;
 }
 
 const withHands = (character, hands) => normalizeEquipment({ ...character, hands });
@@ -390,5 +564,8 @@ export function describeEquipmentForPrompt(character) {
   const sheet = normalizeEquipment(character);
   const injured = LIMBS.filter(l => sheet.limbs[l.id] !== 'ok')
     .map(l => `${l.name.toLowerCase()} ${limbStatusLabel(l.id, sheet.limbs[l.id]).toLowerCase()}`);
-  return `En las manos: ${describeHands(sheet)}.${injured.length ? ` Extremidades heridas: ${injured.join(', ')}.` : ''}`;
+  const untrained = wearsUntrainedArmor(sheet)
+    ? ' Lleva una armadura sin competencia: desventaja en pruebas, salvaciones y ataques de Fuerza o Destreza, y no puede lanzar conjuros.'
+    : '';
+  return `En las manos: ${describeHands(sheet)}. Armadura: ${describeArmor(sheet)}.${untrained}${injured.length ? ` Extremidades heridas: ${injured.join(', ')}.` : ''}`;
 }

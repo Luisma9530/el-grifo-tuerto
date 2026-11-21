@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { formatCoins } from '../utils/items';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { 
   X, BookOpen, Plus, Download, Upload, Trash2, Copy, Play, 
@@ -382,7 +383,7 @@ export default function CampaignsModal({
 
                           <span className="inline-flex items-center gap-1 text-[11px] font-mono text-stone-400">
                             <Coins className="w-3 h-3 text-yellow-400" />
-                            <span>{camp.character?.gold} PO</span>
+                            <span>{formatCoins(camp.character?.gold)}</span>
                           </span>
 
                           <span className="inline-flex items-center gap-1 text-[11px] font-mono text-stone-500 ml-auto hidden sm:inline-flex">

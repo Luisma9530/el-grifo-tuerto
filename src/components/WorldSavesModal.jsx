@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { formatCoins } from '../utils/items';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { X, Plus, Heart, Shield, Coins, MapPin, Clock, ScrollText, Trash2, Play } from 'lucide-react';
 import { getAllCampaigns, deleteCampaign } from '../utils/campaignStorage';
@@ -133,7 +134,7 @@ export default function WorldSavesModal({ isOpen, world, onClose, onLoadCampaign
                         <span className="flex items-center gap-1"><Shield className="w-3 h-3 text-sky-400" />CA {ch.ac}</span>
                       )}
                       {ch.gold != null && (
-                        <span className="flex items-center gap-1"><Coins className="w-3 h-3 text-yellow-400" />{ch.gold} po</span>
+                        <span className="flex items-center gap-1"><Coins className="w-3 h-3 text-yellow-400" />{formatCoins(ch.gold)}</span>
                       )}
                       <span className="flex items-center gap-1"><MapPin className="w-3 h-3 text-emerald-400" />{getCurrentLocation(camp.world)}</span>
                       <span className="flex items-center gap-1"><ScrollText className="w-3 h-3 text-stone-400" />{turns} entradas</span>

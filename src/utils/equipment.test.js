@@ -136,7 +136,7 @@ describe('equipping', () => {
     expect(describeHands(p)).toBe('Espada larga y Escudo');
     expect(describeHands(hero('fighter'))).toBe('Espadón (a dos manos)');
     expect(describeHands(unequipHand(unequipHand(p, 'main'), 'off'))).toBe('las manos vacías');
-    expect(describeEquipmentForPrompt(p)).toBe('En las manos: Espada larga y Escudo.');
+    expect(describeEquipmentForPrompt(p)).toBe('En las manos: Espada larga y Escudo. Armadura: Cota de mallas (pesada, CA 16, desventaja en Sigilo).');
   });
 });
 

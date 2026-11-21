@@ -7,6 +7,7 @@
 
 import { resolveAttack } from './combat';
 import { castSpell, parseDice } from './spellcasting';
+import { drinkPotion } from './items';
 import { setHands, describeHands, fleeDC, setLimbStatus, normalizeEquipment, limbWithArticle, limbStatusLabel, LIMB_IDS } from './equipment';
 
 const ABILITY_NAMES = { fue: 'Fuerza', des: 'Destreza', con: 'Constitución', int: 'Inteligencia', sab: 'Sabiduría', car: 'Carisma' };
@@ -234,7 +235,7 @@ export function playerAction(encounter, character, action, rollDie) {
         label: `${attack.option.name} · ataque${attack.rolls.length > 1 ? ` ${i + 1}` : ''}`
       });
       next = pushLog(next, r.crit ? 'crit' : r.hit ? 'hit' : 'miss',
-        `${hero.name} ataca a ${target.name} con ${attack.option.name.toLowerCase()}: ${withBonus(r.raw, r.total - r.raw)} = ${r.total} vs CA ${target.ac} → ${r.crit ? `¡crítico! ${r.damage.total} de daño` : r.hit ? `${r.damage.total} de daño` : r.fumble ? 'pifia' : 'falla'}.`);
+        `${hero.name} ataca a ${target.name} con ${attack.option.name.toLowerCase()}: ${withBonus(r.raw, r.total - r.raw)} = ${r.total} vs CA ${target.ac}${attack.disadvantage ? ' (con desventaja)' : ''} → ${r.crit ? `¡crítico! ${r.damage.total} de daño` : r.hit ? `${r.damage.total} de daño` : r.fumble ? 'pifia' : 'falla'}.`);
     });
     const damageDice = [
       ...attack.rolls.flatMap(r => r.damage?.dice.map(value => ({ sides: r.damage.sides, value })) || []),
@@ -289,19 +290,12 @@ export function playerAction(encounter, character, action, rollDie) {
       next = pushLog(next, 'info', `${prefix}. ${spell.desc}`);
     }
   } else if (action.type === 'potion') {
-    const item = (hero.inventory || []).find(i => i.id === action.itemId && i.type === 'consumable' && (i.uses === undefined || i.uses > 0));
-    if (!item) return { ok: false, error: 'No tienes ese objeto.' };
-    const heal = rollNotation(POTION_HEAL, rollDie);
-    const hp = Math.min(hero.maxHp, hero.hp + heal.total);
-    animations.push({ dice: heal.dice.map(value => ({ sides: heal.sides, value })), modifier: heal.bonus, label: `${item.name} · curación` });
-    hero = {
-      ...hero,
-      hp,
-      inventory: hero.inventory
-        .map(i => (i.id === item.id && i.uses !== undefined ? { ...i, uses: i.uses - 1 } : i))
-        .filter(i => i.uses === undefined || i.uses > 0)
-    };
-    next = pushLog(next, 'heal', `${hero.name} usa ${item.name} y recupera ${hp - character.hp} puntos de golpe.`);
+    const drink = drinkPotion(hero, action.itemId, rollDie);
+    if (!drink.ok) return drink;
+    const { roll, item } = drink;
+    animations.push({ dice: roll.dice.map(value => ({ sides: roll.sides, value })), modifier: roll.bonus, label: `${item.name} · curación` });
+    hero = drink.character;
+    next = pushLog(next, 'heal', `${hero.name} usa ${item.name} y recupera ${drink.healed} puntos de golpe.`);
   } else if (action.type === 'equip') {
     // House rule: changing what you hold takes the whole turn
     const result = setHands(hero, action.hands);

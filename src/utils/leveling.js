@@ -13,7 +13,7 @@ export const EPIC_MAX_ABILITY_SCORE = 30;
 
 /** Short description of a class or subclass feature (empty if unknown). */
 export const featureInfo = name => FEATURE_INFO?.[name] || '';
-import { getClass, getSpecies, abilityModifier, computeBaseArmorClass } from './characterBuilder';
+import { getClass, getSpecies, abilityModifier } from './characterBuilder';
 import { normalizeEquipment } from './equipment';
 import { spellsFor, slotsForLevel, slotTable, maxSlotLevel, getSpell } from './spellcasting';
 
@@ -295,8 +295,7 @@ export function applyLevelUp(character, choices) {
     maxHp: character.maxHp + gained,
     hp: character.hp + gained,
     proficiencyBonus: plan.proficiencyAfter,
-    // The shield (if in hand) is added by normalizeEquipment
-    acBase: computeBaseArmorClass(cls, stats),
+    // Armor Class (armor, Dexterity, Unarmored Defense, shield) is recomputed by normalizeEquipment
     subclass: plan.subclass ? plan.subclass.name : character.subclass || null,
     classFeatures: [
       ...(character.classFeatures || []),

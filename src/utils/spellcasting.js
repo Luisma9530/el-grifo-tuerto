@@ -4,6 +4,7 @@
 import { CLASSES, FEATS, BACKGROUNDS, SPECIES, ABILITIES, LEVEL_1_PROFICIENCY_BONUS } from '../data/srd';
 import { SPELLS, CLASS_SPELLCASTING, MAGIC_INITIATE, SPECIES_CANTRIPS } from '../data/spells';
 import { SPELL_PROGRESSION, CANTRIP_UPGRADE_LEVELS } from '../data/progression';
+import { wearsUntrainedArmor } from './equipment';
 
 const mod = score => Math.floor(((Number(score) || 10) - 10) / 2);
 const abilityName = id => ABILITIES.find(a => a.id === id)?.name || id;
@@ -333,6 +334,7 @@ export function castSpell(character, spellId, rollDie) {
   const spell = getSpell(spellId);
   if (!entry || !spell) return { ok: false, error: 'No conoces ese conjuro.' };
   if (!entry.prepared) return { ok: false, error: 'Ese conjuro está en tu libro, pero no lo tienes preparado.' };
+  if (wearsUntrainedArmor(character)) return { ok: false, error: 'No puedes lanzar conjuros con una armadura con la que no tienes competencia: quítatela en el menú Equipo.' };
 
   let usedSlot = false;
   let slotLevel = null;

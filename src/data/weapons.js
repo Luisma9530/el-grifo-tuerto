@@ -102,7 +102,7 @@ export const RAGE_DAMAGE = { 1: 2, 9: 3, 16: 4 };
 export const WEAPON_NAME_HINTS = [
   ['hacha a dos manos', 'greataxe'], ['gran hacha', 'greataxe'], ['hacha de mano', 'handaxe'], ['hachas de mano', 'handaxe'],
   ['hacha de batalla', 'battleaxe'], ['hacha de guerra', 'battleaxe'],
-  ['espada larga', 'longsword'], ['espada corta', 'shortsword'], ['espadón', 'greatsword'],
+  ['espada larga', 'longsword'], ['espada corta', 'shortsword'], ['espadón', 'greatsword'], ['mandoble', 'greatsword'],
   ['arco largo', 'longbow'], ['arco corto', 'shortbow'],
   ['ballesta de mano', 'handCrossbow'], ['ballesta pesada', 'heavyCrossbow'], ['ballesta', 'lightCrossbow'],
   ['martillo ligero', 'lightHammer'], ['martillo de guerra', 'warhammer'], ['gran garrote', 'greatclub'],
@@ -112,3 +112,18 @@ export const WEAPON_NAME_HINTS = [
   ['garrote', 'club'], ['dardo', 'dart'], ['honda', 'sling'], ['guja', 'glaive'], ['alabarda', 'halberd'],
   ['mazo', 'maul'], ['pica', 'pike'], ['tridente', 'trident'], ['látigo', 'whip'], ['cerbatana', 'blowgun']
 ];
+
+/**
+ * Price (gold pieces) and weight (kg, the Spanish books halve the pounds) of
+ * each weapon, from the SRD 5.2.1 weapons table.
+ */
+export const WEAPON_COSTS = {
+  club: [0.1, 1], dagger: [2, 0.5], greatclub: [0.2, 5], handaxe: [5, 1], javelin: [0.5, 1],
+  lightHammer: [2, 1], mace: [5, 2], quarterstaff: [0.2, 2], sickle: [1, 1], spear: [1, 1.5],
+  dart: [0.05, 0.1], lightCrossbow: [25, 2.5], shortbow: [25, 1], sling: [0.1, 0],
+  battleaxe: [10, 2], flail: [10, 1], glaive: [20, 3], greataxe: [30, 3.5], greatsword: [50, 3],
+  halberd: [20, 3], lance: [10, 3], longsword: [15, 1.5], maul: [10, 5], morningstar: [15, 2],
+  pike: [5, 9], rapier: [25, 1], scimitar: [25, 1.5], shortsword: [10, 1], trident: [5, 2],
+  warhammer: [15, 2.5], warPick: [5, 1], whip: [2, 1.5], blowgun: [10, 0.5],
+  handCrossbow: [75, 1.5], heavyCrossbow: [50, 9], longbow: [50, 1]
+};
