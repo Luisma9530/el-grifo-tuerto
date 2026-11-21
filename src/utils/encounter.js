@@ -7,6 +7,7 @@
 
 import { resolveAttack } from './combat';
 import { castSpell, parseDice } from './spellcasting';
+import { setHands, describeHands, fleeDC, setLimbStatus, normalizeEquipment, limbWithArticle, limbStatusLabel, LIMB_IDS } from './equipment';
 
 const ABILITY_NAMES = { fue: 'Fuerza', des: 'Destreza', con: 'Constitución', int: 'Inteligencia', sab: 'Sabiduría', car: 'Carisma' };
 const mod = score => Math.floor(((Number(score) || 10) - 10) / 2);
@@ -16,8 +17,19 @@ const withBonus = (roll, bonus) => `${roll}${bonus >= 0 ? '+' : '−'}${Math.abs
 /** Creatures that give up by running away rather than surrendering. */
 const FLEEING_TYPES = ['bestia', 'monstruosidad', 'dragón', 'elemental', 'planta', 'feérico'];
 export const MORALE_DC = 10;
-export const FLEE_DC = 12;
+export { FLEE_DC } from './equipment';
 export const POTION_HEAL = '2d4+2';
+
+/**
+ * Grave wounds (house rule, rare on purpose): when an enemy lands a critical hit
+ * with slashing damage, the game rolls a d20; on INJURY_THRESHOLD or less (1-2,
+ * a 10 % of those criticals) a random limb (d4: right arm, left arm, right leg,
+ * left leg) is disabled, or lost if it already was. If that hit also drops the
+ * hero to 0 HP, the threshold is INJURY_THRESHOLD_DOWN (1-4, 20 %).
+ */
+export const INJURY_THRESHOLD = 2;
+export const INJURY_THRESHOLD_DOWN = 4;
+export const INJURY_DAMAGE_TYPE = 'cortante';
 
 // ---------------------------------------------------------------------------
 // Dice helpers
@@ -198,6 +210,7 @@ function damageEnemy(encounter, uid, amount, rollDie) {
  *   { type: 'attack', optionId, targetUid, raging? }
  *   { type: 'spell', spellId, targetUid? }
  *   { type: 'potion', itemId }
+ *   { type: 'equip', hands: { main, off } }  change what is in hand (takes the turn)
  *   { type: 'dodge' } | { type: 'flee' }
  * @returns {{ ok: false, error } | { ok: true, encounter, character, animations }}
  *   animations: the player's dice to show with the 3D dice, in order:
@@ -289,18 +302,28 @@ export function playerAction(encounter, character, action, rollDie) {
         .filter(i => i.uses === undefined || i.uses > 0)
     };
     next = pushLog(next, 'heal', `${hero.name} usa ${item.name} y recupera ${hp - character.hp} puntos de golpe.`);
+  } else if (action.type === 'equip') {
+    // House rule: changing what you hold takes the whole turn
+    const result = setHands(hero, action.hands);
+    if (!result.ok) return result;
+    if (!result.changed) return { ok: false, error: 'Ya llevas eso en las manos.' };
+    hero = result.character;
+    next = pushLog(next, 'info', `${hero.name} cambia de equipo y ahora lleva ${describeHands(hero)}. Gasta su turno en ello.`);
   } else if (action.type === 'dodge') {
     next = pushLog({ ...next, dodging: true }, 'info', `${hero.name} se pone a la defensiva: los ataques que reciba tendrán desventaja hasta su próximo turno.`);
   } else if (action.type === 'flee') {
+    // Injured legs make it harder (+5 each); with both legs injured there is no running away
+    const dc = fleeDC(hero);
+    if (dc == null) return { ok: false, error: 'Con las dos piernas heridas no puedes huir.' };
     const roll = rollDie(20);
     const total = roll + mod(hero.stats?.des);
-    animations.push({ sides: 20, value: roll, modifier: total - roll, dc: FLEE_DC, success: total >= FLEE_DC, label: 'Huida' });
-    if (total >= FLEE_DC) {
+    animations.push({ sides: 20, value: roll, modifier: total - roll, dc, success: total >= dc, label: 'Huida' });
+    if (total >= dc) {
       const xp = overcomeXp(next, false);
-      next = pushLog({ ...next, status: 'fled', xp }, 'end', `${hero.name} logra escapar (${withBonus(roll, total - roll)} = ${total} vs CD ${FLEE_DC}).${xp ? ` +${xp} PX por los enemigos abatidos.` : ''}`);
+      next = pushLog({ ...next, status: 'fled', xp }, 'end', `${hero.name} logra escapar (${withBonus(roll, total - roll)} = ${total} vs CD ${dc}).${xp ? ` +${xp} PX por los enemigos abatidos.` : ''}`);
       return { ok: true, encounter: next, character: hero, animations };
     }
-    next = pushLog(next, 'miss', `${hero.name} intenta huir pero le cortan el paso (${total} vs CD ${FLEE_DC}).`);
+    next = pushLog(next, 'miss', `${hero.name} intenta huir pero le cortan el paso (${total} vs CD ${dc}).`);
   } else {
     return { ok: false, error: 'Acción desconocida.' };
   }
@@ -339,8 +362,38 @@ function enemyAttack(encounter, enemy, attackAction, character, rollDie) {
   next = pushLog(next, crit ? 'enemyCrit' : 'enemyHit',
     `${enemy.name} ataca con ${attackAction.name.toLowerCase()}: ${withBonus(roll, attackAction.bonus)} = ${total} vs CA ${character.ac} → ${crit ? '¡crítico! ' : ''}${amount} de daño ${attackAction.type}${extra ? ` y ${attackAction.extraType}` : ''}.`,
     { playerDamage: amount });
+  if (crit && attackAction.type === INJURY_DAMAGE_TYPE) {
+    ({ encounter: next, character: hero } = graveWound(next, enemy, hero, rollDie));
+  }
   return { encounter: next, character: hero };
 }
+
+/** Grave wound check after a slashing critical (see INJURY_THRESHOLD). */
+function graveWound(encounter, enemy, character, rollDie) {
+  const roll = rollDie(20);
+  const threshold = character.hp <= 0 ? INJURY_THRESHOLD_DOWN : INJURY_THRESHOLD;
+  if (roll > threshold) return { encounter, character };
+  const limb = LIMB_IDS[Math.min(LIMB_IDS.length, Math.max(1, rollDie(4))) - 1];
+  const sheet = normalizeEquipment(character);
+  const current = sheet.limbs[limb];
+  if (current === 'lost') return { encounter, character };
+  const status = current === 'ok' ? 'disabled' : 'lost';
+  const result = setLimbStatus(sheet, limb, status);
+  const part = limbWithArticle(limb);
+  const dropped = result.dropped.length ? ` ${result.dropped.join(' y ')} cae${result.dropped.length > 1 ? 'n' : ''} a la mochila.` : '';
+  const text = status === 'lost'
+    ? `¡Herida terrible! El golpe de ${enemy.name} cercena ${part} de ${character.name}.${dropped}`
+    : `¡Herida grave! El golpe de ${enemy.name} deja ${limbStatusLabel(limb, 'disabled').toLowerCase()} ${part} de ${character.name}.${dropped}`;
+  return {
+    encounter: pushLog(encounter, 'injury', text, { injury: { limb, status }, by: enemy.name }),
+    character: result.character
+  };
+}
+
+/** Grave wounds suffered in these log entries: [{ limb, status, by }] */
+export const injuriesIn = (entries = []) => entries
+  .filter(e => e.kind === 'injury' && e.injury)
+  .map(e => ({ ...e.injury, by: e.by || '' }));
 
 function enemySaveAction(encounter, enemy, saveAction, character, rollDie) {
   const roll = rollDie(20);
