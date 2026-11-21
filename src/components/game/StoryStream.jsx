@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import RichText from '../RichText';
-import { Send, Dice5, Sparkles, Sword, Eye, MessageCircle, Flame, ShieldAlert } from 'lucide-react';
+import { Send, Dice5, Sparkles, Sword, Eye, MessageCircle, Flame, ShieldAlert, Skull } from 'lucide-react';
 
 export default function StoryStream({
   messages,
@@ -10,6 +10,9 @@ export default function StoryStream({
   world,
   onSendAction,
   onOpenGeminiConnect,
+  onQuickAttack,
+  onQuickCheck,
+  onStartCombat,
   keysCount = 0
 }) {
   const [inputText, setInputText] = useState('');
@@ -146,6 +149,13 @@ export default function StoryStream({
                 <RichText text={msg.text} />
               </div>
 
+              {/* Experience gained in this scene */}
+              {msg.xp > 0 && (
+                <div className="mt-3 inline-flex items-center gap-1.5 mr-2 px-2.5 py-1 rounded-lg bg-sky-950/50 border border-sky-800/50 text-[11px] font-mono text-sky-300">
+                  <Sparkles className="w-3 h-3" /> +{msg.xp} PX
+                </div>
+              )}
+
               {/* Status / Dice badges */}
               {msg.roll && (
                 <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-stone-950 border border-amber-500/40 text-xs font-mono">
@@ -220,24 +230,40 @@ export default function StoryStream({
         <div className="flex items-center gap-4 mt-2 px-1 text-[11px] text-stone-400">
           <button
             type="button"
-            onClick={() => handleChipClick('Desenvainar arma y amenazar')}
-            className="hover:text-amber-300 flex items-center gap-1 transition-colors"
+            onClick={() => !isGenerating && onStartCombat?.()}
+            disabled={isGenerating}
+            title="Empieza un combate con criaturas del bestiario (lo resuelve el juego)"
+            className="hover:text-red-300 flex items-center gap-1 transition-colors font-semibold text-red-300/90 disabled:opacity-40"
+          >
+            <Skull className="w-3 h-3 text-red-400" />
+            <span>Combate</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => !isGenerating && onQuickAttack?.()}
+            disabled={isGenerating}
+            title="Ataca con tu primera arma equipada (lo resuelve el juego)"
+            className="hover:text-amber-300 flex items-center gap-1 transition-colors disabled:opacity-40"
           >
             <Sword className="w-3 h-3 text-red-400" />
             <span>Atacar</span>
           </button>
           <button
             type="button"
-            onClick={() => handleChipClick('Inspeccionar con cuidado la habitación')}
-            className="hover:text-amber-300 flex items-center gap-1 transition-colors"
+            onClick={() => !isGenerating && onQuickCheck?.('perception')}
+            disabled={isGenerating}
+            title="Tirada de Percepción con tu ficha (lo resuelve el juego)"
+            className="hover:text-amber-300 flex items-center gap-1 transition-colors disabled:opacity-40"
           >
             <Eye className="w-3 h-3 text-blue-400" />
             <span>Percepción</span>
           </button>
           <button
             type="button"
-            onClick={() => handleChipClick('Intentar convencerlo mediante diplomacia')}
-            className="hover:text-amber-300 flex items-center gap-1 transition-colors"
+            onClick={() => !isGenerating && onQuickCheck?.('persuasion')}
+            disabled={isGenerating}
+            title="Tirada de Persuasión con tu ficha (lo resuelve el juego)"
+            className="hover:text-amber-300 flex items-center gap-1 transition-colors disabled:opacity-40"
           >
             <MessageCircle className="w-3 h-3 text-purple-400" />
             <span>Persuadir</span>

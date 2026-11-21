@@ -84,6 +84,18 @@ export default function Footer({ onEnterTavern, onOpenInvite }) {
           </div>
         </div>
 
+        {/* Attribution required by the SRD 5.2.1 licence (CC-BY-4.0) */}
+        <p className="mt-6 text-[10px] leading-relaxed text-stone-600 max-w-4xl">
+          This work includes material from the System Reference Document 5.2.1 (“SRD 5.2.1”) by Wizards of the Coast LLC,
+          available at{' '}
+          <a href="https://www.dndbeyond.com/srd" target="_blank" rel="noreferrer" className="underline hover:text-stone-400">dndbeyond.com/srd</a>.
+          The SRD 5.2.1 is licensed under the{' '}
+          <a href="https://creativecommons.org/licenses/by/4.0/legalcode" target="_blank" rel="noreferrer" className="underline hover:text-stone-400">
+            Creative Commons Attribution 4.0 International License
+          </a>.
+          El Grifo Tuerto no está afiliado a Wizards of the Coast.
+        </p>
+
       </div>
     </footer>
   );

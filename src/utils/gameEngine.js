@@ -1,7 +1,9 @@
 // Core RPG & Story Game Engine for El Grifo Tuerto
 import { tavernAudio } from './audio';
-import { buildDMPrompt, parseDMReply, DM_RESPONSE_SCHEMA } from './dmPrompt';
+import { buildDMPrompt, parseDMReply, dmResponseSchema } from './dmPrompt';
 import { requestGemini } from './geminiClient';
+import { narrateSpell, narrateRest, narrateAttack } from './spellNarration';
+import { narrateCombatEnd, startLocalFight, isAggressive } from './combatNarration';
 
 // Helper to calculate D&D stat modifier from score (e.g. 16 -> +3, 10 -> 0, 8 -> -1)
 export function getModifier(score) {
@@ -22,11 +24,10 @@ export function rollDie(sides = 20, { silent = false } = {}) {
   return val;
 }
 
-// Roll a full D&D check with a character stat modifier
-export function rollCheckWithStat(statValue, statName = 'Tirada', dc = 12, { silent = false } = {}) {
+// Roll a d20 check with any modifier (ability, or skill with proficiency) against a DC
+export function rollCheck({ modifier = 0, statName = 'Tirada', dc = 12, silent = false } = {}) {
   const rawRoll = rollDie(20, { silent });
-  const mod = getModifierNumber(statValue);
-  const total = rawRoll + mod;
+  const total = rawRoll + modifier;
 
   const isNat20 = rawRoll === 20;
   const isNat1 = rawRoll === 1;
@@ -42,7 +43,7 @@ export function rollCheckWithStat(statValue, statName = 'Tirada', dc = 12, { sil
 
   return {
     rawRoll,
-    modifier: mod,
+    modifier,
     total,
     dc,
     statName,
@@ -50,6 +51,11 @@ export function rollCheckWithStat(statValue, statName = 'Tirada', dc = 12, { sil
     isNat20,
     isNat1
   };
+}
+
+// Roll a check with a character's ability score
+export function rollCheckWithStat(statValue, statName = 'Tirada', dc = 12, { silent = false } = {}) {
+  return rollCheck({ modifier: getModifierNumber(statValue), statName, dc, silent });
 }
 
 // Storage and Key Pooling helpers for BYOK (Bring Your Own Key) Multi-Player setup
@@ -111,11 +117,22 @@ export async function testGeminiKey(key) {
 async function askGemini(key, context) {
   const structured = await requestGemini(key, {
     prompt: buildDMPrompt({ ...context, structured: true }),
-    generationConfig: { responseMimeType: 'application/json', responseSchema: DM_RESPONSE_SCHEMA }
+    generationConfig: { responseMimeType: 'application/json', responseSchema: dmResponseSchema(context.requestSummary, Boolean(context.bestiary)) }
   });
   if (structured.ok || structured.reason !== 'bad-request') return structured;
 
   return requestGemini(key, { prompt: buildDMPrompt({ ...context, structured: false }) });
+}
+
+// Experience the local engine awards for a scene: risky actions resolved with a die
+// give more when they go well; talking, buying and resting give little or nothing.
+function localXp({ text, rest, spellXp, isCrit, isCritFail, isHighRoll }) {
+  if (rest) return 0;
+  if (spellXp != null) return spellXp;
+  if (!text.includes('🎲')) return 5;
+  if (isCrit) return 75;
+  if (isCritFail) return 10;
+  return isHighRoll ? 40 : 15;
 }
 
 const AI_FAILURE_NOTICES = {
@@ -126,6 +143,9 @@ const AI_FAILURE_NOTICES = {
   'bad-request': 'Gemini rechazó la petición: Duncan improvisa con el motor local en este turno.'
 };
 
+/** Remove "[🎲 ...]" roll tags (and the space before them) from a narration. */
+export const stripRollTags = text => text.replace(/\s*\[🎲[^\]]*\]/gu, '').replace(/ {2,}/g, ' ').trim();
+
 // Module-level rotation pointer for Round-Robin multi-player token pool
 let currentKeyRotationIndex = 0;
 
@@ -135,7 +155,18 @@ let currentKeyRotationIndex = 0;
 // The procedural engine then uses it instead of rolling behind the screen.
 // The response may include `roll: { sides, value }` when Duncan rolled a die whose
 // result is mentioned in the text, so the UI can show it before the narration.
-export async function generateDMResponse({ playerAction, character, world, history = [], apiKey = null, apiKeys = [], playerRoll = null }) {
+// `spellCast` (optional): a spell just cast by the player (see castSpell in spellcasting.js).
+// `rest` (optional): 'long' | 'short' when the action is a rest.
+// `effectsApplied`: the caller already changed HP / gold for this action (drinks, rests, healing).
+export async function generateDMResponse({
+  playerAction, character, world, history = [], apiKey = null, apiKeys = [], playerRoll = null,
+  spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
+  summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null
+}) {
+  // Rests, finished fights and spells without an attack or a saving throw involve no d20 at all
+  const needsNoRoll = Boolean(rest) || Boolean(weaponAttack) || Boolean(combatResult)
+    || (spellCast && !spellCast.attack && spellCast.spell.kind !== 'save');
+
   // Build active keys pool (from params or persistent storage)
   let pool = [];
   if (Array.isArray(apiKeys) && apiKeys.length > 0) {
@@ -166,20 +197,30 @@ export async function generateDMResponse({ playerAction, character, world, histo
       const keyToUse = pool[activeIdx];
 
       try {
-        const reply = await askGemini(keyToUse, { playerAction, character, world, history, d20, playerRoll });
+        const reply = await askGemini(keyToUse, {
+          playerAction, character, world, history, d20, playerRoll, spellCast, rest, effectsApplied,
+          weaponAttack, summary, events, requestSummary, bestiary, combatResult
+        });
 
         if (reply.ok) {
           const parsed = parseDMReply(reply.text, character);
           if (parsed) {
             // Advance rotation index for the next player action
             currentKeyRotationIndex = (activeIdx + 1) % pool.length;
+            // A fight starts: the game rolls it, so no dice tag in the narration
+            const startsFight = Boolean(bestiary && parsed.combat);
             return {
-              text: parsed.text,
+              text: startsFight ? stripRollTags(parsed.text) : parsed.text,
               suggestedActions: parsed.suggestedActions,
-              damageTaken: parsed.damageTaken,
-              healing: parsed.healing,
+              // After a finished fight: no damage, healing or XP from the narration (already resolved)
+              damageTaken: combatResult ? 0 : parsed.damageTaken,
+              healing: combatResult ? 0 : parsed.healing,
               goldEarned: parsed.goldEarned,
-              roll: parsed.usedRoll && !playerRoll ? { sides: 20, value: d20 } : null,
+              xpEarned: rest || combatResult ? 0 : parsed.xpEarned,
+              summary: parsed.summary,
+              combat: bestiary ? parsed.combat : null,
+              // A fight that starts is rolled by the game, not by Duncan
+              roll: parsed.usedRoll && !playerRoll && !needsNoRoll && !startsFight ? { sides: 20, value: d20 } : null,
               source: 'gemini',
               keyIndex: activeIdx,
               totalKeys: pool.length
@@ -215,8 +256,30 @@ export async function generateDMResponse({ playerAction, character, world, histo
   let damageTaken = 0;
   let goldEarned = 0;
 
+  // Rests and spells have their own narration
+  let spellXp = null;
+  let combat = null;
+  if (combatResult) {
+    ({ text, suggestedActions, goldEarned } = narrateCombatEnd(combatResult, { character, rng: Math.random }));
+    spellXp = 0;
+  } else if (bestiary && !playerRoll && isAggressive(actionLower)) {
+    // A fight starts: the game resolves it with creatures of the bestiary
+    ({ text, suggestedActions, combat } = startLocalFight(bestiary, { character, world, rng: Math.random }));
+    spellXp = 0;
+  } else if (rest) {
+    ({ text, suggestedActions } = narrateRest(rest, character));
+  } else if (weaponAttack) {
+    let narration;
+    ({ text, suggestedActions, ...narration } = narrateAttack(weaponAttack, { character }));
+    spellXp = narration.xp;
+  } else if (spellCast) {
+    let narration;
+    ({ text, suggestedActions, ...narration } = narrateSpell(spellCast, { character, enemyRoll: rollResult }));
+    spellXp = narration.xp;
+  }
+
   // The player rolled an ability check from the character sheet: narrate its outcome
-  if (playerRoll) {
+  else if (playerRoll) {
     const stat = playerRoll.statName || 'habilidad';
     const rollTag = `[🎲 ${stat} D20: **${playerRoll.rawRoll}** = ${playerRoll.total} vs CD ${playerRoll.dc}]`;
     if (isCrit) {
@@ -411,6 +474,8 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     damageTaken,
     healing: 0,
     goldEarned,
+    xpEarned: localXp({ text, rest, spellXp, isCrit, isCritFail, isHighRoll }),
+    combat,
     // Set when Gemini keys exist but the AI could not answer this turn
     notice: aiFailure ? AI_FAILURE_NOTICES[aiFailure] || AI_FAILURE_NOTICES.overloaded : null,
     // Only when Duncan's own roll is mentioned in the narration

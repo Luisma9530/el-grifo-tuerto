@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { Volume2, VolumeX, Users, Settings, ArrowLeft, Dice5, Compass, User, Sparkles, BookOpen, Download, Check, AlertTriangle } from 'lucide-react';
 import PartyPanel from './game/PartyPanel';
 import StoryStream from './game/StoryStream';
 import WorldMapPanel from './game/WorldMapPanel';
 import DiceRollerTray from './game/DiceRollerTray';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from '../data/gameData';
-import { generateDMResponse, rollCheckWithStat, getStoredGeminiKeys } from '../utils/gameEngine';
+import { generateDMResponse, rollCheck, rollDie, getStoredGeminiKeys } from '../utils/gameEngine';
+import { castSpell, describeCast, longRest, shortRest, LONG_REST_COST } from '../utils/spellcasting';
 import { 
   saveCampaign, 
   createNewCampaign, 
@@ -17,7 +18,22 @@ import {
 } from '../utils/campaignStorage';
 import { tavernAudio } from '../utils/audio';
 import { animateRoll, is3DDiceEnabled } from '../dice3d/controller';
-import { applySceneOutcome } from '../utils/sceneOutcome';
+import { applySceneOutcome, rescueKnockedOut } from '../utils/sceneOutcome';
+import { createEncounter, runEnemyTurns, playerAction, describeEncounterResult } from '../utils/encounter';
+import { keyMoments, narrateMoment, MAX_MOMENTS } from '../utils/combatNarration';
+import CombatView from './game/CombatView';
+import { addXp, canLevelUp, describeLevelUp } from '../utils/leveling';
+import LevelUpModal from './game/LevelUpModal';
+import {
+  historyForPrompt, needsSummary, coverageAfterSummary, addEvent, eventsForPrompt
+} from '../utils/campaignMemory';
+import { resolveAttack, describeAttack, attackOptions } from '../utils/combat';
+import { skillModifier, getSkill } from '../utils/characterBuilder';
+
+// The bestiary (and its builder) is only needed when a fight is being prepared
+const EncounterBuilder = lazy(() => import('./game/EncounterBuilder'));
+// The bestiary is big: loaded the first time Duncan may start a fight
+const loadBestiary = () => import('../utils/bestiary');
 
 export default function TavernApp({
   activeCampaign = null,
@@ -25,7 +41,6 @@ export default function TavernApp({
   activeCharacter = PRESET_CHARACTERS[0],
   onBackToLanding,
   onOpenInvite,
-  onOpenCharacterCreator,
   onOpenSettings,
   onOpenGeminiConnect,
   onOpenCampaigns
@@ -99,8 +114,21 @@ export default function TavernApp({
     ];
   });
 
+  // Campaign memory for the AI Dungeon Master (see campaignMemory.js)
+  const storedCampaign = () => activeCampaign || (currentCampaignId ? getCampaignById(currentCampaignId) : null);
+  const [summary, setSummary] = useState(() => storedCampaign()?.summary || '');
+  const [summaryCoverage, setSummaryCoverage] = useState(() => storedCampaign()?.summaryCoverage || 0);
+  const [events, setEvents] = useState(() => storedCampaign()?.events || []);
+  const recordEvent = text => setEvents(prev => addEvent(prev, text));
+
+  // Combat encounter in progress (null outside combat); saved with the campaign
+  const [encounter, setEncounter] = useState(() => storedCampaign()?.encounter || null);
+  const [isEncounterBuilderOpen, setIsEncounterBuilderOpen] = useState(false);
+  const [combatBusy, setCombatBusy] = useState(false);
+
   const [saveStatus, setSaveStatus] = useState('saved'); // 'saved' | 'error' | 'quota'
   const isRollingCheckRef = useRef(false); // a stat check die is on the table
+  const [isLevelUpOpen, setIsLevelUpOpen] = useState(false);
 
   // Guards against double-creation under React.StrictMode (effects run twice in dev)
   const campaignInitRef = useRef(false);
@@ -144,6 +172,10 @@ export default function TavernApp({
       setWorld(activeCampaign.world);
       setCharacter(activeCampaign.character);
       setMessages(activeCampaign.messages || []);
+      setSummary(activeCampaign.summary || '');
+      setSummaryCoverage(activeCampaign.summaryCoverage || 0);
+      setEvents(activeCampaign.events || []);
+      setEncounter(activeCampaign.encounter || null);
       if (activeCampaign.suggestedActions?.length > 0) {
         setSuggestedActions(activeCampaign.suggestedActions);
       }
@@ -180,14 +212,18 @@ export default function TavernApp({
       world,
       character,
       messages,
-      suggestedActions
+      suggestedActions,
+      summary,
+      summaryCoverage,
+      events,
+      encounter
     });
     if (saved) {
       setSaveStatus('saved');
     } else {
       setSaveStatus(isQuotaError(getLastSaveError()) ? 'quota' : 'error');
     }
-  }, [messages, character, world, campaignTitle, currentCampaignId, suggestedActions]);
+  }, [messages, character, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter]);
 
   const toggleSound = () => {
     const newState = tavernAudio.toggleTavernAmbience();
@@ -197,11 +233,16 @@ export default function TavernApp({
   // Main Action Dispatcher
   // `sheet`: pass the just-updated character when the caller changed it in this same tick
   // (state updates are not visible here until the next render)
-  const handleSendAction = async (actionText, { playerRoll = null, sheet = character } = {}) => {
+  // `spellCast` / `rest`: what the action was, so the Dungeon Master narrates it properly
+  // `effectsApplied`: HP / gold for this action were already changed here (drinks, rests, healing)
+  const handleSendAction = async (actionText, {
+    playerRoll = null, sheet = character, spellCast = null, rest = null, effectsApplied = false,
+    weaponAttack = null, combatResult = null
+  } = {}) => {
     if (!actionText || isGenerating) return;
 
-    // Add player's action to messages
-    const newMsgList = [
+    // Add player's action to messages (not for the narration after a fight)
+    const newMsgList = combatResult ? messages : [
       ...messages,
       {
         sender: 'player',
@@ -209,31 +250,68 @@ export default function TavernApp({
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }
     ];
-    setMessages(newMsgList);
+    // (the fight's own system lines were just added with functional updates: keep them)
+    if (!combatResult) setMessages(newMsgList);
     setIsGenerating(true);
 
     try {
       const currentKeys = getStoredGeminiKeys();
       setGeminiKeys(currentKeys);
 
+      // A plain action outside combat may start a fight: Duncan gets a short list of creatures
+      const mayStartFight = !encounter && !combatResult && !playerRoll && !spellCast && !rest && !weaponAttack;
+      const bestiaryModule = mayStartFight ? await loadBestiary().catch(() => null) : null;
+      const bestiary = bestiaryModule
+        ? bestiaryModule.encounterCandidates(sheet.level || 1, { tags: bestiaryModule.WORLD_TAGS[world?.id] || null })
+        : null;
+
+      // Small requests: summary + uncovered messages; the summary is refreshed in
+      // this same call every few turns (only when the AI is connected)
+      const requestSummary = currentKeys.length > 0 && needsSummary(newMsgList, summaryCoverage);
       const response = await generateDMResponse({
         playerAction: actionText,
         character: sheet,
         world,
-        history: newMsgList,
+        history: historyForPrompt(newMsgList, summaryCoverage),
         apiKeys: currentKeys,
-        playerRoll
+        playerRoll,
+        spellCast,
+        rest,
+        effectsApplied,
+        weaponAttack,
+        summary,
+        events: eventsForPrompt(events),
+        requestSummary,
+        bestiary,
+        combatResult
       });
+      // A fight starts: the game resolves it, so nothing from this reply touches the sheet
+      const fightGroups = response.combat && bestiaryModule
+        ? bestiaryModule.resolveCombatRequest(response.combat, sheet.level || 1)
+        : [];
+      if (fightGroups.length) {
+        response.damageTaken = 0;
+        response.healing = 0;
+        response.goldEarned = 0;
+        response.xpEarned = 0;
+      }
+      if (response.summary) {
+        setSummary(response.summary);
+        // The reply is about to be added: the summary covers all but the last few messages
+        setSummaryCoverage(coverageAfterSummary(newMsgList.length + 1));
+      }
 
       // Duncan rolled behind the screen: show the die before his narration
       if (response.roll) {
-        await animateRoll({ ...response.roll, label: 'Tirada de acción' });
+        const isEnemySave = spellCast?.spell.kind === 'save';
+        await animateRoll({ ...response.roll, label: isEnemySave ? 'Salvación del objetivo' : 'Tirada de acción' });
       }
 
       // Apply the consequences of the scene to the character sheet
+      // When the game already applied this action's healing and gold, the narrator can only add damage
       const damage = response.damageTaken || 0;
-      const healing = response.healing || 0;
-      const goldChange = response.goldEarned || 0;
+      const healing = effectsApplied ? 0 : response.healing || 0;
+      const goldChange = effectsApplied ? 0 : response.goldEarned || 0;
       const effects = { damage, healing, goldChange };
       const outcome = applySceneOutcome(sheet, effects);
       if (damage || healing || goldChange) {
@@ -244,6 +322,11 @@ export default function TavernApp({
         });
       }
 
+      // Experience: tell the player once when they can go up a level
+      const xpGained = response.xpEarned || 0;
+      const reachesNewLevel = xpGained > 0 && !canLevelUp(sheet) && canLevelUp(addXp(sheet, xpGained));
+      if (xpGained > 0) setCharacter(prev => addXp(prev, xpGained));
+
       setMessages(prev => [
         ...prev,
         {
@@ -251,14 +334,20 @@ export default function TavernApp({
           text: response.text,
           source: response.source,
           notice: response.notice || undefined,
+          xp: response.xpEarned || undefined,
           keyIndex: response.keyIndex,
           totalKeys: response.totalKeys,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);
 
+      if (reachesNewLevel) {
+        pushSystemMessage(`✨ ¡${sheet.name} tiene experiencia suficiente para subir a nivel ${(sheet.level || 1) + 1}! Pulsa «Subir de nivel» en tu ficha.`);
+      }
+
       // Dropping to 0 HP: Duncan patches the hero up... at a price
       if (outcome.knockedOut) {
+        recordEvent(`${sheet.name} cayó inconsciente y Duncan lo curó`);
         setMessages(prev => [
           ...prev,
           {
@@ -272,6 +361,8 @@ export default function TavernApp({
       if (response.suggestedActions) {
         setSuggestedActions(response.suggestedActions);
       }
+
+      if (fightGroups.length) startEncounter(fightGroups, sheet, { byDuncan: true });
     } catch (err) {
       console.error(err);
     } finally {
@@ -279,27 +370,264 @@ export default function TavernApp({
     }
   };
 
-  // When rolling a stat check directly from character sheet
-  const handleRollStatCheck = async (statVal, statName) => {
+  // ---------------------------------------------------------------- combat encounters
+  const combatDie = sides => rollDie(sides, { silent: true });
+
+  // `sheet`: the hero as it is now (Duncan may start a fight right after changing it)
+  const startEncounter = (groups, sheet = character, { byDuncan = false } = {}) => {
+    let next = { ...createEncounter(groups, sheet, combatDie), byDuncan, narrated: 0 };
+    let hero = sheet;
+    // Enemies that won initiative act before the hero
+    ({ encounter: next, character: hero } = runEnemyTurns(next, hero, combatDie));
+    const names = groups.map(g => {
+      const label = g.name ? `${g.name} (${g.monster.name}${g.elite ? ', élite' : ''})` : g.monster.name;
+      return g.count > 1 ? `${g.count} × ${label}` : label;
+    }).join(', ');
+    pushSystemMessage(`⚔️ ¡Combate! ${sheet.name} se enfrenta a: ${names}.`);
+    setEncounter(next);
+    if (hero !== sheet) setCharacter(hero);
+    setMobileTab('story');
+  };
+
+  const handleStartEncounter = (groups) => {
+    setIsEncounterBuilderOpen(false);
+    startEncounter(groups);
+  };
+
+  // Key moments (a leader falls, an enemy surrenders or flees): Duncan adds a line,
+  // at most MAX_MOMENTS times per fight. The fight never waits for it.
+  const narrateKeyMoments = (before, after, hero) => {
+    if (after.status !== 'active' || (after.narrated || 0) >= MAX_MOMENTS) return after;
+    const moments = keyMoments(after.log.slice(before.log.length));
+    const key = getStoredGeminiKeys()[0]?.key;
+    if (!moments.length || !key) return after;
+    narrateMoment(key, { moments, encounter: after, character: hero, world }).then(text => {
+      if (!text) return;
+      setEncounter(prev => (prev ? { ...prev, log: [...prev.log, { round: prev.round, kind: 'duncan', text: `🗣️ ${text}` }] } : prev));
+    });
+    return { ...after, narrated: (after.narrated || 0) + 1 };
+  };
+
+  const handleCombatAction = async (action) => {
+    if (!encounter || combatBusy) return;
+    const result = playerAction(encounter, character, action, combatDie);
+    if (!result.ok) {
+      setEncounter(prev => ({ ...prev, log: [...prev.log, { round: prev.round, kind: 'info', text: `⚠️ ${result.error}` }] }));
+      return;
+    }
+    setCombatBusy(true);
+    try {
+      for (const roll of result.animations) {
+        await animateRoll(roll);
+      }
+    } finally {
+      setEncounter(narrateKeyMoments(encounter, result.encounter, result.character));
+      setCharacter(result.character);
+      setCombatBusy(false);
+    }
+  };
+
+  // Close a finished fight: chronicle line, XP, recorded fact, rescue if the hero fell
+  const handleFinishEncounter = () => {
+    if (!encounter || encounter.status === 'active') return;
+    const line = describeEncounterResult(encounter, character);
+    pushSystemMessage(line);
+    const defeated = encounter.enemies.filter(e => e.status !== 'active').map(e => e.name);
+    if (encounter.status === 'victory') recordEvent(`Vence en combate a ${defeated.slice(0, 3).join(', ')}${defeated.length > 3 ? '…' : ''}`);
+    if (encounter.status === 'fled') recordEvent('Huye de un combate');
+
+    let hero = character;
+    if (encounter.xp > 0) {
+      const leveledBefore = canLevelUp(hero);
+      hero = addXp(hero, encounter.xp);
+      if (!leveledBefore && canLevelUp(hero)) {
+        pushSystemMessage(`✨ ¡${hero.name} tiene experiencia suficiente para subir a nivel ${(hero.level || 1) + 1}! Pulsa «Subir de nivel» en tu ficha.`);
+      }
+    }
+    if (encounter.status === 'defeat') {
+      const rescue = rescueKnockedOut(hero);
+      hero = { ...hero, hp: rescue.hp, gold: rescue.gold };
+      recordEvent(`${hero.name} cayó en combate y Duncan lo curó`);
+      pushSystemMessage(`💀 ${hero.name} cae inconsciente. Maese Duncan te arrastra junto a la chimenea y te remienda: despiertas con ${rescue.hp} HP${rescue.goldLost > 0 ? ` y ${rescue.goldLost} monedas de oro menos por los cuidados` : ''}.`);
+    }
+    setCharacter(hero);
+    setEncounter(null);
+    // Duncan narrates the outcome (and any loot) from the result the game computed
+    handleSendAction('Narra el final del combate', { sheet: hero, combatResult: line });
+  };
+
+  // Weapon attack resolved by the game: Duncan only narrates the result
+  const handleAttack = async ({ optionId, target = '', targetAC, raging = false }) => {
+    if (isGenerating || isRollingCheckRef.current) return;
+    const result = resolveAttack(character, optionId, sides => rollDie(sides, { silent: true }), { targetAC, raging });
+    if (!result.ok) {
+      pushSystemMessage(`⚔️ ${result.error}`);
+      return;
+    }
+
+    isRollingCheckRef.current = true;
+    try {
+      const { attack } = result;
+      const label = attack.option.name;
+      for (const [index, roll] of attack.rolls.entries()) {
+        await animateRoll({
+          sides: 20,
+          value: roll.raw,
+          modifier: roll.total - roll.raw,
+          dc: attack.targetAC,
+          success: roll.hit,
+          label: attack.rolls.length > 1 ? `${label} · ataque ${index + 1}` : `${label} · ataque`
+        });
+      }
+      // All the damage dice of the hits (and Sneak Attack) in a single throw
+      const damageDice = [
+        ...attack.rolls.flatMap(r => r.damage?.dice.map(value => ({ sides: r.damage.sides, value })) || []),
+        ...(attack.sneak?.dice.map(value => ({ sides: 6, value })) || [])
+      ];
+      if (damageDice.length > 0) {
+        const diceTotal = damageDice.reduce((sum, d) => sum + d.value, 0);
+        await animateRoll({ dice: damageDice, modifier: attack.totalDamage - diceTotal, label: `${label} · daño` });
+      }
+
+      setMobileTab('story');
+      handleSendAction(describeAttack(attack, target), { weaponAttack: attack });
+    } finally {
+      isRollingCheckRef.current = false;
+    }
+  };
+
+  // Shortcut under the chronicle: attack with the first equipped weapon
+  const handleQuickAttack = () => {
+    const options = attackOptions(character);
+    const option = options.find(o => o.weapon) || options[0];
+    handleAttack({ optionId: option.id });
+  };
+
+  // Shortcut under the chronicle: a skill check with the hero's sheet
+  const handleQuickCheck = (skillId) => {
+    const skill = getSkill(skillId);
+    if (skill) handleRollCheck({ label: skill.name, modifier: skillModifier(character, skillId) });
+  };
+
+  // When rolling an ability or skill check from the character sheet
+  const handleRollCheck = async ({ label, modifier }) => {
     if (isGenerating || isRollingCheckRef.current) return;
     isRollingCheckRef.current = true;
 
     try {
-      const check = rollCheckWithStat(statVal, statName, undefined, { silent: true });
+      const check = rollCheck({ modifier, statName: label, silent: true });
       await animateRoll({
         sides: 20,
         value: check.rawRoll,
         modifier: check.modifier,
         dc: check.dc,
         success: check.success,
-        label: `Tirada de ${statName}`
+        label: `Tirada de ${label}`
       });
 
-      const textDesc = `Realizo una tirada de ${statName} [🎲 D20: ${check.rawRoll} (${check.modifier >= 0 ? `+${check.modifier}` : check.modifier}) = ${check.total} vs CD ${check.dc}].`;
+      const textDesc = `Realizo una tirada de ${label} [🎲 D20: ${check.rawRoll} (${check.modifier >= 0 ? `+${check.modifier}` : check.modifier}) = ${check.total} vs CD ${check.dc}].`;
       handleSendAction(textDesc, { playerRoll: check });
     } finally {
       isRollingCheckRef.current = false;
     }
+  };
+
+  const pushSystemMessage = (text) => {
+    setMessages(prev => [
+      ...prev,
+      { sender: 'system', text, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+    ]);
+  };
+
+  // Casting a spell from the sheet: roll its dice, spend the slot and tell the Dungeon Master
+  const handleCastSpell = async (spellId, target = '') => {
+    if (isGenerating || isRollingCheckRef.current) return;
+
+    const result = castSpell(character, spellId, sides => rollDie(sides, { silent: true }));
+    if (!result.ok) {
+      pushSystemMessage(`✨ ${result.error}`);
+      return;
+    }
+
+    isRollingCheckRef.current = true;
+    try {
+      const { cast } = result;
+      const { spell } = cast;
+      const SPELL_ATTACK_DC = 12;
+      const toDice = roll => roll.dice.map(value => ({ sides: roll.sides, value }));
+
+      let playerRoll = null;
+      if (cast.attack) {
+        const { raw, total, isNat20, isNat1 } = cast.attack;
+        const success = isNat20 || (!isNat1 && total >= SPELL_ATTACK_DC);
+        await animateRoll({
+          sides: 20, value: raw, modifier: cast.attackBonus, dc: SPELL_ATTACK_DC, success,
+          label: `${spell.name} · ataque`
+        });
+        playerRoll = {
+          rawRoll: raw, modifier: cast.attackBonus, total, dc: SPELL_ATTACK_DC, success, isNat20, isNat1,
+          statName: `ataque de conjuro (${spell.name})`
+        };
+        if (success && cast.damage?.dice.length) {
+          await animateRoll({ dice: toDice(cast.damage), modifier: cast.damage.bonus, label: `${spell.name} · daño` });
+        }
+      } else if (cast.damage?.dice.length) {
+        await animateRoll({ dice: toDice(cast.damage), modifier: cast.damage.bonus, label: `${spell.name} · daño` });
+      } else if (cast.heal?.dice.length) {
+        await animateRoll({ dice: toDice(cast.heal), modifier: cast.heal.bonus, label: `${spell.name} · curación` });
+      }
+
+      setCharacter(result.character);
+      setMobileTab('story');
+      handleSendAction(describeCast(cast, { target, dc: SPELL_ATTACK_DC }), {
+        sheet: result.character,
+        playerRoll,
+        spellCast: cast,
+        effectsApplied: Boolean(cast.heal)
+      });
+    } finally {
+      isRollingCheckRef.current = false;
+    }
+  };
+
+  const handleLevelUpConfirmed = (next, summary) => {
+    setCharacter(next);
+    setIsLevelUpOpen(false);
+    tavernAudio.playCritSuccess();
+    pushSystemMessage(describeLevelUp(next, summary));
+    recordEvent(`Sube a nivel ${next.level}${summary.features.length ? ` (${summary.features.slice(0, 2).join(', ')})` : ''}`);
+  };
+
+  // Short rest (an hour by the fire) or long rest (a night in a room, for a price)
+  const handleRest = (kind) => {
+    if (isGenerating || isRollingCheckRef.current) return;
+
+    if (kind === 'long') {
+      if (character.gold < LONG_REST_COST) {
+        pushSystemMessage(`🛏️ Necesitas ${LONG_REST_COST} monedas de oro para una habitación.`);
+        return;
+      }
+      const rested = { ...longRest(character), gold: character.gold - LONG_REST_COST };
+      setCharacter(rested);
+      setMobileTab('story');
+      handleSendAction(
+        `Pago ${LONG_REST_COST} monedas de oro por una habitación y hago un descanso largo hasta el amanecer. Recupero todos mis puntos de golpe${rested.spellcasting ? ' y mi magia' : ''}.`,
+        { sheet: rested, rest: 'long', effectsApplied: true }
+      );
+      return;
+    }
+
+    const { character: rested, healed, die, slotsRecovered } = shortRest(character, sides => rollDie(sides, { silent: true }));
+    const gains = [
+      healed > 0 && `gasto mi dado de golpe (d${character.hitDie}: ${die}) y recupero ${healed} puntos de golpe`,
+      slotsRecovered && 'recupero mi magia de pacto'
+    ].filter(Boolean);
+    setCharacter(rested);
+    setMobileTab('story');
+    handleSendAction(
+      `Hago un descanso corto de una hora junto al fuego${gains.length ? `: ${gains.join(' y ')}` : ''}.`,
+      { sheet: rested, rest: 'short', effectsApplied: true }
+    );
   };
 
   // When ordering a drink from Duncan's tavern menu
@@ -313,7 +641,7 @@ export default function TavernApp({
     };
     setCharacter(updated);
 
-    handleSendAction(`Pido a Maese Duncan un/a "${drink.name}" (${drink.cost} po). ${drink.effect}`, { sheet: updated });
+    handleSendAction(`Pido a Maese Duncan un/a "${drink.name}" (${drink.cost} po). ${drink.effect}`, { sheet: updated, effectsApplied: true });
   };
 
   // When traveling to another node on the world map
@@ -326,6 +654,7 @@ export default function TavernApp({
       }))
     }));
 
+    recordEvent(`Viaja a ${node.name}`);
     handleSendAction(`El grupo decide abandonar la posición y viajar hacia: "${node.name}".`);
   };
 
@@ -394,27 +723,11 @@ export default function TavernApp({
           )}
         </div>
 
-        {/* Center: Character Quick Switcher */}
-        <div className="hidden md:flex items-center gap-2">
-          <span className="text-[11px] font-mono text-stone-400">Héroe:</span>
-          <select
-            value={character.id}
-            onChange={(e) => {
-              const selectedChar = PRESET_CHARACTERS.find(c => c.id === e.target.value);
-              if (selectedChar) setCharacter(selectedChar);
-            }}
-            className="bg-[#1a1523] border border-stone-800 text-stone-200 rounded-lg px-2.5 py-1 text-xs font-medium focus:outline-none"
-          >
-            {PRESET_CHARACTERS.map(c => (
-              <option key={c.id} value={c.id}>{c.avatar} {c.name} ({c.class})</option>
-            ))}
-          </select>
-          <button
-            onClick={onOpenCharacterCreator}
-            className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline underline-offset-2 ml-1"
-          >
-            + Crear
-          </button>
+        {/* Center: the campaign's hero */}
+        <div className="hidden md:flex items-center gap-2 min-w-0 text-xs text-stone-300">
+          <span className="text-base leading-none">{character.avatar || '🛡️'}</span>
+          <span className="font-cinzel font-bold text-stone-100 truncate max-w-[180px]">{character.name}</span>
+          <span className="text-stone-500 truncate hidden lg:inline">{character.race} · {character.class}</span>
         </div>
 
         {/* Right Utility Buttons */}
@@ -515,23 +828,40 @@ export default function TavernApp({
             character={character}
             onUpdateCharacter={setCharacter}
             onOrderDrink={handleOrderDrink}
-            onOpenCharacterModal={onOpenCharacterCreator}
-            onRollStatCheck={handleRollStatCheck}
+            onRollCheck={handleRollCheck}
+            onCastSpell={handleCastSpell}
+            onRest={handleRest}
+            onLevelUp={() => setIsLevelUpOpen(true)}
+            onAttack={handleAttack}
+            busy={isGenerating}
           />
         </div>
 
         {/* Center Column: Story Stream (Flexible width) */}
         <div className={`flex-1 min-w-0 flex-col h-full overflow-hidden ${mobileTab === 'story' ? 'flex' : 'hidden lg:flex'}`}>
-          <StoryStream
-            messages={messages}
-            isGenerating={isGenerating}
-            suggestedActions={suggestedActions}
-            character={character}
-            world={world}
-            onSendAction={handleSendAction}
-            onOpenGeminiConnect={onOpenGeminiConnect}
-            keysCount={geminiKeys.length}
-          />
+          {encounter ? (
+            <CombatView
+              encounter={encounter}
+              character={character}
+              onAction={handleCombatAction}
+              onFinish={handleFinishEncounter}
+              busy={combatBusy}
+            />
+          ) : (
+            <StoryStream
+              messages={messages}
+              isGenerating={isGenerating}
+              suggestedActions={suggestedActions}
+              character={character}
+              world={world}
+              onSendAction={handleSendAction}
+              onOpenGeminiConnect={onOpenGeminiConnect}
+              keysCount={geminiKeys.length}
+              onQuickAttack={handleQuickAttack}
+              onQuickCheck={handleQuickCheck}
+              onStartCombat={() => setIsEncounterBuilderOpen(true)}
+            />
+          )}
         </div>
 
         {/* Right Column: World Map & Factions (300px on desktop) */}
@@ -539,13 +869,35 @@ export default function TavernApp({
           <WorldMapPanel
             world={world}
             onTravelToNode={handleTravelToNode}
+            summary={summary}
+            events={events}
           />
         </div>
 
       </div>
 
       {/* Floating 3D Dice Roller Tray */}
-      <DiceRollerTray onSendRollToChat={handleDiceRollToChat} />
+      {isEncounterBuilderOpen && (
+        <Suspense fallback={null}>
+          <EncounterBuilder
+            character={character}
+            world={world}
+            onStart={handleStartEncounter}
+            onClose={() => setIsEncounterBuilderOpen(false)}
+          />
+        </Suspense>
+      )}
+
+      {isLevelUpOpen && canLevelUp(character) && (
+        <LevelUpModal
+          character={character}
+          onConfirm={handleLevelUpConfirmed}
+          onClose={() => setIsLevelUpOpen(false)}
+        />
+      )}
+
+      {/* Hidden during a fight: the combat rolls its own dice (and the button would cover its controls) */}
+      {!encounter && <DiceRollerTray onSendRollToChat={handleDiceRollToChat} />}
 
     </div>
   );

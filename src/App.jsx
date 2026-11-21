@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, lazy, Suspense } from 'react';
 import Navbar from './components/Navbar';
 import Hero from './components/Hero';
 import LiveTavernDemo from './components/LiveTavernDemo';
@@ -9,7 +9,6 @@ import Footer from './components/Footer';
 import TavernApp from './components/TavernApp';
 import InviteModal from './components/InviteModal';
 import WorldForgeModal from './components/WorldForgeModal';
-import CharacterCreatorModal from './components/CharacterCreatorModal';
 import SettingsModal from './components/SettingsModal';
 import GeminiConnectModal from './components/GeminiConnectModal';
 import CampaignsModal from './components/CampaignsModal';
@@ -27,6 +26,9 @@ import {
   setActiveCampaignId
 } from './utils/campaignStorage';
 
+// Only needed when starting a new campaign: kept out of the initial bundle
+const CharacterWizard = lazy(() => import('./components/wizard/CharacterWizard'));
+
 export default function App() {
   const [currentView, setCurrentView] = useState('landing'); // 'landing' | 'app'
   const [activeWorld, setActiveWorld] = useState(PRESET_WORLDS[0]);
@@ -43,11 +45,12 @@ export default function App() {
   // Modals state
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [isWorldForgeOpen, setIsWorldForgeOpen] = useState(false);
-  const [isCharacterCreatorOpen, setIsCharacterCreatorOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isGeminiConnectOpen, setIsGeminiConnectOpen] = useState(false);
   const [isCampaignsOpen, setIsCampaignsOpen] = useState(false);
   const [worldSavesTarget, setWorldSavesTarget] = useState(null); // world whose save slots are shown
+  // New campaign waiting for its hero: { world, title } while the character wizard is open
+  const [pendingCampaign, setPendingCampaign] = useState(null);
 
   const refreshCampaignsCount = () => {
     setCampaignsCount(getAllCampaigns().length);
@@ -58,26 +61,31 @@ export default function App() {
     setWorldSavesTarget(world);
   };
 
-  const handleStartNewInWorld = (world) => {
+  // Every new campaign starts by creating its hero
+  const handleStartNewInWorld = (world, title = '') => {
     setWorldSavesTarget(null);
-    setActiveWorld(world);
-    const newCamp = createNewCampaign({
-      world,
-      character: activeCharacter,
-      title: `${activeCharacter.name} — ${world.name}`
-    });
-    setActiveCampaign(newCamp);
-    refreshCampaignsCount();
-    setCurrentView('app');
+    setIsCampaignsOpen(false);
+    setPendingCampaign({ world, title });
   };
 
   const handleCreateCustomWorld = (customWorld) => {
-    setActiveWorld(customWorld);
+    handleStartNewInWorld(customWorld);
+  };
+
+  const handleHeroCreated = (character) => {
+    const { world, title } = pendingCampaign;
     const newCamp = createNewCampaign({
-      world: customWorld,
-      character: activeCharacter,
-      title: `${activeCharacter.name} — ${customWorld.name}`
+      world,
+      character,
+      title: title.trim() || `${character.name} — ${world.name}`
     });
+    setPendingCampaign(null);
+    if (!newCamp) {
+      window.alert('No se pudo guardar la campaña: el almacenamiento del navegador está lleno. Exporta o borra partidas antiguas en el Grimorio.');
+      return;
+    }
+    setActiveWorld(world);
+    setActiveCharacter(character);
     setActiveCampaign(newCamp);
     refreshCampaignsCount();
     setCurrentView('app');
@@ -91,18 +99,16 @@ export default function App() {
     setCurrentView('app');
   };
 
+  // "Play" resumes the last campaign; without one, the player picks a world first
   const handleStartGame = () => {
-    // If we have an active campaign, resume it; otherwise use activeWorld & activeCharacter
     const activeId = getActiveCampaignId();
-    if (activeId) {
-      const camp = getCampaignById(activeId);
-      if (camp) {
-        setActiveCampaign(camp);
-        if (camp.world) setActiveWorld(camp.world);
-        if (camp.character) setActiveCharacter(camp.character);
-      }
+    const camp = activeId ? getCampaignById(activeId) : null;
+    if (camp) {
+      handleSelectCampaign(camp);
+      return;
     }
-    setCurrentView('app');
+    setCurrentView('landing');
+    setTimeout(() => document.getElementById('worlds')?.scrollIntoView({ behavior: 'smooth' }), 50);
   };
 
   const handleClearProgress = () => {
@@ -123,6 +129,7 @@ export default function App() {
           <Navbar
             currentView={currentView}
             setView={setCurrentView}
+            onEnterTavern={handleStartGame}
             onOpenInvite={() => setIsInviteOpen(true)}
             onOpenWorldForge={() => setIsWorldForgeOpen(true)}
             onOpenGeminiConnect={() => setIsGeminiConnectOpen(true)}
@@ -174,7 +181,6 @@ export default function App() {
             setCurrentView('landing');
           }}
           onOpenInvite={() => setIsInviteOpen(true)}
-          onOpenCharacterCreator={() => setIsCharacterCreatorOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenGeminiConnect={() => setIsGeminiConnectOpen(true)}
           onOpenCampaigns={() => setIsCampaignsOpen(true)}
@@ -207,6 +213,7 @@ export default function App() {
         }}
         activeCampaignId={activeCampaign?.id}
         onSelectCampaign={handleSelectCampaign}
+        onStartNewCampaign={handleStartNewInWorld}
       />
 
       <InviteModal
@@ -221,14 +228,15 @@ export default function App() {
         onCreateWorld={handleCreateCustomWorld}
       />
 
-      <CharacterCreatorModal
-        isOpen={isCharacterCreatorOpen}
-        onClose={() => setIsCharacterCreatorOpen(false)}
-        onSaveCharacter={(char) => {
-          setActiveCharacter(char);
-          setCurrentView('app');
-        }}
-      />
+      {pendingCampaign && (
+        <Suspense fallback={null}>
+          <CharacterWizard
+            world={pendingCampaign.world}
+            onComplete={handleHeroCreated}
+            onCancel={() => setPendingCampaign(null)}
+          />
+        </Suspense>
+      )}
 
       <SettingsModal
         isOpen={isSettingsOpen}

@@ -59,7 +59,8 @@ function buildAtlas(die, labels, format) {
   ctx.fillStyle = EDGE;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  const needsUnderline = text => die.sides > 6 && (text === '6' || text === '9');
+  // 6 and 9 look alike once the die rolls: underline them (on a d6 too)
+  const needsUnderline = text => die.sides >= 6 && (text === '6' || text === '9');
 
   const uvs = die.faces.map((face, i) => {
     const { points, inradius } = getFaceLayout(die, i);
@@ -346,7 +347,7 @@ export async function createDiceEngine(canvas) {
 
     /**
      * Throw the dice for a roll and animate them.
-     * @param {{sides: number, value: number}} roll
+     * @param {{dice: {sides: number, value: number}[]}} roll  normalized by animateRoll()
      * @param {{onImpact?: (strength: number) => void}} [options]
      * @returns {{ done: Promise<void>, skip: () => void, duration: number }} duration in seconds
      */
@@ -354,7 +355,7 @@ export async function createDiceEngine(canvas) {
       finishPlayback();
       clearDice();
 
-      const plan = planDice(roll.sides, roll.value);
+      const plan = roll.dice.flatMap(die => planDice(die.sides, die.value));
       const sim = simulateThrow(plan.map(p => p.kind), bounds);
 
       meshes = plan.map((p, i) => {

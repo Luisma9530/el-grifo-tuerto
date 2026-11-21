@@ -6,6 +6,7 @@ export default function Navbar({
   currentView, 
   setView, 
   onOpenInvite, 
+  onEnterTavern,
   onOpenWorldForge, 
   onOpenGeminiConnect, 
   onOpenCampaigns,
@@ -158,7 +159,7 @@ export default function Navbar({
           {/* Play / Enter Tavern Button */}
           {currentView === 'landing' ? (
             <button
-              onClick={() => setView('app')}
+              onClick={onEnterTavern}
               className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-amber-600 via-amber-500 to-yellow-600 text-stone-950 font-bold text-sm shadow-lg shadow-amber-600/30 hover:shadow-amber-500/50 hover:brightness-110 active:scale-95 transition-all"
             >
               <Dice5 className="w-4 h-4 animate-bounce" />

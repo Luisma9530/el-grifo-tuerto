@@ -1,17 +1,29 @@
 import React, { useState } from 'react';
-import { Heart, Shield, Coins, Backpack, Coffee, Sparkles } from 'lucide-react';
-import { getModifier } from '../../utils/gameEngine';
+import { Heart, Shield, Coins, Backpack, Coffee, Sparkles, Wand2 } from 'lucide-react';
+import { getModifier, getModifierNumber } from '../../utils/gameEngine';
+import { skillRows, proficiencyBonus, formatModifier } from '../../utils/characterBuilder';
 import { TAVERN_MENU } from '../../data/gameData';
 import { tavernAudio } from '../../utils/audio';
+import SpellsTab, { RestButtons } from './SpellsTab';
+import AttacksPanel from './AttacksPanel';
+import { weaponForItem, isEquipped, setEquipped } from '../../utils/combat';
+import { xpProgress, canLevelUp, canAdvance } from '../../utils/leveling';
 
 export default function PartyPanel({
   character,
   onUpdateCharacter,
   onOrderDrink,
-  onOpenCharacterModal,
-  onRollStatCheck
+  onRollCheck,
+  onCastSpell,
+  onRest,
+  onLevelUp,
+  onAttack,
+  busy = false
 }) {
-  const [activeTab, setActiveTab] = useState('sheet'); // 'sheet' | 'inventory' | 'menu'
+  const progress = xpProgress(character);
+  const levelUpReady = canLevelUp(character);
+  const [activeTab, setActiveTab] = useState('sheet'); // 'sheet' | 'spells' | 'inventory' | 'menu'
+  const hasMagic = Boolean(character.spellcasting);
   const hpPercent = Math.max(0, Math.min(100, Math.round((character.hp / character.maxHp) * 100)));
 
   const handleUseItem = (item) => {
@@ -38,9 +50,7 @@ export default function PartyPanel({
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             <div 
-              onClick={onOpenCharacterModal}
-              title="Cambiar o personalizar personaje"
-              className="w-13 h-13 rounded-xl bg-amber-950/80 border-2 border-amber-500/50 flex items-center justify-center text-3xl shadow-inner cursor-pointer hover:border-amber-400 hover:scale-105 transition-all"
+              className="w-13 h-13 rounded-xl bg-amber-950/80 border-2 border-amber-500/50 flex items-center justify-center text-3xl shadow-inner"
             >
               {character.avatar || '🛡️'}
             </div>
@@ -53,16 +63,14 @@ export default function PartyPanel({
               <p className="text-xs text-amber-400 font-medium">
                 {character.race} • {character.class}
               </p>
+              {(character.background || character.subclass) && (
+                <p className="text-[11px] text-stone-400">
+                  {[character.subclass, character.background].filter(Boolean).join(' · ')}
+                </p>
+              )}
             </div>
           </div>
 
-          <button
-            onClick={onOpenCharacterModal}
-            className="p-1.5 rounded-lg bg-stone-850 hover:bg-stone-800 text-stone-400 hover:text-amber-300 border border-stone-700 text-xs transition-colors"
-            title="Editar ficha"
-          >
-            Ficha
-          </button>
         </div>
 
         {/* Vital stats bars: HP, AC, Gold */}
@@ -88,6 +96,34 @@ export default function PartyPanel({
                 style={{ width: `${hpPercent}%` }}
               />
             </div>
+          </div>
+
+          {/* Experience */}
+          <div>
+            <div className="flex items-center justify-between text-xs font-mono mb-1">
+              <span className="flex items-center gap-1 text-sky-300 font-semibold">
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Nivel {progress.level}</span>
+              </span>
+              <span className="text-stone-400">
+                {progress.next == null ? `${progress.xp} PX · nivel máximo` : `${progress.xp} / ${progress.next} PX`}
+              </span>
+            </div>
+            <div className="w-full h-1.5 rounded-full bg-stone-900 overflow-hidden border border-stone-800">
+              <div className="h-full rounded-full bg-gradient-to-r from-sky-600 to-sky-400 transition-all duration-500" style={{ width: `${progress.percent}%` }} />
+            </div>
+            {levelUpReady && (
+              <button
+                onClick={onLevelUp}
+                disabled={busy}
+                className="mt-2 w-full py-2 rounded-lg bg-gradient-to-r from-amber-600 to-amber-500 hover:brightness-110 text-stone-950 text-xs font-cinzel font-bold flex items-center justify-center gap-1.5 shadow-lg shadow-amber-900/40 animate-pulse disabled:opacity-50 disabled:animate-none"
+              >
+                <Sparkles className="w-3.5 h-3.5" /> ¡Subir a nivel {progress.level + 1}!
+              </button>
+            )}
+            {!canAdvance(character) && progress.next != null && progress.xp >= progress.next && (
+              <p className="mt-1 text-[10px] text-stone-500">Los héroes de partidas antiguas no pueden subir de nivel: crea uno nuevo para disfrutarlo.</p>
+            )}
           </div>
 
           {/* AC and Gold pill row */}
@@ -127,6 +163,19 @@ export default function PartyPanel({
         >
           <span>Atributos</span>
         </button>
+        {hasMagic && (
+          <button
+            onClick={() => setActiveTab('spells')}
+            className={`flex-1 py-2.5 flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
+              activeTab === 'spells'
+                ? 'border-purple-400 text-purple-200 bg-purple-500/10 font-semibold'
+                : 'border-transparent text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            <Wand2 className="w-3.5 h-3.5" />
+            <span>Conjuros</span>
+          </button>
+        )}
         <button
           onClick={() => setActiveTab('inventory')}
           className={`flex-1 py-2.5 flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
@@ -136,7 +185,7 @@ export default function PartyPanel({
           }`}
         >
           <Backpack className="w-3.5 h-3.5" />
-          <span>Mochila ({character.inventory?.length || 0})</span>
+          <span>Mochila</span>
         </button>
         <button
           onClick={() => setActiveTab('menu')}
@@ -147,7 +196,7 @@ export default function PartyPanel({
           }`}
         >
           <Coffee className="w-3.5 h-3.5" />
-          <span>Barra Taberna</span>
+          <span>Taberna</span>
         </button>
       </div>
 
@@ -157,6 +206,8 @@ export default function PartyPanel({
         {/* STATS SHEET TAB */}
         {activeTab === 'sheet' && (
           <div className="space-y-4">
+            <AttacksPanel character={character} onAttack={onAttack} busy={busy} />
+
             <div>
               <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block mb-2">
                 Tiradas de Habilidad (Haz clic para tirar):
@@ -172,7 +223,7 @@ export default function PartyPanel({
                 ].map(({ key, name, stat }) => (
                   <button
                     key={key}
-                    onClick={() => onRollStatCheck(stat, name)}
+                    onClick={() => onRollCheck({ label: name, modifier: getModifierNumber(stat) })}
                     className="p-2.5 rounded-xl bg-[#17131f] hover:bg-amber-950/40 border border-stone-800 hover:border-amber-600/50 flex items-center justify-between text-left transition-all group"
                   >
                     <div>
@@ -191,6 +242,59 @@ export default function PartyPanel({
               </div>
             </div>
 
+            {/* Skills: proficient ones add the proficiency bonus */}
+            <div>
+              <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block mb-2">
+                Habilidades (competencia +{proficiencyBonus(character)}):
+              </span>
+              <div className="rounded-xl border border-stone-800 overflow-hidden">
+                {skillRows(character).map((skill, index) => (
+                  <button
+                    key={skill.id}
+                    onClick={() => onRollCheck({ label: skill.name, modifier: skill.modifier })}
+                    title={`Tirar ${skill.name} (${skill.abilityShort})${skill.proficient ? ', con competencia' : ''}`}
+                    className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-amber-950/40 transition-colors group ${
+                      index % 2 ? 'bg-[#15111c]' : 'bg-[#17131f]'
+                    }`}
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full shrink-0 border ${
+                        skill.proficient ? 'bg-amber-400 border-amber-300' : 'border-stone-600'
+                      }`}
+                      aria-hidden="true"
+                    />
+                    <span className={`flex-1 truncate group-hover:text-amber-300 ${skill.proficient ? 'text-stone-100 font-medium' : 'text-stone-400'}`}>
+                      {skill.name}
+                    </span>
+                    <span className="text-[10px] font-mono text-stone-600">{skill.abilityShort}</span>
+                    <span className={`w-7 text-right font-mono font-bold ${skill.proficient ? 'text-amber-400' : 'text-stone-400'}`}>
+                      {formatModifier(skill.modifier)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Rules details for characters made with the creation wizard */}
+            {character.rulesVersion && (
+              <div className="p-3 rounded-xl bg-stone-900/60 border border-stone-800 space-y-1.5 text-[11px]">
+                <span className="text-[10px] font-mono uppercase text-stone-400 tracking-wider block mb-1">Rasgos y Competencias:</span>
+                {[
+                  ['Velocidad', character.speed === 35 ? '10,5 m' : '9 m'],
+                  ['Dotes', character.feats?.join(', ')],
+                  ['Clase', character.classFeatures?.join(', ')],
+                  ['Especie', character.traits?.join(', ')],
+                  ['Herramientas', character.tools?.join(', ')],
+                  ['Idiomas', character.languages?.join(', ')],
+                  ['Alineamiento', character.alignment]
+                ].filter(([, value]) => value).map(([label, value]) => (
+                  <p key={label} className="text-stone-300 leading-snug">
+                    <span className="text-stone-500">{label}:</span> {value}
+                  </p>
+                ))}
+              </div>
+            )}
+
             {/* Backstory snippet */}
             <div className="p-3 rounded-xl bg-stone-900/60 border border-stone-800">
               <span className="text-[10px] font-mono uppercase text-stone-400 tracking-wider block mb-1">
@@ -201,6 +305,11 @@ export default function PartyPanel({
               </p>
             </div>
           </div>
+        )}
+
+        {/* SPELLS TAB */}
+        {activeTab === 'spells' && hasMagic && (
+          <SpellsTab character={character} onCastSpell={onCastSpell} onRest={onRest} busy={busy} />
         )}
 
         {/* INVENTORY TAB */}
@@ -229,6 +338,21 @@ export default function PartyPanel({
                   )}
                 </div>
 
+                {weaponForItem(item) && (
+                  <button
+                    onClick={() => onUpdateCharacter(setEquipped(character, item.id, !isEquipped(item)))}
+                    aria-pressed={isEquipped(item)}
+                    title={isEquipped(item) ? 'Equipada: aparece en tus ataques' : 'En la mochila: no la usarás al atacar'}
+                    className={`px-2.5 py-1 rounded text-xs font-bold shrink-0 transition-colors border ${
+                      isEquipped(item)
+                        ? 'bg-red-950/50 border-red-700/60 text-red-200 hover:bg-red-900/50'
+                        : 'bg-stone-900 border-stone-700 text-stone-400 hover:text-stone-200'
+                    }`}
+                  >
+                    {isEquipped(item) ? '⚔ Equipada' : 'Equipar'}
+                  </button>
+                )}
+
                 {item.type === 'consumable' && (
                   <button
                     onClick={() => handleUseItem(item)}
@@ -245,6 +369,8 @@ export default function PartyPanel({
         {/* TAVERN BAR / MENU TAB */}
         {activeTab === 'menu' && (
           <div className="space-y-2.5">
+            <RestButtons character={character} onRest={onRest} busy={busy} />
+
             <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block">
               Bebidas & Viandas de Maese Duncan:
             </span>

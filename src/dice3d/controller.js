@@ -6,6 +6,7 @@ import { tavernAudio } from '../utils/audio';
 const SETTING_KEY = 'tavern_dice_3d';
 const ANIMATED_SIDES = [4, 6, 8, 10, 12, 20, 100];
 const FALLBACK_DELAY_MS = 450;
+const MAX_PHYSICAL_DICE = 10; // e.g. 8d6 for Fireball; more than this gets crowded: resolved instantly instead
 
 let stage = null;
 
@@ -55,21 +56,52 @@ export function playOutcomeSound(outcome) {
   else if (outcome === 'fumble') tavernAudio.playCritFail();
 }
 
+/** "d20", "3d6" or "2d8 + 1d4" for a set of dice. */
+export function diceNotation(dice) {
+  const counts = new Map();
+  dice.forEach(die => counts.set(die.sides, (counts.get(die.sides) || 0) + 1));
+  return [...counts.entries()]
+    .map(([sides, count]) => (count === 1 && counts.size === 1 ? `d${sides}` : `${count}d${sides}`))
+    .join(' + ');
+}
+
+/**
+ * Accepts { sides, value } for one die or { dice: [{ sides, value }] } for several,
+ * and returns the roll with `dice`, the summed `value`, its `notation` and `outcome`.
+ */
+export function normalizeRoll(roll) {
+  const dice = Array.isArray(roll.dice) && roll.dice.length > 0
+    ? roll.dice
+    : [{ sides: roll.sides, value: roll.value }];
+  return {
+    ...roll,
+    dice,
+    value: dice.reduce((sum, die) => sum + die.value, 0),
+    notation: diceNotation(dice),
+    outcome: dice.length === 1 ? getRollOutcome(dice[0].sides, dice[0].value) : 'normal'
+  };
+}
+
 /**
  * Show a dice roll whose result is already decided.
  * Resolves when the result is visible to the player, with true if the 3D
  * animation ran or false if the plain fallback (sound + short pause) was used.
  *
  * @param {object} roll
- * @param {number} roll.sides      4, 6, 8, 10, 12, 20 or 100
- * @param {number} roll.value      the number rolled (1..sides)
+ * @param {number} [roll.sides]    4, 6, 8, 10, 12, 20 or 100 (single die)
+ * @param {number} [roll.value]    the number rolled (1..sides)
+ * @param {{sides: number, value: number}[]} [roll.dice]  several dice instead (e.g. 3d6 of damage)
  * @param {number} [roll.modifier] added to the value in the result banner
  * @param {string} [roll.label]    e.g. "Tirada de Fuerza"
  * @param {number} [roll.dc]       difficulty class, to show success / failure
  * @param {boolean} [roll.success] overrides the success computed from dc
  */
-export async function animateRoll(roll) {
-  const canAnimate = stage && is3DDiceEnabled() && !prefersReducedMotion() && ANIMATED_SIDES.includes(roll.sides);
+export async function animateRoll(input) {
+  const roll = normalizeRoll(input);
+  const physicalDice = roll.dice.reduce((count, die) => count + (die.sides === 100 ? 2 : 1), 0);
+  const canAnimate = stage && is3DDiceEnabled() && !prefersReducedMotion()
+    && roll.dice.every(die => ANIMATED_SIDES.includes(die.sides))
+    && physicalDice <= MAX_PHYSICAL_DICE;
 
   if (canAnimate) {
     try {
@@ -82,6 +114,6 @@ export async function animateRoll(roll) {
   // Fallback: classic dice sound and a short pause before revealing the result
   tavernAudio.playDiceRoll();
   await new Promise(resolve => setTimeout(resolve, FALLBACK_DELAY_MS));
-  playOutcomeSound(getRollOutcome(roll.sides, roll.value));
+  playOutcomeSound(roll.outcome);
   return false;
 }

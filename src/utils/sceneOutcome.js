@@ -25,3 +25,14 @@ export function applySceneOutcome(character, { damage = 0, healing = 0, goldChan
 
   return { hp, gold, knockedOut, goldLost };
 }
+
+/**
+ * A hero who fell (0 HP) is patched up by Duncan: back at half HP, minus half
+ * of the gold for the trouble. Same rule as a knock-out during a scene.
+ */
+export function rescueKnockedOut(character) {
+  const maxHp = Math.max(1, Number(character.maxHp) || 1);
+  const gold = Math.max(0, Number(character.gold) || 0);
+  const goldLost = Math.floor(gold / 2);
+  return { hp: Math.max(1, Math.ceil(maxHp / 2)), gold: gold - goldLost, goldLost };
+}

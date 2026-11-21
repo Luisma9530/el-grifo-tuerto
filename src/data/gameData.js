@@ -222,6 +222,26 @@ export const FAQS = [
     a: 'Sí, es gratis y no hay cuentas ni suscripciones. Abres la página y juegas. Tus partidas se guardan en tu propio navegador.'
   },
   {
+    q: '¿Cómo se crea el personaje?',
+    a: 'Cada campaña empieza creando a tu héroe paso a paso con las reglas de D&D 2024: clase, trasfondo, especie, características (conjunto estándar, compra de puntos o tirando dados), competencias e identidad. Si tienes prisa, el botón "Héroe al azar" te genera uno completo que puedes retocar. Todos empiezan en nivel 1.'
+  },
+  {
+    q: '¿Mi personaje sube de nivel?',
+    a: 'Sí, hasta el nivel 20, como en las reglas. Ganas experiencia al superar retos: combates, hechizos certeros, pruebas difíciles... Cuando tienes suficiente, aparece el botón «Subir de nivel» en tu ficha: eliges si tiras el dado de golpe o tomas la media, recibes los rasgos de tu clase y subclase, mejoras de característica, un Don Épico a nivel 19 y, si lanzas conjuros, aprendes nuevos hasta llegar a los de nivel 9.'
+  },
+  {
+    q: '¿Cómo funcionan los combates?',
+    a: 'Con el botón «Combate» eliges a quién te enfrentas: un encuentro sugerido para tu nivel y tu mundo, o criaturas del bestiario (127 del SRD, de goblins a dragones antiguos). El juego lleva la iniciativa, la vida y los ataques de cada enemigo; tú atacas, lanzas conjuros, bebes pociones, esquivas o huyes. Los enemigos malheridos pueden huir o rendirse, y al vencer ganas la experiencia de cada criatura.'
+  },
+  {
+    q: '¿Cómo se resuelven los ataques?',
+    a: 'Desde tu ficha: eliges un arma equipada (o un golpe sin armas) y el juego tira el ataque contra la armadura del objetivo y el daño, con tus modificadores, Ataque Adicional, Ataque Furtivo o Furia si los tienes. Maese Duncan solo narra el resultado. En la mochila puedes equipar y desequipar armas.'
+  },
+  {
+    q: '¿Cómo funciona la magia?',
+    a: 'Los lanzadores de conjuros eligen sus trucos y conjuros de nivel 1 al crear el personaje. En la pestaña "Conjuros" de la ficha los lanzas con un clic: el juego tira el ataque, el daño o la curación con los dados 3D y Maese Duncan narra el resultado. Los trucos son ilimitados; los conjuros gastan espacios, que recuperas descansando en la posada.'
+  },
+  {
     q: '¿Necesito saber las reglas de D&D 5ª Edición para jugar?',
     a: '¡Para nada! Tú solo escribes o eliges qué quieres que haga tu personaje con tus propias palabras. El juego tira los dados, aplica los modificadores de tu ficha y Maese Duncan narra lo que ocurre.'
   },

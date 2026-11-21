@@ -56,7 +56,10 @@ function runOnce(kinds, bounds, rng) {
   let time = 0;
 
   // Thrown from the lower-right corner towards the upper-left area
-  const start = [halfW - 2.2, rand(3.5, 5), halfD - 2.2];
+  // With several dice the group starts further in, so none begins inside a wall
+  const inset = 2.2 + (kinds.length - 1) * 1.2;
+  const start = [halfW - inset, rand(3.5, 5), halfD - inset];
+  const clamp = (value, limit) => Math.max(-limit + 1.8, Math.min(limit - 1.8, value));
   const target = [-halfW * rand(0.15, 0.5), 0, -halfD * rand(0.1, 0.45)];
   const dx = target[0] - start[0];
   const dz = target[2] - start[2];
@@ -67,7 +70,7 @@ function runOnce(kinds, bounds, rng) {
   const pz = dx / dist;
 
   const bodies = kinds.map((kind, i) => {
-    const offset = (i - (kinds.length - 1) / 2) * 3.4;
+    const offset = (i - (kinds.length - 1) / 2) * 3.2;
     const body = new Body({
       mass: 1,
       shape: getShape(kind),
@@ -78,7 +81,7 @@ function runOnce(kinds, bounds, rng) {
       sleepSpeedLimit: 0.5,
       sleepTimeLimit: 0.2
     });
-    body.position.set(start[0] + px * offset, start[1] + i * 0.6, start[2] + pz * offset);
+    body.position.set(clamp(start[0] + px * offset, halfW), start[1] + i * 1.6, clamp(start[2] + pz * offset, halfD));
     body.quaternion.set(rand(-1, 1), rand(-1, 1), rand(-1, 1), rand(-1, 1));
     body.quaternion.normalize();
     const jitter = rand(0.9, 1.1);
