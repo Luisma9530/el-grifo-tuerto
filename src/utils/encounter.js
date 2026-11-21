@@ -7,7 +7,7 @@
 
 import { resolveAttack } from './combat';
 import { castSpell, parseDice } from './spellcasting';
-import { drinkPotion } from './items';
+import { drinkPotion, healingDice } from './items';
 import { setHands, describeHands, fleeDC, setLimbStatus, normalizeEquipment, limbWithArticle, limbStatusLabel, LIMB_IDS } from './equipment';
 
 const ABILITY_NAMES = { fue: 'Fuerza', des: 'Destreza', con: 'Constitución', int: 'Inteligencia', sab: 'Sabiduría', car: 'Carisma' };
@@ -207,19 +207,34 @@ function damageEnemy(encounter, uid, amount, rollDie) {
 /**
  * Resolve the player's action, then the enemies act until it is the player's
  * turn again (or the combat ends).
+ *
+ * The turn has an action and a Bonus Action (2024 rules). The only Bonus
+ * Action here is drinking a potion, before or after the action, once per turn:
+ *  - `encounter.actionUsed`: the hero already acted this turn;
+ *  - `encounter.bonusUsed`: the hero already drank a potion this turn.
+ * The turn ends by itself once nothing else can be done (action used, and the
+ * Bonus Action used or no potion left); otherwise it stays open until the
+ * hero drinks or ends it with { type: 'endTurn' }.
  * @param {object} action
- *   { type: 'attack', optionId, targetUid, raging? }
- *   { type: 'spell', spellId, targetUid? }
- *   { type: 'potion', itemId }
- *   { type: 'equip', hands: { main, off } }  change what is in hand (takes the turn)
- *   { type: 'dodge' } | { type: 'flee' }
+ *   { type: 'attack', optionId, targetUid, raging? }   action
+ *   { type: 'spell', spellId, targetUid? }             action
+ *   { type: 'equip', hands: { main, off } }            action (change what is in hand)
+ *   { type: 'dodge' } | { type: 'flee' }               action
+ *   { type: 'potion', itemId }                         Bonus Action
+ *   { type: 'endTurn' }                                end the turn now
  * @returns {{ ok: false, error } | { ok: true, encounter, character, animations }}
  *   animations: the player's dice to show with the 3D dice, in order:
  *   [{ sides, value, modifier?, dc?, success?, label } | { dice: [{sides, value}], modifier, label }]
  */
 export function playerAction(encounter, character, action, rollDie) {
   if (!isPlayerTurn(encounter)) return { ok: false, error: 'No es tu turno.' };
-  let next = { ...encounter, dodging: false };
+  const isBonus = action.type === 'potion';
+  if (action.type === 'endTurn') return endPlayerTurn(encounter, character, rollDie, []);
+  if (isBonus && encounter.bonusUsed) return { ok: false, error: 'Ya has usado tu acción adicional este turno.' };
+  if (!isBonus && encounter.actionUsed) return { ok: false, error: 'Ya has hecho tu acción este turno: bebe una poción o termina el turno.' };
+  // A dodge lasts until the start of the hero's next turn
+  const startOfTurn = !encounter.actionUsed && !encounter.bonusUsed;
+  let next = startOfTurn ? { ...encounter, dodging: false } : { ...encounter };
   let hero = character;
   const animations = [];
   const target = next.enemies.find(e => e.uid === action.targetUid && e.status === 'active');
@@ -295,14 +310,15 @@ export function playerAction(encounter, character, action, rollDie) {
     const { roll, item } = drink;
     animations.push({ dice: roll.dice.map(value => ({ sides: roll.sides, value })), modifier: roll.bonus, label: `${item.name} · curación` });
     hero = drink.character;
-    next = pushLog(next, 'heal', `${hero.name} usa ${item.name} y recupera ${drink.healed} puntos de golpe.`);
+    next = pushLog({ ...next, bonusUsed: true }, 'heal',
+      `${hero.name} bebe ${item.name} como acción adicional y recupera ${drink.healed} puntos de golpe.${next.actionUsed ? '' : ' Aún puede hacer su acción.'}`);
   } else if (action.type === 'equip') {
     // House rule: changing what you hold takes the whole turn
     const result = setHands(hero, action.hands);
     if (!result.ok) return result;
     if (!result.changed) return { ok: false, error: 'Ya llevas eso en las manos.' };
     hero = result.character;
-    next = pushLog(next, 'info', `${hero.name} cambia de equipo y ahora lleva ${describeHands(hero)}. Gasta su turno en ello.`);
+    next = pushLog(next, 'info', `${hero.name} cambia de equipo y ahora lleva ${describeHands(hero)}. Gasta su acción en ello.`);
   } else if (action.type === 'dodge') {
     next = pushLog({ ...next, dodging: true }, 'info', `${hero.name} se pone a la defensiva: los ataques que reciba tendrán desventaja hasta su próximo turno.`);
   } else if (action.type === 'flee') {
@@ -322,10 +338,21 @@ export function playerAction(encounter, character, action, rollDie) {
     return { ok: false, error: 'Acción desconocida.' };
   }
 
+  if (!isBonus) next = { ...next, actionUsed: true };
   next = checkEnd(next, hero);
   if (next.status !== 'active') return { ok: true, encounter: next, character: hero, animations };
 
-  const after = runEnemyTurns(advanceTurn(next), hero, rollDie);
+  // The turn stays open while there is still something to do: the action, or a potion to drink
+  const canDrink = !next.bonusUsed && (hero.inventory || []).some(item => healingDice(item));
+  if (!next.actionUsed || canDrink) return { ok: true, encounter: next, character: hero, animations };
+  return endPlayerTurn(next, hero, rollDie, animations);
+}
+
+/** End the hero's turn: the enemies act until it is the hero's turn again. */
+function endPlayerTurn(encounter, hero, rollDie, animations) {
+  let next = encounter;
+  if (!next.actionUsed) next = pushLog(next, 'info', `${hero.name} termina su turno sin hacer nada más.`);
+  const after = runEnemyTurns(advanceTurn({ ...next, actionUsed: false, bonusUsed: false }), hero, rollDie);
   return { ok: true, encounter: after.encounter, character: after.character, animations };
 }
 

@@ -21,7 +21,7 @@ const formatMetres = m => `${String(m).replace('.', ',')} m`;
  * onChange(nextCharacter) receives the sheet with the new hands.
  * `locked`: a message shown instead of the controls (e.g. during a fight).
  */
-export default function EquipmentPanel({ character, onChange, locked = null, showLimbs = true }) {
+export default function EquipmentPanel({ character, onChange, locked = null, showLimbs = true, lockArmor = null }) {
   const [error, setError] = useState('');
   const sheet = normalizeEquipment(character);
   const slots = handSlots(sheet);
@@ -109,7 +109,7 @@ export default function EquipmentPanel({ character, onChange, locked = null, sho
           <Shirt className="w-3.5 h-3.5" /> Armadura
         </span>
         <div className="p-2.5 rounded-xl border bg-[#17131f] border-stone-800">
-          {locked ? (
+          {locked || lockArmor ? (
             <p className="text-xs text-stone-100">{armorItem?.name || <span className="text-stone-500">Sin armadura</span>}</p>
           ) : (
             <select
@@ -129,6 +129,7 @@ export default function EquipmentPanel({ character, onChange, locked = null, sho
               })}
             </select>
           )}
+          {lockArmor && <p className="mt-1 text-[10px] text-amber-300/80">{lockArmor}</p>}
           {armor && (
             <p className="mt-1 text-[10px] text-stone-400">
               Armadura {ARMOR_CATEGORY_NAMES[armor.category]}{armor.strength ? ` · pide Fuerza ${armor.strength}` : ''}{armor.stealth ? ' · desventaja en Sigilo' : ''}

@@ -321,7 +321,7 @@ export default function PartyPanel({
             <EquipmentPanel
               character={character}
               onChange={onUpdateCharacter}
-              locked={inCombat ? 'En combate, cambia de arma desde la vista de combate: gasta tu turno.' : null}
+              locked={inCombat ? 'En combate, cambia de arma desde la vista de combate: gasta tu acción.' : null}
             />
 
             <div className="flex items-baseline justify-between gap-2 pt-1">
@@ -368,7 +368,7 @@ export default function PartyPanel({
                   <button
                     onClick={() => handleUseItem(item)}
                     disabled={busy || inCombat}
-                    title={inCombat ? 'En combate, usa las pociones desde la vista de combate' : healingDice(item) ? `Recupera ${healingDice(item)} PG` : 'Usar'}
+                    title={inCombat ? 'En combate, bebe las pociones desde la vista de combate (pestaña «Otras»): es una acción adicional' : healingDice(item) ? `Recupera ${healingDice(item)} PG` : 'Usar'}
                     className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-stone-950 text-xs font-bold shrink-0 transition-colors shadow-sm"
                   >
                     {healingDice(item) ? 'Beber' : 'Usar'}
