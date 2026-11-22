@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Volume2, VolumeX, Users, Settings, ArrowLeft, Dice5, Compass, User, Sparkles, BookOpen, Download, Check, AlertTriangle, FlaskConical, RotateCcw } from 'lucide-react';
 import PartyPanel from './game/PartyPanel';
 import StoryStream from './game/StoryStream';
@@ -43,7 +43,6 @@ import { generateLoot, describeLoot } from '../utils/loot';
 import ShopModal from './game/ShopModal';
 
 // The bestiary (and its builder) is only needed when a fight is being prepared
-const EncounterBuilder = lazy(() => import('./game/EncounterBuilder'));
 // The bestiary is big: loaded the first time Duncan may start a fight
 const loadBestiary = () => import('../utils/bestiary');
 
@@ -137,7 +136,6 @@ export default function TavernApp({
 
   // Combat encounter in progress (null outside combat); saved with the campaign
   const [encounter, setEncounter] = useState(() => storedCampaign()?.encounter || null);
-  const [isEncounterBuilderOpen, setIsEncounterBuilderOpen] = useState(false);
   // How each recent fight started (the last MAX_SNAPSHOTS), to replay it in the simulator
   const [combatSnapshots, setCombatSnapshots] = useState(() => normalizeSnapshots(storedCampaign()?.combatSnapshots));
 
@@ -466,11 +464,6 @@ export default function TavernApp({
     setEncounter(next);
     if (hero !== sheet) setCharacter(hero);
     setMobileTab('story');
-  };
-
-  const handleStartEncounter = (groups) => {
-    setIsEncounterBuilderOpen(false);
-    startEncounter(groups);
   };
 
   // Key moments (a leader falls, an enemy surrenders or flees): Duncan adds a line,
@@ -1085,7 +1078,6 @@ export default function TavernApp({
               keysCount={geminiKeys.length}
               onQuickAttack={handleQuickAttack}
               onQuickCheck={handleQuickCheck}
-              onStartCombat={() => setIsEncounterBuilderOpen(true)}
             />
           )}
         </div>
@@ -1105,16 +1097,6 @@ export default function TavernApp({
       </div>
 
       {/* Floating 3D Dice Roller Tray */}
-      {isEncounterBuilderOpen && (
-        <Suspense fallback={null}>
-          <EncounterBuilder
-            character={character}
-            world={world}
-            onStart={handleStartEncounter}
-            onClose={() => setIsEncounterBuilderOpen(false)}
-          />
-        </Suspense>
-      )}
 
       {activeShop && !encounter && (
         <ShopModal

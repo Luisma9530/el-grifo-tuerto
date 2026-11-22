@@ -15,9 +15,9 @@ const toBaseGroups = groups => groups.map(g => ({ ...g, monster: getMonster(g.mo
 const keyOf = g => `${g.monster.id}${g.elite ? ':elite' : ''}${g.name ? `:${g.name}` : ''}`;
 
 /**
- * Prepare a fight: a suggested encounter for the hero's level and world, or
- * creatures picked by hand from the bestiary. With `allowElite` (only in the
- * combat simulator: in a campaign elites come from the story and Duncan) any
+ * Prepare a fight (only in the combat simulator: in a campaign every fight
+ * comes from the story, started by Duncan or the local engine): a suggested encounter for the hero's level and world, or
+ * creatures picked by hand from the bestiary. With `allowElite` any
  * group can be made elite (more HP, +1 to hit, more XP). Calls onStart([{ monster, count, elite?, name?, trait? }])
  * with the elite stat blocks already applied.
  * `initialGroups`: start from these enemies (the simulator's "Cambiar y repetir").

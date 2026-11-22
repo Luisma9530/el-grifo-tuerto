@@ -231,7 +231,7 @@ export const FAQS = [
   },
   {
     q: '¿Cómo funcionan los combates?',
-    a: 'Con el botón «Combate» eliges a quién te enfrentas: un encuentro sugerido para tu nivel y tu mundo, o criaturas del bestiario (127 del SRD, de goblins a dragones antiguos). El juego lleva la iniciativa, la vida y los ataques de cada enemigo; tú atacas, lanzas conjuros, bebes pociones, esquivas o huyes. Los enemigos malheridos pueden huir o rendirse, y al vencer ganas la experiencia de cada criatura.'
+    a: 'Los combates nacen de la historia: cuando atacas a alguien o alguien te ataca, Maese Duncan (o el motor local si juegas sin IA) elige a los enemigos del bestiario (127 criaturas del SRD, de goblins a dragones antiguos) según tu nivel y tu mundo. El juego lleva la iniciativa, la vida y los ataques de cada enemigo; tú atacas, lanzas conjuros, bebes pociones, esquivas o huyes. Los enemigos malheridos pueden huir o rendirse, y al vencer ganas la experiencia de cada criatura. Para practicar o repetir un combate perdido está el Simulador de combates, que nunca cambia tu campaña.'
   },
   {
     q: '¿Cómo se resuelven los ataques?',
