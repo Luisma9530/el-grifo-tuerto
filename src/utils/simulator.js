@@ -11,7 +11,7 @@
 //   otherwise the best attack against the weakest enemy) and the win rate is
 //   reported, to balance encounters.
 
-import { createEncounter, runEnemyTurns, playerAction, activeEnemies, isPlayerTurn, escapableCondition, PLAYER } from './encounter';
+import { createEncounter, runEnemyTurns, playerAction, activeEnemies, isPlayerTurn, escapableCondition, currentHeroUid, PLAYER } from './encounter';
 import { attackOptions } from './combat';
 import { spellRows, slotTable, parseDice, cantripDiceMultiplier, getSpell } from './spellcasting';
 import { normalizeEquipment } from './equipment';
@@ -118,49 +118,74 @@ export function setStartCondition(hero, id, on, level = 1) {
 }
 
 // ---------------------------------------------------------------------------
-// Fights
+// Fights (one hero or a party of up to four)
 // ---------------------------------------------------------------------------
+
+export const MAX_SIM_PARTY = 4;
+const asList = party => (Array.isArray(party) ? party : [party]).filter(Boolean).slice(0, MAX_SIM_PARTY);
+
+/**
+ * Copies of the heroes for a practice fight, each with a unique id (two copies
+ * of the same hero, or quick heroes made in the same instant, would share one).
+ */
+export function simulatorParty(party) {
+  const taken = new Set();
+  return asList(party).map((hero, index) => {
+    const copy = simulatorHero(hero);
+    let id = copy.id || `sim_hero_${index}`;
+    while (taken.has(id)) id = `${id}_${index}`;
+    taken.add(id);
+    return { ...copy, id };
+  });
+}
 
 /**
  * Start a practice fight (the enemies that won initiative act first).
- * @returns {{ encounter, character }}
+ * @param {object | object[]} party  one hero or up to four
+ * @returns {{ encounter, heroes, character }}
  */
-export function startSimulation(character, groups, rollDie) {
-  const hero = simulatorHero(character);
-  const encounter = { ...createEncounter(groups, hero, rollDie), simulation: true };
-  return runEnemyTurns(encounter, hero, rollDie);
+export function startSimulation(party, groups, rollDie) {
+  const heroes = Array.isArray(party) ? simulatorParty(party) : simulatorHero(party);
+  const encounter = { ...createEncounter(groups, heroes, rollDie), simulation: true };
+  return runEnemyTurns(encounter, heroes, rollDie);
 }
 
 const potionUses = hero => (hero.inventory || []).filter(i => healingDice(i)).reduce((s, i) => s + (i.uses === undefined ? 1 : Number(i.uses) || 0), 0);
 const slotsUsed = hero => slotTable(hero.spellcasting).reduce((s, r) => s + r.used, 0);
+const sum = (list, fn) => list.reduce((total, x) => total + fn(x), 0);
 
 /**
  * What happened in a finished (or ongoing) fight.
- * @returns {{ status, rounds, dealt, taken, potions, slots, spells: string[], conditions: string[], enemies }}
+ * @param startParty / endParty  the hero (or heroes) at the start and at the end
+ * @returns {{ status, rounds, dealt, taken, potions, slots, spells: string[], conditions: string[], enemies, hpLeft, heroes }}
  */
-export function fightSummary(encounter, startHero, endHero) {
-  const name = endHero?.name || startHero?.name || '';
+export function fightSummary(encounter, startParty, endParty) {
+  const start = asList(startParty);
+  const end = asList(endParty);
   const log = encounter.log || [];
-  const spells = log
-    .filter(e => e.text?.startsWith(`${name} lanza `))
-    .map(e => e.text.slice(name.length + 7).split(/ sobre |: |\.\s|\.$/)[0]);
-  const conditions = [...new Set(log.filter(e => e.kind === 'condition' && e.change === 'add' && e.target === PLAYER).map(e => conditionName(e.condition)))];
+  const ids = new Set([...end.map(h => h.id || PLAYER), PLAYER]);
+  const spells = [...new Set(end.flatMap(hero => log
+    .filter(e => e.text?.startsWith(`${hero.name} lanza `))
+    .map(e => e.text.slice(hero.name.length + 7).split(/ sobre |: |\.\s|\.$/)[0])))];
+  const conditions = [...new Set(log.filter(e => e.kind === 'condition' && e.change === 'add' && ids.has(e.target)).map(e => conditionName(e.condition)))];
+  const startOf = hero => start.find(h => (h.id || PLAYER) === (hero.id || PLAYER)) || hero;
   return {
     status: encounter.status,
     rounds: encounter.round,
-    dealt: encounter.enemies.reduce((sum, e) => sum + Math.max(0, e.maxHp - Math.max(0, e.hp)), 0),
-    taken: log.reduce((sum, e) => sum + (Number(e.playerDamage) || 0), 0),
-    potions: Math.max(0, potionUses(startHero) - potionUses(endHero)),
-    slots: Math.max(0, slotsUsed(endHero) - slotsUsed(startHero)),
+    dealt: encounter.enemies.reduce((total, e) => total + Math.max(0, e.maxHp - Math.max(0, e.hp)), 0),
+    taken: log.reduce((total, e) => total + (Number(e.playerDamage) || 0), 0),
+    potions: Math.max(0, sum(start, potionUses) - sum(end, potionUses)),
+    slots: Math.max(0, sum(end, slotsUsed) - sum(start, slotsUsed)),
     spells,
     conditions,
-    hpLeft: Math.max(0, endHero.hp),
+    hpLeft: Math.max(0, end[0]?.hp || 0),
+    heroes: end.map(h => ({ name: h.name, avatar: h.avatar, hp: Math.max(0, h.hp), maxHp: h.maxHp, taken: log.filter(e => e.target === (h.id || PLAYER)).reduce((t, e) => t + (Number(e.playerDamage) || 0), 0), potionsUsed: Math.max(0, potionUses(startOf(h)) - potionUses(h)) })),
     enemies: encounter.enemies.map(e => ({ name: e.name, status: e.status, hp: Math.max(0, e.hp), maxHp: e.maxHp }))
   };
 }
 
 // ---------------------------------------------------------------------------
-// Simple AI for the hero ("Simular N veces")
+// Simple AI for the heroes ("Simular N veces")
 // ---------------------------------------------------------------------------
 
 const average = notation => {
@@ -186,11 +211,15 @@ export function bestAttack(hero, target) {
 }
 
 /**
- * The hero's next move: drink a potion below `healBelow` (share of max HP),
- * break free when held, otherwise hit the weakest enemy with the best option.
+ * A hero's next move: give a potion to an unconscious ally, drink one below
+ * `healBelow` (share of max HP), break free when held, otherwise hit the
+ * weakest enemy with the best option.
+ * @param {object[]} [allies]  the rest of the party
  */
-export function autoAction(encounter, hero, { healBelow = 0.35 } = {}) {
+export function autoAction(encounter, hero, { healBelow = 0.35, allies = [] } = {}) {
   const potion = (hero.inventory || []).filter(i => healingDice(i)).sort((a, b) => average(healingDice(a)) - average(healingDice(b)))[0];
+  const fallen = allies.find(a => a.id !== hero.id && a.hp <= 0);
+  if (!encounter.bonusUsed && potion && fallen) return { type: 'potion', itemId: potion.id, targetUid: fallen.id };
   if (!encounter.bonusUsed && potion && hero.hp < hero.maxHp * healBelow) return { type: 'potion', itemId: potion.id };
   if (encounter.actionUsed) return { type: 'endTurn' };
   const target = [...activeEnemies(encounter)].sort((a, b) => a.hp - b.hp)[0];
@@ -200,21 +229,25 @@ export function autoAction(encounter, hero, { healBelow = 0.35 } = {}) {
   return attack ? { ...attack, targetUid: target.uid } : { type: 'dodge' };
 }
 
-/** Play a whole fight with the simple AI. @returns {{ encounter, character }} */
-export function autoFight(character, groups, rollDie, options = {}) {
-  let { encounter, character: hero } = startSimulation(character, groups, rollDie);
+/** Play a whole fight with the simple AI. @returns {{ encounter, heroes, character }} */
+export function autoFight(party, groups, rollDie, options = {}) {
+  const single = !Array.isArray(party);
+  let { encounter, heroes } = startSimulation(single ? party : party, groups, rollDie);
   let guard = 0;
-  while (encounter.status === 'active' && guard++ < 400) {
+  while (encounter.status === 'active' && guard++ < 800) {
     if (!isPlayerTurn(encounter)) break;
-    let result = playerAction(encounter, hero, autoAction(encounter, hero, options), rollDie);
+    const uid = currentHeroUid(encounter);
+    const hero = heroes.find(h => (h.id || PLAYER) === uid) || heroes[0];
+    const input = single ? heroes[0] : heroes;
+    let result = playerAction(encounter, input, autoAction(encounter, hero, { ...options, allies: heroes }), rollDie);
     // An action the engine refuses (charmed, wrong target...): dodge, or end the turn
-    if (!result.ok) result = playerAction(encounter, hero, { type: encounter.actionUsed ? 'endTurn' : 'dodge' }, rollDie);
-    if (!result.ok) result = playerAction(encounter, hero, { type: 'endTurn' }, rollDie);
+    if (!result.ok) result = playerAction(encounter, input, { type: encounter.actionUsed ? 'endTurn' : 'dodge' }, rollDie);
+    if (!result.ok) result = playerAction(encounter, input, { type: 'endTurn' }, rollDie);
     if (!result.ok) break;
-    ({ encounter, character: hero } = result);
+    ({ encounter, heroes } = result);
   }
   if (encounter.status === 'active') encounter = { ...encounter, status: 'timeout' };
-  return { encounter, character: hero };
+  return { encounter, heroes, character: heroes[0] };
 }
 
 /** A die from a random number generator. */
@@ -222,19 +255,24 @@ export const dieFrom = rng => sides => 1 + Math.floor(rng() * sides);
 
 /**
  * Fight the same encounter `runs` times with the simple AI.
- * @returns {{ runs, victory, defeat, fled, timeout, winRate, avgRounds, avgHpLeft, avgPotions }}
+ * @param {object | object[]} party  one hero or up to four
+ * @returns {{ runs, victory, defeat, fled, timeout, winRate, avgRounds, avgHpLeft, avgPotions, avgFallen }}
+ *   avgHpLeft: share of the party's HP left after a victory; avgFallen: heroes at 0 HP at the end of a victory
  */
-export function simulateMany(character, groups, runs = 100, { rng = Math.random, healBelow = 0.35 } = {}) {
+export function simulateMany(party, groups, runs = 100, { rng = Math.random, healBelow = 0.35 } = {}) {
   const n = Math.max(1, Math.min(1000, Math.round(Number(runs) || 1)));
   const rollDie = dieFrom(rng);
-  const totals = { victory: 0, defeat: 0, fled: 0, timeout: 0, rounds: 0, hpLeft: 0, potions: 0 };
+  const totals = { victory: 0, defeat: 0, fled: 0, timeout: 0, rounds: 0, hpLeft: 0, potions: 0, fallen: 0 };
   for (let i = 0; i < n; i++) {
-    const start = simulatorHero(character);
-    const { encounter, character: end } = autoFight(start, groups, rollDie, { healBelow });
+    const start = Array.isArray(party) ? simulatorParty(party) : simulatorHero(party);
+    const { encounter, heroes: end } = autoFight(start, groups, rollDie, { healBelow });
     totals[encounter.status] = (totals[encounter.status] || 0) + 1;
     totals.rounds += encounter.round;
-    if (encounter.status === 'victory') totals.hpLeft += Math.max(0, end.hp) / Math.max(1, end.maxHp);
-    totals.potions += Math.max(0, potionUses(start) - potionUses(end));
+    if (encounter.status === 'victory') {
+      totals.hpLeft += sum(end, h => Math.max(0, h.hp)) / Math.max(1, sum(end, h => h.maxHp));
+      totals.fallen += end.filter(h => h.hp <= 0).length;
+    }
+    totals.potions += Math.max(0, sum(asList(start), potionUses) - sum(end, potionUses));
   }
   return {
     runs: n,
@@ -245,6 +283,7 @@ export function simulateMany(character, groups, runs = 100, { rng = Math.random,
     winRate: totals.victory / n,
     avgRounds: totals.rounds / n,
     avgHpLeft: totals.victory ? totals.hpLeft / totals.victory : 0,
-    avgPotions: totals.potions / n
+    avgPotions: totals.potions / n,
+    avgFallen: totals.victory ? totals.fallen / totals.victory : 0
   };
 }

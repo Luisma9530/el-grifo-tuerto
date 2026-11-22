@@ -17,6 +17,7 @@ import BackupReminder from './components/BackupReminder';
 import DiceOverlay from './components/DiceOverlay';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from './data/gameData';
 import { getStoredGeminiKeys } from './utils/gameEngine';
+import { createParty } from './utils/party';
 import { 
   getAllCampaigns, 
   getActiveCampaignId, 
@@ -28,6 +29,7 @@ import {
 
 // Only needed when starting a new campaign: kept out of the initial bundle
 const CharacterWizard = lazy(() => import('./components/wizard/CharacterWizard'));
+const PartySetup = lazy(() => import('./components/wizard/PartySetup'));
 // The combat simulator is loaded only when opened
 const CombatSimulator = lazy(() => import('./components/simulator/CombatSimulator'));
 
@@ -51,7 +53,7 @@ export default function App() {
   const [isGeminiConnectOpen, setIsGeminiConnectOpen] = useState(false);
   const [isCampaignsOpen, setIsCampaignsOpen] = useState(false);
   const [worldSavesTarget, setWorldSavesTarget] = useState(null); // world whose save slots are shown
-  // New campaign waiting for its hero: { world, title } while the character wizard is open
+  // New campaign waiting for its party: { world, title, members, wizard } (the wizard is open while `wizard`)
   const [pendingCampaign, setPendingCampaign] = useState(null);
   // Combat simulator open: { snapshot?, campaignId? } (it never changes a campaign)
   const [simulator, setSimulator] = useState(null);
@@ -69,19 +71,28 @@ export default function App() {
   const handleStartNewInWorld = (world, title = '') => {
     setWorldSavesTarget(null);
     setIsCampaignsOpen(false);
-    setPendingCampaign({ world, title });
+    setPendingCampaign({ world, title, members: [], wizard: true });
   };
 
   const handleCreateCustomWorld = (customWorld) => {
     handleStartNewInWorld(customWorld);
   };
 
+  // A hero made with the wizard joins the party being formed
   const handleHeroCreated = (character) => {
+    setPendingCampaign(prev => ({ ...prev, members: [...prev.members, character], wizard: false }));
+  };
+
+  // The party is ready: the campaign starts
+  const handlePartyReady = (list) => {
     const { world, title } = pendingCampaign;
+    const party = createParty(list);
+    const character = list[0];
+    const names = list.map(m => m.name);
     const newCamp = createNewCampaign({
       world,
-      character,
-      title: title.trim() || `${character.name} — ${world.name}`
+      party,
+      title: title.trim() || `${names.length > 1 ? `${names.slice(0, -1).join(', ')} y ${names.at(-1)}` : character.name} — ${world.name}`
     });
     setPendingCampaign(null);
     if (!newCamp) {
@@ -247,11 +258,23 @@ export default function App() {
 
       {pendingCampaign && (
         <Suspense fallback={null}>
-          <CharacterWizard
-            world={pendingCampaign.world}
-            onComplete={handleHeroCreated}
-            onCancel={() => setPendingCampaign(null)}
-          />
+          {pendingCampaign.wizard ? (
+            <CharacterWizard
+              world={pendingCampaign.world}
+              onComplete={handleHeroCreated}
+              completeLabel={pendingCampaign.members.length ? 'Añadir al grupo' : 'Continuar'}
+              onCancel={() => setPendingCampaign(prev => (prev.members.length ? { ...prev, wizard: false } : null))}
+            />
+          ) : (
+            <PartySetup
+              world={pendingCampaign.world}
+              members={pendingCampaign.members}
+              onAddWithWizard={() => setPendingCampaign(prev => ({ ...prev, wizard: true }))}
+              onChange={members => setPendingCampaign(prev => ({ ...prev, members }))}
+              onStart={handlePartyReady}
+              onCancel={() => setPendingCampaign(null)}
+            />
+          )}
         </Suspense>
       )}
 

@@ -83,7 +83,7 @@ function Preview({ draft }) {
  * @param {(character: object) => void} props.onComplete
  * @param {() => void} props.onCancel
  */
-export default function CharacterWizard({ world, onComplete, onCancel }) {
+export default function CharacterWizard({ world, onComplete, onCancel, completeLabel = 'Comenzar la aventura' }) {
   const [draft, setDraft] = useState(emptyDraft);
   const [stepId, setStepId] = useState('class');
   const [showIssues, setShowIssues] = useState(false);
@@ -253,7 +253,7 @@ export default function CharacterWizard({ world, onComplete, onCancel }) {
             }`}
           >
             {isSummary ? (
-              <><Swords className="w-4 h-4" /> Comenzar la aventura</>
+              <><Swords className="w-4 h-4" /> {completeLabel}</>
             ) : (
               <>Siguiente <ArrowRight className="w-4 h-4" /></>
             )}
