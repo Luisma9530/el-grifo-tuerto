@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { Minus, Plus, Shuffle, Skull, Swords, X } from 'lucide-react';
+import { Crown, Minus, Plus, Shuffle, Skull, Swords, X } from 'lucide-react';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
 import {
-  DIFFICULTIES, WORLD_TAGS, encounterXp, difficultyOf, searchMonsters, suggestEncounter, formatCr
+  DIFFICULTIES, WORLD_TAGS, encounterXp, difficultyOf, searchMonsters, suggestEncounter, formatCr, getMonster, eliteVersion
 } from '../../utils/bestiary';
 
 const DIFFICULTY_COLORS = {
@@ -10,21 +10,29 @@ const DIFFICULTY_COLORS = {
   high: 'text-orange-400', deadly: 'text-red-400', suicidal: 'text-red-500', none: 'text-stone-500'
 };
 
+/** Groups as the builder keeps them: the base creature and an elite flag. */
+const toBaseGroups = groups => groups.map(g => ({ ...g, monster: getMonster(g.monster.id) || g.monster, elite: Boolean(g.elite) }));
+const keyOf = g => `${g.monster.id}${g.elite ? ':elite' : ''}${g.name ? `:${g.name}` : ''}`;
+
 /**
  * Prepare a fight: a suggested encounter for the hero's level and world, or
- * creatures picked by hand from the bestiary. Calls onStart([{ monster, count }]).
+ * creatures picked by hand from the bestiary. Any group can be made elite
+ * (more HP, +1 to hit, more XP). Calls onStart([{ monster, count, elite?, name?, trait? }])
+ * with the elite stat blocks already applied.
+ * `initialGroups`: start from these enemies (the simulator's "Cambiar y repetir").
  */
-export default function EncounterBuilder({ character, world, onStart, onClose }) {
+export default function EncounterBuilder({ character, world, onStart, onClose, initialGroups = null, startLabel = '¡A luchar!', note = null }) {
   useEscapeKey(true, onClose);
   const level = character.level || 1;
   const tags = WORLD_TAGS[world?.id] || null;
   // Solo play: the budgets are per character of a party, so start with an easy fight
   const [difficulty, setDifficulty] = useState('low');
-  const [groups, setGroups] = useState(() => suggestEncounter(level, { difficulty: 'low', tags }));
+  const [groups, setGroups] = useState(() => (initialGroups?.length ? toBaseGroups(initialGroups) : suggestEncounter(level, { difficulty: 'low', tags })));
   const [query, setQuery] = useState('');
   const [onlyWorld, setOnlyWorld] = useState(Boolean(tags));
 
-  const xp = encounterXp(groups);
+  const finalGroups = groups.map(g => (g.elite ? { ...g, monster: eliteVersion(g.monster) } : g));
+  const xp = encounterXp(finalGroups);
   const rating = difficultyOf(level, xp);
   const results = useMemo(
     () => searchMonsters({ text: query, maxCr: Math.max(1, level + 4), tags: onlyWorld ? tags : null }).slice(0, 60),
@@ -36,14 +44,17 @@ export default function EncounterBuilder({ character, world, onStart, onClose })
     setGroups(suggestEncounter(level, { difficulty: id, tags }));
   };
 
-  const changeCount = (monster, delta) => {
+  // `key`: the group to change; a creature from the bestiary goes to its plain group
+  const changeCount = (monster, delta, key = keyOf({ monster })) => {
     setGroups(current => {
-      const existing = current.find(g => g.monster.id === monster.id);
+      const existing = current.find(g => keyOf(g) === key);
       if (!existing) return delta > 0 ? [...current, { monster, count: 1 }] : current;
       const count = Math.min(10, existing.count + delta);
-      return count <= 0 ? current.filter(g => g.monster.id !== monster.id) : current.map(g => (g.monster.id === monster.id ? { ...g, count } : g));
+      return count <= 0 ? current.filter(g => g !== existing) : current.map(g => (g === existing ? { ...g, count } : g));
     });
   };
+
+  const toggleElite = key => setGroups(current => current.map(g => (keyOf(g) === key ? { ...g, elite: !g.elite } : g)));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md" onClick={onClose}>
@@ -90,25 +101,35 @@ export default function EncounterBuilder({ character, world, onStart, onClose })
               <p className="text-xs text-stone-500">Ningún enemigo todavía. Pide una sugerencia o añade criaturas abajo.</p>
             ) : (
               <ul className="space-y-1.5">
-                {groups.map(({ monster, count }) => (
-                  <li key={monster.id} className="flex items-center justify-between gap-3 p-2 rounded-lg bg-[#1b1624] border border-stone-800">
+                {groups.map(group => {
+                  const { monster, count, elite, name } = group;
+                  const key = keyOf(group);
+                  const shown = elite ? eliteVersion(monster) : monster;
+                  return (
+                  <li key={key} className="flex items-center justify-between gap-3 p-2 rounded-lg bg-[#1b1624] border border-stone-800">
                     <div className="min-w-0">
-                      <p className="text-sm text-stone-100 truncate">{monster.name}</p>
+                      <p className="text-sm text-stone-100 truncate">{name ? `${name} (${monster.name})` : monster.name}{elite && <span className="ml-1.5 text-[10px] font-semibold text-amber-400">élite</span>}</p>
                       <p className="text-[10px] font-mono text-stone-500">
-                        VD {formatCr(monster.cr)} · CA {monster.ac} · {monster.hp} PG · {monster.type} · {monster.xp} PX
+                        VD {formatCr(monster.cr)} · CA {shown.ac} · {shown.hp} PG · {monster.type} · {shown.xp} PX
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
-                      <button onClick={() => changeCount(monster, -1)} className="w-7 h-7 rounded-lg bg-stone-900 border border-stone-700 text-stone-300 flex items-center justify-center" aria-label={`Quitar ${monster.name}`}>
+                      <button onClick={() => toggleElite(key)} aria-pressed={Boolean(elite)}
+                        title="Élite: un jefe más duro (×1,5 PG y PX, +1 al ataque y a la CD)"
+                        className={`h-7 px-2 rounded-lg border text-[10px] font-semibold flex items-center gap-1 ${elite ? 'bg-amber-500/20 border-amber-400 text-amber-200' : 'bg-stone-900 border-stone-700 text-stone-400'}`}>
+                        <Crown className="w-3 h-3" /> Élite
+                      </button>
+                      <button onClick={() => changeCount(monster, -1, key)} className="w-7 h-7 rounded-lg bg-stone-900 border border-stone-700 text-stone-300 flex items-center justify-center" aria-label={`Quitar ${monster.name}`}>
                         <Minus className="w-3.5 h-3.5" />
                       </button>
                       <span className="w-6 text-center font-mono text-stone-100">{count}</span>
-                      <button onClick={() => changeCount(monster, 1)} className="w-7 h-7 rounded-lg bg-stone-900 border border-stone-700 text-stone-300 flex items-center justify-center" aria-label={`Añadir ${monster.name}`}>
+                      <button onClick={() => changeCount(monster, 1, key)} className="w-7 h-7 rounded-lg bg-stone-900 border border-stone-700 text-stone-300 flex items-center justify-center" aria-label={`Añadir ${monster.name}`}>
                         <Plus className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             )}
             <p className="mt-3 text-xs text-stone-400">
@@ -155,14 +176,14 @@ export default function EncounterBuilder({ character, world, onStart, onClose })
 
         <footer className="p-4 border-t border-red-950/60 flex items-center justify-between gap-3">
           <p className="text-[11px] text-stone-500 flex items-center gap-1.5">
-            <Skull className="w-3.5 h-3.5" /> Juegas solo: «Fácil» ya es un reto. Las criaturas pueden huir o rendirse.
+            <Skull className="w-3.5 h-3.5" /> {note || 'Juegas solo: «Fácil» ya es un reto. Las criaturas pueden huir o rendirse.'}
           </p>
           <button
-            onClick={() => onStart(groups)}
+            onClick={() => onStart(finalGroups)}
             disabled={groups.length === 0}
             className="px-5 py-2.5 rounded-xl text-sm font-cinzel font-bold flex items-center gap-2 bg-gradient-to-r from-red-700 to-red-600 hover:brightness-110 text-white disabled:opacity-40 shrink-0"
           >
-            <Swords className="w-4 h-4" /> ¡A luchar!
+            <Swords className="w-4 h-4" /> {startLabel}
           </button>
         </footer>
       </div>
