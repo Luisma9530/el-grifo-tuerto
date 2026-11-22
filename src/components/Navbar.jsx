@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Volume2, VolumeX, Users, Flame, Dice5, Sparkles, Compass, BookOpen } from 'lucide-react';
+import { Volume2, VolumeX, Users, Flame, Dice5, Sparkles, Compass, BookOpen, FlaskConical } from 'lucide-react';
 import { tavernAudio } from '../utils/audio';
 
 export default function Navbar({ 
@@ -10,6 +10,7 @@ export default function Navbar({
   onOpenWorldForge, 
   onOpenGeminiConnect, 
   onOpenCampaigns,
+  onOpenSimulator,
   campaignsCount = 0,
   keysCount = 0 
 }) {
@@ -91,6 +92,14 @@ export default function Navbar({
                 {campaignsCount}
               </span>
             )}
+          </button>
+          <button
+            onClick={onOpenSimulator}
+            className="hover:text-sky-300 transition-colors text-stone-300 flex items-center gap-1.5"
+            title="Prueba combates sin afectar a tus campañas"
+          >
+            <FlaskConical className="w-4 h-4 text-sky-400" />
+            Simulador
           </button>
         </nav>
 

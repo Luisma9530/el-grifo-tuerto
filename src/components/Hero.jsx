@@ -1,8 +1,8 @@
 import React from 'react';
-import { Dice5, Sparkles, Shield, ArrowRight, Flame, BookOpen } from 'lucide-react';
+import { Dice5, Sparkles, Shield, ArrowRight, Flame, BookOpen, FlaskConical } from 'lucide-react';
 import { TAVERN_STATS } from '../data/gameData';
 
-export default function Hero({ onStartGame, onScrollToWorlds, onOpenCampaigns, campaignsCount = 0 }) {
+export default function Hero({ onStartGame, onScrollToWorlds, onOpenCampaigns, onOpenSimulator, campaignsCount = 0 }) {
   return (
     <section className="relative overflow-hidden pt-12 pb-20 lg:pt-16 lg:pb-28">
       {/* Background radial ambient lights */}
@@ -61,6 +61,17 @@ export default function Hero({ onStartGame, onScrollToWorlds, onOpenCampaigns, c
             <span>Explorar los Mundos</span>
             <ArrowRight className="w-4 h-4" />
           </button>
+
+          {onOpenSimulator && (
+            <button
+              onClick={onOpenSimulator}
+              className="w-full sm:w-auto px-6 py-4 rounded-xl bg-stone-900/90 border border-sky-800/70 hover:border-sky-400 text-sky-200 font-semibold text-base active:scale-95 transition-all flex items-center justify-center gap-2"
+              title="Prueba combates sin campaña y sin afectar a tus partidas"
+            >
+              <FlaskConical className="w-5 h-5 text-sky-400" />
+              <span>Simulador de combates</span>
+            </button>
+          )}
         </div>
 
         {/* No-account notice */}

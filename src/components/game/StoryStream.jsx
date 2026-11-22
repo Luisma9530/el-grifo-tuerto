@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import RichText from '../RichText';
-import { Send, Dice5, Sparkles, Sword, Eye, MessageCircle, Flame, ShieldAlert, Skull } from 'lucide-react';
+import { Send, Dice5, Sparkles, Sword, Eye, MessageCircle, Flame, ShieldAlert } from 'lucide-react';
 
 export default function StoryStream({
   messages,
@@ -12,7 +12,6 @@ export default function StoryStream({
   onOpenGeminiConnect,
   onQuickAttack,
   onQuickCheck,
-  onStartCombat,
   keysCount = 0
 }) {
   const [inputText, setInputText] = useState('');
@@ -228,16 +227,6 @@ export default function StoryStream({
 
         {/* Quick shortcut tags */}
         <div className="flex items-center gap-4 mt-2 px-1 text-[11px] text-stone-400">
-          <button
-            type="button"
-            onClick={() => !isGenerating && onStartCombat?.()}
-            disabled={isGenerating}
-            title="Empieza un combate con criaturas del bestiario (lo resuelve el juego)"
-            className="hover:text-red-300 flex items-center gap-1 transition-colors font-semibold text-red-300/90 disabled:opacity-40"
-          >
-            <Skull className="w-3 h-3 text-red-400" />
-            <span>Combate</span>
-          </button>
           <button
             type="button"
             onClick={() => !isGenerating && onQuickAttack?.()}
