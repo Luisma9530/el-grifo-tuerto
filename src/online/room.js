@@ -43,6 +43,7 @@ export const normalizeCode = text => String(text || '').toUpperCase().replace(/[
 /** A clean player name: trimmed, single spaces, no control characters, at most MAX_NAME. */
 export function cleanName(text) {
   return String(text || '')
+    // eslint-disable-next-line no-control-regex -- control characters are what it removes
     .replace(/[\u0000-\u001f\u007f<>]/g, '')
     .replace(/\s+/g, ' ')
     .trim()

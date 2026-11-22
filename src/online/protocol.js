@@ -22,6 +22,7 @@ const ABILITIES = ['fue', 'des', 'con', 'int', 'sab', 'car'];
 const ACT_KINDS = ['text', 'check', 'attack', 'spell', 'item'];
 const COMBAT_TYPES = ['attack', 'spell', 'equip', 'dodge', 'flee', 'escape', 'potion', 'endTurn'];
 
+// eslint-disable-next-line no-control-regex -- control characters are what it removes
 const str = (value, max) => (typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max) : '');
 const id = value => (typeof value === 'string' && value.length <= MAX_ID && /^[\w:.-]+$/.test(value) ? value : null);
 const optId = value => (value == null ? null : id(value));

@@ -16,8 +16,15 @@ export default function StoryStream({
   onOpenGeminiConnect,
   onQuickAttack,
   onQuickCheck,
-  keysCount = 0
+  keysCount = 0,
+  // Online: who this screen may act with (default: everyone), whether the box is
+  // locked (default: while Duncan writes) and a line above it (whose turn, etc.)
+  actors = null,
+  inputLocked = null,
+  inputNotice = null
 }) {
+  const canPick = actors || party;
+  const locked = inputLocked ?? isGenerating;
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef(null);
 
@@ -31,13 +38,13 @@ export default function StoryStream({
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!inputText.trim() || isGenerating) return;
+    if (!inputText.trim() || locked) return;
     onSendAction(inputText.trim());
     setInputText('');
   };
 
   const handleChipClick = (action) => {
-    if (isGenerating) return;
+    if (locked) return;
     onSendAction(action);
   };
 
@@ -137,6 +144,7 @@ export default function StoryStream({
                 <div className="flex items-center gap-1.5 pb-1 mb-1 border-b border-amber-700/50 text-xs font-cinzel font-bold">
                   <span>{msg.actor ? msg.avatar || '🛡️' : character.avatar || '🛡️'}</span>
                   <span>{msg.actor || character.name}</span>
+                  {msg.by && <span className="ml-auto font-sans font-normal text-[10px] text-amber-200/70">({msg.by})</span>}
                 </div>
               )}
 
@@ -236,19 +244,22 @@ export default function StoryStream({
 
       {/* Input Action Form */}
       <form onSubmit={handleSubmit} className="p-3 sm:p-4 bg-[#110e17] border-t border-amber-950/60">
+        {inputNotice && (
+          <p className="mb-2 text-[11px] text-sky-200 bg-sky-950/30 border border-sky-900/50 rounded-lg px-2.5 py-1.5" role="status">{inputNotice}</p>
+        )}
         <div className="flex items-center gap-2">
-          {party.length > 1 && (
+          {party.length > 1 && canPick.length > 0 && (
             <label className="shrink-0 flex items-center gap-1 bg-[#1a1523] border border-amber-900/40 rounded-xl px-2 py-2.5 text-xs text-stone-200" title="Quién actúa: la acción, las tiradas y los atajos usan su ficha">
               <span aria-hidden="true">{character.avatar || '🛡️'}</span>
               <span className="sr-only">Quién actúa</span>
               <select
                 value={character.id}
-                disabled={isGenerating}
+                disabled={locked}
                 onChange={e => onSelectMember(e.target.value)}
                 className="bg-transparent focus:outline-none max-w-[7rem] sm:max-w-[10rem] truncate"
                 aria-label="Personaje que actúa"
               >
-                {party.map(m => (
+                {canPick.map(m => (
                   <option key={m.id} value={m.id} className="bg-[#1a1523]">{m.name}{m.hp <= 0 ? ' (inconsciente)' : ''}</option>
                 ))}
               </select>
@@ -257,14 +268,14 @@ export default function StoryStream({
           <input
             type="text"
             value={inputText}
-            disabled={isGenerating}
+            disabled={locked}
             onChange={(e) => setInputText(e.target.value)}
             placeholder={party.length > 1 ? `¿Qué hace ${character.name}?` : "¿Qué hace tu personaje? (Ej: 'Desenvaino y exijo ver al cabecilla', 'Me acerco sigiloso por la sombra')..."}
             className="flex-1 min-w-0 bg-[#1a1523] border border-amber-900/40 focus:border-amber-500 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder-stone-500 focus:outline-none transition-colors"
           />
           <button
             type="submit"
-            disabled={!inputText.trim() || isGenerating}
+            disabled={!inputText.trim() || locked}
             className="px-5 py-3 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 hover:brightness-110 disabled:opacity-40 text-stone-950 font-cinzel font-bold text-sm shadow-md transition-all flex items-center gap-1.5 shrink-0"
           >
             <Send className="w-4 h-4" />
@@ -276,8 +287,8 @@ export default function StoryStream({
         <div className="flex items-center gap-4 mt-2 px-1 text-[11px] text-stone-400">
           <button
             type="button"
-            onClick={() => !isGenerating && onQuickAttack?.()}
-            disabled={isGenerating}
+            onClick={() => !locked && onQuickAttack?.()}
+            disabled={locked}
             title="Ataca con tu primera arma equipada (lo resuelve el juego)"
             className="hover:text-amber-300 flex items-center gap-1 transition-colors disabled:opacity-40"
           >
@@ -286,8 +297,8 @@ export default function StoryStream({
           </button>
           <button
             type="button"
-            onClick={() => !isGenerating && onQuickCheck?.('perception')}
-            disabled={isGenerating}
+            onClick={() => !locked && onQuickCheck?.('perception')}
+            disabled={locked}
             title="Tirada de Percepción con tu ficha (lo resuelve el juego)"
             className="hover:text-amber-300 flex items-center gap-1 transition-colors disabled:opacity-40"
           >
@@ -296,8 +307,8 @@ export default function StoryStream({
           </button>
           <button
             type="button"
-            onClick={() => !isGenerating && onQuickCheck?.('persuasion')}
-            disabled={isGenerating}
+            onClick={() => !locked && onQuickCheck?.('persuasion')}
+            disabled={locked}
             title="Tirada de Persuasión con tu ficha (lo resuelve el juego)"
             className="hover:text-amber-300 flex items-center gap-1 transition-colors disabled:opacity-40"
           >

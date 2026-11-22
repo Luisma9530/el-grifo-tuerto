@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Volume2, VolumeX, Users, Settings, ArrowLeft, Download, Check, AlertTriangle, FlaskConical, RotateCcw, BookOpen, Sparkles } from 'lucide-react';
+import { Volume2, VolumeX, Users, Settings, ArrowLeft, Download, Check, AlertTriangle, FlaskConical, RotateCcw, BookOpen, Sparkles, Wifi } from 'lucide-react';
 import PartyPanel from './game/PartyPanel';
 import StoryStream from './game/StoryStream';
 import WorldMapPanel from './game/WorldMapPanel';
 import DiceRollerTray from './game/DiceRollerTray';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from '../data/gameData';
-import { generateDMResponse, rollCheck, rollDie, getStoredGeminiKeys } from '../utils/gameEngine';
+import { generateDMResponse, rollCheck, rollDie, getStoredGeminiKeys, getModifierNumber } from '../utils/gameEngine';
 import { castSpell, describeCast } from '../utils/spellcasting';
 import {
   saveCampaign,
@@ -54,6 +54,17 @@ import {
   restParty, finishFight, storyXp, payPartyReward, longRestCost, applySceneEffects, applySceneConditions, applySceneLimbs
 } from '../utils/partyActions';
 import { makeRecruitOffer, departingMember } from '../utils/recruit';
+import { LOCAL_CONTROLLER } from '../utils/party';
+import { onlineConfig, roomLink } from '../online/transport';
+import { useHostRoom, wasOnline, storedPlayerName, storePlayerName } from '../online/useOnlineRoom';
+import { buildSections } from '../online/snapshot';
+import {
+  ownerOf, controllerOf, canControl, playerName, claimCharacter, releaseCharacter, breakTie, closeVote, removePlayer, dequeueAction
+} from '../online/room';
+import { stillValid } from '../online/protocol';
+import { sheetIntents, labelFor, quickAttackOption, ABILITY_NAMES } from '../online/actions';
+import HostRoomDrawer from './online/HostRoomDrawer';
+import OnlineToast from './online/OnlineToast';
 
 // The bestiary (and its builder) is only needed when a fight is being prepared
 // The bestiary is big: loaded the first time Duncan may start a fight
@@ -164,6 +175,8 @@ export default function TavernApp({
 
   const [saveStatus, setSaveStatus] = useState('saved'); // 'saved' | 'error' | 'quota'
   const isRollingCheckRef = useRef(false); // a stat check die is on the table
+  // Online: the player whose queued action is being played (shown in the chronicle)
+  const authorRef = useRef(null);
   const [isLevelUpOpen, setIsLevelUpOpen] = useState(false);
 
   // Guards against double-creation under React.StrictMode (effects run twice in dev)
@@ -279,7 +292,7 @@ export default function TavernApp({
     // Add the action to messages, with who did it (not for the narration after a fight)
     const newMsgList = combatResult ? messages : [
       ...messages,
-      { sender: 'player', actor: sheet.name, avatar: sheet.avatar, text: actionText, timestamp: now() }
+      { sender: 'player', actor: sheet.name, avatar: sheet.avatar, text: actionText, timestamp: now(), ...(authorRef.current ? { by: authorRef.current } : {}) }
     ];
     // (the fight's own system lines were just added with functional updates: keep them)
     if (!combatResult) setMessages(newMsgList);
@@ -1008,6 +1021,201 @@ export default function TavernApp({
   const heroes = memberSheets(party);
   const inCombat = Boolean(encounter && encounter.status === 'active');
 
+  // ---------------------------------------------------------------- online room
+  // The host's browser runs the game (and Duncan, with its own Gemini key) and shares
+  // it; the other players send intents that are checked before anything happens
+  // (see src/online). Without a room open, nothing here changes how the game plays.
+  const onlineKind = onlineConfig().kind;
+  const gameRef = useRef(null);
+  const combatIntentRef = useRef(() => {});
+  const online = useHostRoom({
+    campaignId: currentCampaignId,
+    kind: onlineKind,
+    getGame: () => gameRef.current,
+    onCombat: (characterId, action) => combatIntentRef.current(characterId, action)
+  });
+  const room = online.status === 'open' ? online.room : null;
+  const [isRoomOpen, setIsRoomOpen] = useState(false);
+  const [onlineNotice, setOnlineNotice] = useState(null);
+  const [queueRunning, setQueueRunning] = useState(false);
+  const [chatSeen, setChatSeen] = useState(0);
+  const turnUid = inCombat ? currentHeroUid(encounter) : null;
+  const heroIds = heroes.map(h => h.id);
+
+  gameRef.current = {
+    characterIds: heroIds,
+    names: Object.fromEntries(heroes.map(h => [h.id, h.name])),
+    inCombat,
+    turnCharacterId: turnUid,
+    combatBusy,
+    labelFor: (kind, payload, characterId) => labelFor(kind, payload, heroes.find(h => h.id === characterId))
+  };
+  // A combat action from a player whose turn it is (already checked by the room)
+  combatIntentRef.current = (characterId, action) => {
+    if (encounter && currentHeroUid(encounter) === characterId) handleCombatAction(action);
+  };
+
+  const tell = (playerId, text) => {
+    if (!room || playerId === room.hostId) setOnlineNotice(text);
+    else online.notice(playerId, text);
+  };
+
+  const openRoom = name => {
+    storePlayerName(name);
+    online.open(name);
+  };
+
+  // The room was open when the page was left (a reload): open it again, same code
+  useEffect(() => {
+    if (onlineKind && wasOnline(currentCampaignId)) online.open(storedPlayerName() || 'Anfitrión');
+    // Only when the campaign changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentCampaignId]);
+
+  // Share the game with the players (the session sends only what changed, a few times a second at most)
+  const roomIsOpen = Boolean(room);
+  useEffect(() => {
+    if (!roomIsOpen) return;
+    online.publish(buildSections({
+      title: campaignTitle, world, party, messages, suggestedActions, encounter, quests, events, summary,
+      isGenerating: isGenerating || queueRunning, combatBusy, pendingRecruit, aiActive: geminiKeys.length > 0
+    }));
+    // `online.publish` is stable; the room itself is added by the session
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomIsOpen, campaignTitle, world, party, messages, suggestedActions, encounter, quests, events, summary, isGenerating, queueRunning, combatBusy, pendingRecruit, geminiKeys.length]);
+
+  // Each member records who plays it (`controlledBy`): a player id, or the local one for the host
+  const ownersKey = room ? heroIds.map(id => `${id}:${ownerOf(room, id)}`).join('|') : `off:${heroIds.join('|')}`;
+  useEffect(() => {
+    const want = id => {
+      if (!room) return LOCAL_CONTROLLER;
+      const owner = ownerOf(room, id);
+      return owner === room.hostId ? LOCAL_CONTROLLER : owner;
+    };
+    if (membersOf(partyRef.current).every(m => m.controlledBy === want(m.id))) return;
+    setParty(p => ({ ...p, members: p.members.map(m => ({ ...m, controlledBy: want(m.id) })) }));
+    // Only when the owners change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownersKey]);
+
+  // Someone comes or goes: the host is told (their character is played here meanwhile)
+  const presenceKey = room ? Object.values(room.players).map(p => `${p.id}:${p.connected}`).join('|') : '';
+  const presenceRef = useRef('');
+  useEffect(() => {
+    const before = presenceRef.current;
+    presenceRef.current = presenceKey;
+    if (!room || !before) return;
+    const was = Object.fromEntries(before.split('|').map(x => x.split(':')));
+    Object.values(room.players).forEach(p => {
+      if (p.isHost || was[p.id] === String(p.connected)) return;
+      if (was[p.id] === undefined && !p.connected) return;
+      const theirs = heroes.filter(h => ownerOf(room, h.id) === p.id).map(h => h.name);
+      setOnlineNotice(p.connected
+        ? `🟢 ${p.name} ha entrado en la sala.${theirs.length ? ` Vuelve a jugar con ${theirs.join(' y ')}.` : ' Puede elegir un personaje libre.'}`
+        : `⚪ ${p.name} se ha desconectado.${theirs.length ? ` Juegas con ${theirs.join(' y ')} hasta que vuelva.` : ''}`);
+    });
+    // Only when someone's connection changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presenceKey]);
+
+  // Play a queued action with the usual handlers (the acting member was selected first)
+  const runQueued = ({ kind, payload, characterId }) => {
+    const sheet = memberSheet(partyRef.current, characterId);
+    if (kind === 'text') return handleSendAction(payload.text);
+    if (kind === 'check') {
+      if (payload.skillId) {
+        const skill = getSkill(payload.skillId);
+        return skill ? handleRollCheck({ label: skill.name, modifier: skillModifier(sheet, skill.id), ability: skill.ability, skillId: skill.id }) : null;
+      }
+      return handleRollCheck({ label: ABILITY_NAMES[payload.ability], modifier: getModifierNumber(sheet.stats?.[payload.ability] ?? 10), ability: payload.ability });
+    }
+    if (kind === 'attack') return handleAttack({ optionId: payload.optionId, target: payload.target, targetAC: payload.targetAC || undefined, raging: payload.raging });
+    if (kind === 'spell') return handleCastSpell(payload.spellId, payload.target);
+    const item = (sheet.inventory || []).find(i => i.id === payload.itemId);
+    if (!item) return pushSystemMessage(`🎒 ${sheet.name} ya no tiene ese objeto.`);
+    return handleUseItem(item);
+  };
+
+  // The queue: one action at a time, when Duncan is free (paused during a fight)
+  const queueHead = room?.queue[0] || null;
+  useEffect(() => {
+    if (!room || !queueHead || queueRunning || isGenerating || combatBusy || encounter || isRollingCheckRef.current) return;
+    const check = stillValid(room, gameRef.current, queueHead);
+    if (!check.ok) {
+      online.update(r => dequeueAction(r, queueHead.id));
+      tell(queueHead.playerId, `Se descarta «${queueHead.label}»: ${check.error}.`);
+      return;
+    }
+    if (partyRef.current.activeId !== queueHead.characterId) {
+      handleSelectMember(queueHead.characterId);
+      return;
+    }
+    online.update(r => dequeueAction(r, queueHead.id));
+    setQueueRunning(true);
+    authorRef.current = playerName(room, queueHead.playerId);
+    Promise.resolve()
+      .then(() => runQueued(queueHead))
+      .catch(err => console.error(err))
+      .finally(() => {
+        authorRef.current = null;
+        setQueueRunning(false);
+      });
+    // The handlers read the latest state from this render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queueHead?.id, roomIsOpen, queueRunning, isGenerating, combatBusy, encounter, party.activeId]);
+
+  // In a room, the host's own actions also go through the room (checks and queue)
+  const submit = intent => {
+    const res = online.submit(intent);
+    if (!res.ok) setOnlineNotice(res.error);
+  };
+  const mine = sheetIntents(character.id);
+  const act = room ? {
+    send: text => submit(mine.text(text)),
+    check: args => submit(mine.check(args)),
+    quickCheck: skillId => submit(mine.check({ skillId })),
+    attack: args => submit(mine.attack(args)),
+    quickAttack: () => {
+      const option = quickAttackOption(character);
+      if (!option) return handleQuickAttack();
+      return submit(mine.attack({ optionId: option.id }));
+    },
+    spell: (spellId, target) => submit(mine.spell(spellId, target)),
+    item: item => submit(mine.item(item)),
+    combat: action => submit({ type: 'combat', characterId: turnUid, action })
+  } : {
+    send: handleSendAction,
+    check: handleRollCheck,
+    quickCheck: handleQuickCheck,
+    attack: handleAttack,
+    quickAttack: handleQuickAttack,
+    spell: handleCastSpell,
+    item: handleUseItem,
+    combat: handleCombatAction
+  };
+  const hostActors = room ? heroes.filter(h => canControl(room, room.hostId, h.id)) : null;
+  const turnPlayer = room && turnUid && controllerOf(room, turnUid) !== room.hostId ? playerName(room, controllerOf(room, turnUid)) : null;
+  const storyNotice = !room ? null
+    : !canControl(room, room.hostId, character.id) ? `${character.name} lo juega ${playerName(room, controllerOf(room, character.id))}: elige a uno de los tuyos para actuar.`
+      : isGenerating || queueRunning ? 'Duncan está respondiendo: lo que escribas esperará en la cola de la sala.' : null;
+  const hostOps = room ? {
+    assign: (characterId, playerId) => online.update(r => (playerId
+      ? claimCharacter(r, playerId, characterId, heroIds, { byHost: true })
+      : releaseCharacter(r, r.claims[characterId], characterId, heroIds, { byHost: true })).room || r),
+    breakTie: (characterId, playerId) => online.update(r => breakTie(r, characterId, playerId).room || r),
+    closeVote: characterId => online.update(r => closeVote(r, characterId)),
+    remove: playerId => online.update(r => removePlayer(r, playerId)),
+    closeRoom: () => {
+      online.close();
+      setIsRoomOpen(false);
+    }
+  } : null;
+  const unreadChat = room ? Math.max(0, room.chat.length - chatSeen) : 0;
+  const chatLength = room?.chat.length || 0;
+  useEffect(() => {
+    if (isRoomOpen) setChatSeen(chatLength);
+  }, [isRoomOpen, chatLength]);
+
   return (
     <div className="h-screen flex flex-col bg-[#0b090e] overflow-hidden">
       
@@ -1134,6 +1342,19 @@ export default function TavernApp({
             {isAudioActive ? <Volume2 className="w-4 h-4 text-amber-400" /> : <VolumeX className="w-4 h-4" />}
           </button>
 
+          {/* Online room */}
+          <button
+            onClick={() => setIsRoomOpen(true)}
+            className={`relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
+              room ? 'bg-sky-950/70 border-sky-600/60 text-sky-200' : 'bg-stone-900 border-stone-800 text-stone-300 hover:text-sky-300'
+            }`}
+            title={room ? `Sala online ${room.code}` : 'Jugar online con tus amigos'}
+          >
+            <Wifi className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">{room ? `Sala ${room.code}` : 'Online'}</span>
+            {unreadChat > 0 && <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-amber-500 text-stone-950 text-[9px] font-bold flex items-center justify-center">{unreadChat}</span>}
+          </button>
+
           {/* Share button */}
           <button
             onClick={onOpenInvite}
@@ -1201,12 +1422,12 @@ export default function TavernApp({
             longRestCost={longRestCost(party)}
             onUpdateCharacter={next => setCharacter(normalizeEquipment(next))}
             onOrderDrink={handleOrderDrink}
-            onRollCheck={handleRollCheck}
-            onCastSpell={handleCastSpell}
+            onRollCheck={act.check}
+            onCastSpell={act.spell}
             onRest={handleRest}
             onLevelUp={() => setIsLevelUpOpen(true)}
-            onAttack={handleAttack}
-            onUseItem={handleUseItem}
+            onAttack={act.attack}
+            onUseItem={act.item}
             busy={isGenerating}
             inCombat={inCombat}
           />
@@ -1218,9 +1439,10 @@ export default function TavernApp({
             <CombatView
               encounter={encounter}
               heroes={heroes}
-              onAction={handleCombatAction}
+              onAction={act.combat}
               onFinish={handleFinishEncounter}
               busy={combatBusy}
+              waitingFor={turnPlayer}
               endActions={encounter.snapshotId && combatSnapshots.some(s => s.id === encounter.snapshotId) ? (
                 <button
                   onClick={() => onOpenSimulator({ snapshot: combatSnapshots.find(s => s.id === encounter.snapshotId), campaignId: currentCampaignId })}
@@ -1242,11 +1464,14 @@ export default function TavernApp({
               pendingRecruit={pendingRecruit}
               onAnswerRecruit={handleAnswerRecruit}
               world={world}
-              onSendAction={handleSendAction}
+              onSendAction={act.send}
               onOpenGeminiConnect={onOpenGeminiConnect}
               keysCount={geminiKeys.length}
-              onQuickAttack={handleQuickAttack}
-              onQuickCheck={handleQuickCheck}
+              onQuickAttack={act.quickAttack}
+              onQuickCheck={act.quickCheck}
+              actors={hostActors}
+              inputLocked={room ? hostActors.length === 0 : null}
+              inputNotice={storyNotice}
             />
           )}
         </div>
@@ -1287,6 +1512,21 @@ export default function TavernApp({
           onClose={() => setIsLevelUpOpen(false)}
         />
       )}
+
+      <HostRoomDrawer
+        isOpen={isRoomOpen}
+        onClose={() => setIsRoomOpen(false)}
+        kind={onlineKind}
+        online={online}
+        defaultName={storedPlayerName()}
+        onOpenRoom={openRoom}
+        me={room?.hostId}
+        characters={heroes}
+        link={room ? roomLink(room.code, onlineKind) : ''}
+        onIntent={submit}
+        hostOps={hostOps}
+      />
+      <OnlineToast text={onlineNotice} onClose={() => setOnlineNotice(null)} />
 
       {/* Hidden during a fight: the combat rolls its own dice (and the button would cover its controls) */}
       {!encounter && <DiceRollerTray onSendRollToChat={handleDiceRollToChat} />}

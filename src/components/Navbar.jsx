@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Volume2, VolumeX, Users, Flame, Dice5, Sparkles, Compass, BookOpen, FlaskConical } from 'lucide-react';
+import { Volume2, VolumeX, Users, Flame, Dice5, Sparkles, Compass, BookOpen, FlaskConical, Wifi } from 'lucide-react';
 import { tavernAudio } from '../utils/audio';
 
 export default function Navbar({ 
   currentView, 
   setView, 
-  onOpenInvite, 
+  onOpenInvite,
+  onOpenJoin = null,
   onEnterTavern,
   onOpenWorldForge, 
   onOpenGeminiConnect, 
@@ -155,6 +156,18 @@ export default function Navbar({
             <Sparkles className={`w-3.5 h-3.5 ${keysCount > 0 ? 'text-emerald-400' : 'text-amber-400'}`} />
             <span>{keysCount > 0 ? `Gemini (${keysCount})` : 'Conectar IA Gratis'}</span>
           </button>
+
+          {/* Join a friend's online room */}
+          {onOpenJoin && (
+            <button
+              onClick={onOpenJoin}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sky-950/70 border border-sky-800/60 text-sky-200 text-xs font-semibold hover:border-sky-500 transition-all"
+              title="Entrar en la partida online de un amigo con su código"
+            >
+              <Wifi className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Unirse</span>
+            </button>
+          )}
 
           {/* Share button */}
           <button
