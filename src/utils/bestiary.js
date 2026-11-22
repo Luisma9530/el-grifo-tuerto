@@ -23,12 +23,24 @@ export const DIFFICULTIES = [
   { id: 'high', name: 'Difícil', index: 2 }
 ];
 
-const budgetFor = level => XP_BUDGET[Math.min(20, Math.max(1, Number(level) || 1))];
+const soloBudget = level => XP_BUDGET[Math.min(20, Math.max(1, Math.round(Number(level) || 1)))];
+
+/**
+ * The XP budget [low, moderate, high] of an encounter: per character, as the SRD
+ * says, added up for the whole party. `levels` is one level (a lone hero) or the
+ * level of each member: [3, 3, 2].
+ */
+export function partyBudget(levels) {
+  const list = (Array.isArray(levels) ? levels : [levels]).filter(l => l != null);
+  const used = list.length ? list : [1];
+  return used.map(soloBudget).reduce((sum, b) => sum.map((v, i) => v + b[i]), [0, 0, 0]);
+}
+const budgetFor = partyBudget;
 
 /** Total XP of an encounter: [{ monster, count }]. */
 export const encounterXp = groups => groups.reduce((sum, g) => sum + (g.monster?.xp || 0) * (g.count || 1), 0);
 
-/** How hard an encounter is for a hero of this level. */
+/** How hard an encounter is for a hero of this level (or a party: the level of each member). */
 export function difficultyOf(level, xp) {
   const [low, moderate, high] = budgetFor(level);
   if (xp <= 0) return { id: 'none', name: 'Sin enemigos' };
@@ -70,6 +82,7 @@ export function searchMonsters({ text = '', maxCr = Infinity, tags = null } = {}
  * @returns {{ monster, count }[]}
  */
 export function suggestEncounter(level, { difficulty = 'moderate', tags = null, rng = Math.random } = {}) {
+  // (`level` may be the level of each member of a party)
   const index = DIFFICULTIES.find(d => d.id === difficulty)?.index ?? 1;
   const budget = budgetFor(level)[index];
   const pool = tags ? MONSTERS.filter(m => (m.tags || []).some(t => tags.includes(t))) : MONSTERS;
@@ -80,7 +93,7 @@ export function suggestEncounter(level, { difficulty = 'moderate', tags = null, 
   const fitting = usable.filter(m => m.xp >= budget / 6);
   const candidates = fitting.length ? fitting : usable;
   const main = candidates[Math.floor(rng() * candidates.length)];
-  const count = Math.max(1, Math.min(6, Math.floor(budget / main.xp)));
+  const count = Math.max(1, Math.min(MAX_PER_GROUP, Math.floor(budget / main.xp)));
   const groups = [{ monster: main, count }];
 
   // Room left for a single stronger creature of the same kind of place?
@@ -105,6 +118,7 @@ const TRAIT_MAX = 90;
  * A short list of creatures that suit the hero's level and the world, sent to
  * the Dungeon Master so it can start fights with real stat blocks (kept short
  * to save tokens). Also returns the XP budgets used to size the fight.
+ * `level`: the hero's level, or the level of each member of the party.
  * @returns {{ creatures: {id, name, cr, xp, type}[], budget: { low, moderate, high } }}
  */
 export function encounterCandidates(level, { tags = null, rng = Math.random } = {}) {
@@ -118,7 +132,8 @@ export function encounterCandidates(level, { tags = null, rng = Math.random } = 
   for (let i = 0; i < sorted.length && picks.length < MAX_CANDIDATES; i += step) picks.push(sorted[Math.floor(i)]);
   return {
     creatures: [...new Set(picks)].map(m => ({ id: m.id, name: m.name, cr: m.cr, xp: m.xp, type: m.type })),
-    budget: { low, moderate, high }
+    budget: { low, moderate, high },
+    partySize: Array.isArray(level) ? level.length : 1
   };
 }
 
@@ -137,7 +152,8 @@ const cleanText = (value, max) => (typeof value === 'string' ? value.trim().repl
 /**
  * Turn the Dungeon Master's request ({ enemigos: [{ id, cantidad, nombre?, rasgo?, elite? }] })
  * into encounter groups. Unknown creatures are dropped; counts are clamped and the
- * total is trimmed to a "deadly" budget for a solo hero. Named creatures come alone.
+ * total is trimmed to a "deadly" budget for the hero (or the whole party, when
+ * `level` is the level of each member). Named creatures come alone.
  * @returns {{ monster, count, name?, trait?, elite? }[]} (empty if nothing usable)
  */
 export function resolveCombatRequest(request, level) {
@@ -153,7 +169,7 @@ export function resolveCombatRequest(request, level) {
     const count = name ? 1 : Math.max(1, Math.min(MAX_PER_GROUP, Math.round(Number(entry.cantidad) || 1)));
     groups.push({ monster, count, ...(name ? { name } : {}), ...(cleanText(entry.rasgo, TRAIT_MAX) ? { trait: cleanText(entry.rasgo, TRAIT_MAX) } : {}), ...(elite ? { elite } : {}) });
   });
-  // Too much for one hero: remove creatures from the biggest groups first, keep at least one
+  // Too much for the party: remove creatures from the biggest groups first, keep at least one
   const total = () => encounterXp(groups);
   while (total() > cap && groups.reduce((n, g) => n + g.count, 0) > 1) {
     const biggest = groups.reduce((best, g) => (g.count > 1 && (!best || g.monster.xp * g.count > best.monster.xp * best.count) ? g : best), null);
