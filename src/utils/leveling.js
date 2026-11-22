@@ -15,6 +15,7 @@ export const EPIC_MAX_ABILITY_SCORE = 30;
 export const featureInfo = name => FEATURE_INFO?.[name] || '';
 import { getClass, getSpecies, abilityModifier } from './characterBuilder';
 import { normalizeEquipment } from './equipment';
+import { characterLevel } from './characterLevel';
 import { spellsFor, slotsForLevel, slotTable, maxSlotLevel, getSpell } from './spellcasting';
 
 const ABILITY_IDS = ABILITIES.map(a => a.id);
@@ -23,7 +24,7 @@ const ABILITY_IDS = ABILITIES.map(a => a.id);
 // Experience
 // ---------------------------------------------------------------------------
 
-export const levelOf = character => Math.min(MAX_LEVEL, Math.max(1, Number(character?.level) || 1));
+export const levelOf = character => characterLevel(character);
 export const xpOf = character => Math.max(0, Number(character?.xp) || 0);
 
 /** Only heroes made with the creation wizard have the data needed to level up. */

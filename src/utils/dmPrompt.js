@@ -8,6 +8,7 @@ import { describeEquipmentForPrompt, LIMB_IDS } from './equipment';
 import { formatCoins } from './items';
 import { SHOP_REPLY_IDS } from './shops';
 import { STORY_CONDITION_IDS, EXHAUSTION_MAX, describeConditionsForPrompt } from './conditions';
+import { characterLevel } from './characterLevel';
 import { QUEST_REPLY_ACTIONS, QUEST_IMPORTANCE, cleanQuestChanges, questGoldCap } from './quests';
 
 /** Limb ids and states in the reply (Spanish, as the model writes them) -> sheet values. */
@@ -296,7 +297,7 @@ ${bestiary ? `
 - "tienda": SOLO si ${name} entra en una tienda, va al mercado o habla con un mercader para comprar o vender: {"tipo": "herrero" (armas y armaduras) | "alquimista" (pociones) | "general" (equipo de aventurero)}. El juego abrirá la tienda con sus propios precios y su género: tú no cobras ni pagas nada ("oro": 0), no inventas precios ni das objetos; narra solo la llegada y al tendero. ${shopsHere || 'Aquí no hay tiendas fijas: sería un buhonero o un puesto improvisado.'} Si el jugador intenta comprar o vender equipo, usa "tienda" en vez de "oro". Si no, omite "tienda".` : ''}
 
 - "misiones": casi siempre una lista vacía. Las misiones solo nacen y terminan en la historia, nunca porque el jugador lo pida fuera de ella.
-  · "abrir": cuando alguien encarga de verdad un trabajo a ${name} y lo acepta (un PNJ, un tablón de anuncios, un contrato): {"accion": "abrir", "titulo", "quienEncarga", "lugar", "objetivo", "recompensa": {"oro", "objeto", "experiencia": true, "importancia": "menor" | "normal" | "mayor"}} o {"soloHistoria": true} si no hay pago. Para el nivel ${character.level || 1} el oro más el valor del objeto no pasa de ${formatCoins(questGoldCap(character.level))}; el juego ajusta lo que se pase y calcula la experiencia por la importancia. Promete en la narración lo mismo que pongas aquí.
+  · "abrir": cuando alguien encarga de verdad un trabajo a ${name} y lo acepta (un PNJ, un tablón de anuncios, un contrato): {"accion": "abrir", "titulo", "quienEncarga", "lugar", "objetivo", "recompensa": {"oro", "objeto", "experiencia": true, "importancia": "menor" | "normal" | "mayor"}} o {"soloHistoria": true} si no hay pago. Para el nivel ${characterLevel(character)} el oro más el valor del objeto no pasa de ${formatCoins(questGoldCap(characterLevel(character)))}; el juego ajusta lo que se pase y calcula la experiencia por la importancia. Promete en la narración lo mismo que pongas aquí.
   · "actualizar": {"accion": "actualizar", "id", "nota"} cuando hay un avance o una pista, o con "objetivo" si el encargo cambia.
   · "cumplir" / "fallar": {"accion": "cumplir" | "fallar", "id", "nota"} cuando la historia la resuelve. Al cumplirla el juego entrega la recompensa prometida: narra que la recibe, pero no la sumes a "oro" ni a "experiencia".
   ${quests ? `Misiones activas (usa SOLO estos ids, no inventes otros): ${quests}.` : 'Ahora no hay misiones activas: no uses "actualizar", "cumplir" ni "fallar".'}

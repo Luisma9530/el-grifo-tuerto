@@ -18,6 +18,7 @@
 // Everything in the inventory that is not in a hand or worn is in the backpack.
 
 import { WEAPONS, WEAPON_NAME_HINTS } from '../data/weapons';
+import { withLevel } from './characterLevel';
 import {
   ARMORS, ARMOR_NAME_HINTS, ARMOR_PROFICIENCY, UNARMORED_DEFENSE, HEAVY_ARMOR_SPEED_PENALTY, ARMOR_CATEGORY_NAMES
 } from '../data/armor';
@@ -326,10 +327,12 @@ const defaultWornArmor = character => armorsInInventory(character)[0]?.id ?? nul
  * Bring a sheet up to date: limbs, item ids, valid hands, worn armor and Armor Class.
  * Older saves have no hands: they get a valid set (first weapon + shield) and
  * healthy limbs. Older saves without an armor slot wear their first armor.
- * Either way they keep their Armor Class (see acLegacy). Safe to call many times.
+ * Either way they keep their Armor Class (see acLegacy). Older heroes without a
+ * `level` field get their real one (see characterLevel). Safe to call many times.
  */
-export function normalizeEquipment(character) {
-  if (!character || typeof character !== 'object') return character;
+export function normalizeEquipment(sheetIn) {
+  if (!sheetIn || typeof sheetIn !== 'object') return sheetIn;
+  const character = withLevel(sheetIn);
   const legacy = !character.hands;
   const legacyArmor = !('wornArmor' in character);
   let n = 0;

@@ -23,6 +23,7 @@
 import { XP_FOR_LEVEL, MAX_LEVEL } from '../data/progression';
 import { catalogByKey, catalogEntry, makeItem, addItem, roundCoins, formatCoins } from './items';
 import { addXp } from './leveling';
+import { characterLevel } from './characterLevel';
 
 export const QUEST_STATUSES = {
   active: 'Activa',
@@ -257,7 +258,7 @@ export function applyQuestChanges(quests, changes, { character, scene = 0, place
         giver: change.giver || '',
         place: change.place || place || '',
         objective: change.objective,
-        reward: validateReward(change.reward, hero?.level),
+        reward: validateReward(change.reward, characterLevel(hero)),
         status: 'active',
         started: stamp,
         closed: null,
@@ -326,6 +327,10 @@ export function describeQuestChange({ action, quest, given }) {
 /** Short list of the active quests for Duncan's prompt (empty string when none). */
 export function describeQuestsForPrompt(quests) {
   return activeQuests(quests)
-    .map(q => `${q.id} = «${q.title}»${q.giver ? ` (de ${q.giver})` : ''}: ${q.objective} [recompensa: ${describeReward(q.reward)}]`)
+    .map(q => {
+      const t = q.goal?.kind === 'hunt' ? q.goal.target : null;
+      const hunt = t ? ` [objetivo de caza: ${t.by === 'type' ? `criaturas de tipo ${t.type}` : `${t.name} (id ${t.monsterId})`}; el juego la da por cumplida al vencerlo en combate]` : '';
+      return `${q.id} = «${q.title}»${q.giver ? ` (de ${q.giver})` : ''}: ${q.objective} [recompensa: ${describeReward(q.reward)}]${hunt}`;
+    })
     .join('; ');
 }
