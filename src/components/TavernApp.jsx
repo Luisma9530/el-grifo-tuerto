@@ -41,6 +41,10 @@ import {
 import { drinkPotion, healingDice, addItem, roundCoins } from '../utils/items';
 import { generateLoot, describeLoot } from '../utils/loot';
 import ShopModal from './game/ShopModal';
+import {
+  normalizeQuests, applyQuestChanges, abandonQuest, describeQuestChange, questFact, unseenQuestCount, payReward
+} from '../utils/quests';
+import { huntChangesAfterVictory, withHuntTargets } from '../utils/localQuests';
 
 // The bestiary (and its builder) is only needed when a fight is being prepared
 // The bestiary is big: loaded the first time Duncan may start a fight
@@ -144,6 +148,15 @@ export default function TavernApp({
   const [activeShopKey, setActiveShopKey] = useState(null);
   const [combatBusy, setCombatBusy] = useState(false);
 
+  // Quest journal (see quests.js): opened and closed by the story, saved with the campaign.
+  // The ref holds the latest list for handlers that wait on Duncan.
+  const [quests, setQuestsState] = useState(() => normalizeQuests(storedCampaign()?.quests));
+  const questsRef = useRef(quests);
+  const setQuests = next => {
+    questsRef.current = next;
+    setQuestsState(next);
+  };
+
   const [saveStatus, setSaveStatus] = useState('saved'); // 'saved' | 'error' | 'quota'
   const isRollingCheckRef = useRef(false); // a stat check die is on the table
   const [isLevelUpOpen, setIsLevelUpOpen] = useState(false);
@@ -196,6 +209,7 @@ export default function TavernApp({
       setEncounter(activeCampaign.encounter || null);
       setCombatSnapshots(normalizeSnapshots(activeCampaign.combatSnapshots));
       setShops(normalizeShops(activeCampaign.shops));
+      setQuests(normalizeQuests(activeCampaign.quests));
       setActiveShopKey(null);
       if (activeCampaign.suggestedActions?.length > 0) {
         setSuggestedActions(activeCampaign.suggestedActions);
@@ -239,14 +253,15 @@ export default function TavernApp({
       events,
       encounter,
       shops,
-      combatSnapshots
+      combatSnapshots,
+      quests
     });
     if (saved) {
       setSaveStatus('saved');
     } else {
       setSaveStatus(isQuotaError(getLastSaveError()) ? 'quota' : 'error');
     }
-  }, [messages, character, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter, shops, combatSnapshots]);
+  }, [messages, character, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter, shops, combatSnapshots, quests]);
 
   const toggleSound = () => {
     const newState = tavernAudio.toggleTavernAmbience();
@@ -286,8 +301,12 @@ export default function TavernApp({
       // ...or open a shop (the game sets the prices)
       const here = currentNode(world);
       const bestiaryModule = mayStartFight ? await loadBestiary().catch(() => null) : null;
+      // (the target of an active hunt is always among them)
       const bestiary = bestiaryModule
-        ? bestiaryModule.encounterCandidates(sheet.level || 1, { tags: bestiaryModule.WORLD_TAGS[world?.id] || null })
+        ? withHuntTargets(
+          bestiaryModule.encounterCandidates(sheet.level || 1, { tags: bestiaryModule.WORLD_TAGS[world?.id] || null }),
+          questsRef.current, bestiaryModule.getMonster
+        )
         : null;
 
       // Small requests: summary + uncovered messages; the summary is refreshed in
@@ -312,7 +331,9 @@ export default function TavernApp({
         allowShop: mayStartFight,
         shopsHere: describeShopsForPrompt(here, world),
         shopTypesHere: shopsAt(here, world),
-        loot
+        loot,
+        quests: questsRef.current,
+        here
       });
       // A fight starts: the game resolves it, so nothing from this reply touches the sheet
       const fightGroups = response.combat && bestiaryModule
@@ -323,6 +344,21 @@ export default function TavernApp({
         response.healing = 0;
         response.goldEarned = 0;
         response.xpEarned = 0;
+      }
+      // Quests opened, updated or closed by the story; the game pays the rewards it fixed
+      const questResult = applyQuestChanges(questsRef.current, response.questChanges || [], {
+        character: sheet, scene: newMsgList.length + 1, place: here?.name || ''
+      });
+      const questsPaid = questResult.applied.filter(a => a.action === 'complete');
+      if (questResult.applied.length) {
+        setQuests(questResult.quests);
+        questResult.facts.forEach(recordEvent);
+      }
+      if (questsPaid.length) {
+        // The reward is the one promised: nothing extra from the narration of this scene
+        response.goldEarned = Math.min(0, response.goldEarned || 0);
+        response.xpEarned = 0;
+        setCharacter(prev => questsPaid.reduce((hero, a) => payReward(hero, a.quest.reward).character, prev));
       }
       if (response.summary) {
         setSummary(response.summary);
@@ -375,9 +411,10 @@ export default function TavernApp({
       }
 
       // Experience: tell the player once when they can go up a level
-      const xpGained = response.xpEarned || 0;
+      const questXp = questsPaid.reduce((sum, a) => sum + (a.given?.xp || 0), 0);
+      const xpGained = (response.xpEarned || 0) + questXp;
       const reachesNewLevel = xpGained > 0 && !canLevelUp(sheet) && canLevelUp(addXp(sheet, xpGained));
-      if (xpGained > 0) setCharacter(prev => addXp(prev, xpGained));
+      if (response.xpEarned > 0) setCharacter(prev => addXp(prev, response.xpEarned));
 
       setMessages(prev => [
         ...prev,
@@ -402,6 +439,7 @@ export default function TavernApp({
       });
 
       conditionResult.applied.forEach(change => pushSystemMessage(describeConditionChange(sheet.name, change)));
+      questResult.applied.forEach(change => pushSystemMessage(describeQuestChange(change)));
       if (conditionResult.collapsed) {
         recordEvent(`${sheet.name} se desplomó de agotamiento y Duncan lo recogió`);
         pushSystemMessage(`💀 ${sheet.name} llega al sexto nivel de agotamiento y se desploma. Maese Duncan te recoge y te mete en un catre: sigues con agotamiento de nivel 5 y la mitad de tu oro se va en cuidados.`);
@@ -541,6 +579,24 @@ export default function TavernApp({
         pushSystemMessage(`✨ ¡${hero.name} tiene experiencia suficiente para subir a nivel ${(hero.level || 1) + 1}! Pulsa «Subir de nivel» en tu ficha.`);
       }
     }
+    // Hunting quests of the local engine are done with a victory
+    let questLine = '';
+    if (won) {
+      const result = applyQuestChanges(questsRef.current, huntChangesAfterVictory(questsRef.current, encounter), {
+        character: hero, scene: messages.length + 1, place: currentNode(world)?.name || ''
+      });
+      if (result.applied.length) {
+        const leveledBefore = canLevelUp(hero);
+        hero = result.character;
+        setQuests(result.quests);
+        result.facts.forEach(recordEvent);
+        result.applied.forEach(change => pushSystemMessage(describeQuestChange(change)));
+        questLine = ` ${result.applied.map(a => `Misión cumplida: «${a.quest.title}» (la recompensa ya está entregada).`).join(' ')}`;
+        if (!leveledBefore && canLevelUp(hero)) {
+          pushSystemMessage(`✨ ¡${hero.name} tiene experiencia suficiente para subir a nivel ${(hero.level || 1) + 1}! Pulsa «Subir de nivel» en tu ficha.`);
+        }
+      }
+    }
     if (encounter.status === 'defeat') {
       const rescue = rescueKnockedOut(hero);
       hero = { ...hero, hp: rescue.hp, gold: rescue.gold };
@@ -550,7 +606,7 @@ export default function TavernApp({
     setCharacter(hero);
     setEncounter(null);
     // Duncan narrates the outcome (and any loot) from the result the game computed
-    handleSendAction('Narra el final del combate', { sheet: hero, combatResult: line, loot: won ? loot : null });
+    handleSendAction('Narra el final del combate', { sheet: hero, combatResult: `${line}${questLine}`, loot: won ? loot : null });
   };
 
   // Paralyzed, stunned, petrified...: no attacks or spells outside a fight either
@@ -842,6 +898,21 @@ export default function TavernApp({
     handleSendAction(`Uso ${item.name}.${item.effect ? ` ${item.effect}.` : ''}`, { sheet: updated, effectsApplied: true });
   };
 
+  // The player gives up a quest: their decision, no reward
+  const handleAbandonQuest = id => {
+    const { quests: next, quest } = abandonQuest(questsRef.current, id, { scene: messages.length });
+    if (!quest) return;
+    setQuests(next);
+    recordEvent(questFact(quest));
+    pushSystemMessage(`🏳 ${character.name} abandona la misión «${quest.title}».`);
+  };
+
+  const handleQuestSeen = id => {
+    const list = questsRef.current;
+    if (!list.some(q => q.id === id && q.unseen)) return;
+    setQuests(list.map(q => (q.id === id ? { ...q, unseen: false } : q)));
+  };
+
   // When traveling to another node on the world map
   const handleTravelToNode = (node) => {
     setWorld(prev => ({
@@ -1024,6 +1095,9 @@ export default function TavernApp({
           }`}
         >
           Mapa & Misiones
+          {unseenQuestCount(quests) > 0 && (
+            <span className="ml-1 inline-block w-2 h-2 rounded-full bg-amber-400 align-middle" aria-label="Novedades en el diario de misiones" />
+          )}
         </button>
       </div>
 
@@ -1089,6 +1163,9 @@ export default function TavernApp({
             onTravelToNode={handleTravelToNode}
             summary={summary}
             events={events}
+            quests={quests}
+            onAbandonQuest={handleAbandonQuest}
+            onQuestSeen={handleQuestSeen}
             onOpenShop={handleOpenShop}
             shopsLocked={encounter ? 'No hay tiempo para compras en mitad de un combate.' : null}
           />

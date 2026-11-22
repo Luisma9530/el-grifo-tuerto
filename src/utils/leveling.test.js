@@ -100,7 +100,8 @@ describe('experience', () => {
     const old = { name: 'Kaelen', class: 'Pícaro (Nivel 3)', xp: 5000, stats: {} };
     expect(canAdvance(old)).toBe(false);
     expect(canLevelUp(old)).toBe(false);
-    expect(levelOf(old)).toBe(1);
+    // ...but they have a real level, read from the class text (see characterLevel)
+    expect(levelOf(old)).toBe(3);
     expect(xpOf({})).toBe(0);
   });
 });

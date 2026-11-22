@@ -219,3 +219,30 @@ describe('shops with Gemini', () => {
     expect(res.goldEarned).toBe(-10); // clamped to the gold the hero has
   });
 });
+
+describe('generateDMResponse (quests)', () => {
+  const questWorld = { ...world, mapNodes: [{ id: 'a', name: 'Taberna', status: 'current' }] };
+
+  it('the local engine opens a quest when the scene asks for work', async () => {
+    const bestiary = { creatures: [{ id: 'bandit', name: 'Bandido', cr: 0.125, xp: 25, type: 'humanoide' }], budget: { low: 50, moderate: 75, high: 100 } };
+    const res = await generateDMResponse({ playerAction: 'Miro el tablón de anuncios', character: { ...character, level: 1 }, world: questWorld, here: questWorld.mapNodes[0], bestiary });
+    expect(res.questChanges).toHaveLength(1);
+    expect(res.questChanges[0]).toMatchObject({ action: 'open', goal: { kind: 'hunt', target: { by: 'creature', monsterId: 'bandit' } } });
+    expect(res.xpEarned).toBe(0);
+  });
+
+  it('passes the active quests to Gemini and returns its quest changes', async () => {
+    const quests = [{ id: 'm1', title: 'Lobos', objective: 'Ahuyentarlos', status: 'active', notes: [], reward: { gold: 10, xp: 0 } }];
+    const payload = {
+      narracion: 'Los lobos huyen.', usaTirada: false, danio: 0, curacion: 0, oro: 0, experiencia: 0, opciones: ['Volver'],
+      misiones: [{ accion: 'cumplir', id: 'm1', nota: 'Huyeron' }]
+    };
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }] }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await generateDMResponse({ playerAction: 'Espanto a los lobos', character, world: questWorld, apiKeys: ['clave-de-prueba-123'], quests });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.contents[0].parts[0].text).toContain('m1 = «Lobos»');
+    expect(res.questChanges).toEqual([{ action: 'complete', id: 'm1', title: '', note: 'Huyeron', objective: '' }]);
+    vi.unstubAllGlobals();
+  });
+});

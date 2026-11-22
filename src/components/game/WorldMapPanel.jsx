@@ -1,12 +1,16 @@
 import React from 'react';
-import { Compass, MapPin, Shield, Flag, Skull, CheckCircle2, Store } from 'lucide-react';
+import { Compass, Store } from 'lucide-react';
+import QuestJournal from './QuestJournal';
 import { currentNode, shopsAt, settlementOf, SETTLEMENTS, SHOP_TYPES } from '../../utils/shops';
 
 /**
  * `onOpenShop(type)`: open a shop of the current location.
  * `shopsLocked`: why the shops can't be opened now (a fight...), or null.
  */
-export default function WorldMapPanel({ world, onTravelToNode, summary = '', events = [], onOpenShop, shopsLocked = null }) {
+export default function WorldMapPanel({
+  world, onTravelToNode, summary = '', events = [], onOpenShop, shopsLocked = null,
+  quests = [], onAbandonQuest = () => {}, onQuestSeen = () => {}
+}) {
   const here = currentNode(world);
   const settlement = settlementOf(here, world);
   const shops = shopsAt(here, world);
@@ -70,7 +74,9 @@ export default function WorldMapPanel({ world, onTravelToNode, summary = '', eve
           )}
         </div>
 
-        
+        {/* Quest journal: opened and closed by the story; the player can only abandon one */}
+        <QuestJournal quests={quests} onAbandon={onAbandonQuest} onSeen={onQuestSeen} />
+
         {/* Dynamic Parchment Visual Map */}
         <div className="relative w-full h-52 rounded-2xl bg-[#181320] border-2 border-amber-900/40 p-3 overflow-hidden shadow-inner flex items-center justify-center">
           {/* Decorative parchment background grid */}
@@ -200,27 +206,6 @@ export default function WorldMapPanel({ world, onTravelToNode, summary = '', eve
               </div>
             ))}
           </div>
-        </div>
-
-        {/* Active Quests */}
-        <div className="p-3 rounded-xl bg-stone-900/60 border border-stone-800 text-xs">
-          <div className="flex items-center gap-1.5 text-amber-400 font-cinzel font-bold mb-2">
-            <Flag className="w-3.5 h-3.5" />
-            <span>Misiones en Curso</span>
-          </div>
-          <ul className="space-y-1.5 text-stone-300 text-[11px]">
-            <li className="flex items-center gap-1.5">
-              <span className="text-amber-500">▹</span>
-              <span>Averiguar quién es el encapuchado del rincón.</span>
-            </li>
-            <li className="flex items-center gap-1.5">
-              <span className="text-amber-500">▹</span>
-              <span>Explorar el viejo molino quebrado antes del anochecer.</span>
-            </li>
-            <li className="flex items-center gap-1.5">
-              <span className="text-stone-500 line-through">▹ Pagar la primera ronda a Maese Duncan.</span>
-            </li>
-          </ul>
         </div>
 
       </div>

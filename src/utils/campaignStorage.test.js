@@ -415,3 +415,15 @@ describe('conditions in saved campaigns', () => {
     expect(getCampaignById(saved.id).character.conditions.map(c => c.id)).toEqual(['envenenado']);
   });
 });
+
+describe('quest journal in saves', () => {
+  it('old saves load without quests', () => {
+    expect(migrateCampaign({ id: 'old', world, character }).quests).toEqual([]);
+  });
+
+  it('quests are saved with the campaign', () => {
+    const quest = { id: 'm1', title: 'Lobos', objective: 'Ahuyentarlos', status: 'active', notes: [], reward: { gold: 10, xp: 0 } };
+    const saved = saveCampaign({ world, character, messages: [], quests: [quest] });
+    expect(getCampaignById(saved.id).quests.map(q => q.title)).toEqual(['Lobos']);
+  });
+});
