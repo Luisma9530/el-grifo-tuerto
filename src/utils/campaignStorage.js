@@ -2,7 +2,8 @@
 // Handles multiple campaigns in localStorage, auto-saving, JSON export, and JSON import.
 
 import { markCampaignsExported } from './backupReminder';
-import { normalizeEquipment } from './equipment';
+import { normalizeParty, memberSheet } from './party';
+import { normalizeEncounter, renameHeroUid, PLAYER } from './encounter';
 import { normalizeShops } from './shops';
 import { normalizeConditions } from './conditions';
 import { normalizeSnapshots } from './combatSnapshots';
@@ -45,15 +46,35 @@ export function generateCampaignId() {
  * conditions start with none (invalid entries are dropped). Snapshots of the
  * start of recent fights (for the combat simulator) start empty, and so does
  * the quest journal.
+ *
+ * The party (see party.js): a campaign with a single `character` becomes a
+ * party of one (the hero's gold is the purse) and a fight in progress is
+ * converted to the party format, so nothing is lost. `character` is still
+ * saved: the first member, with the purse, for the lists of saved campaigns.
  */
 export function migrateCampaign(campaign) {
-  if (!campaign || typeof campaign !== 'object' || !campaign.character || typeof campaign.character !== 'object') return campaign;
-  const character = { ...normalizeEquipment(campaign.character), conditions: normalizeConditions(campaign.character.conditions) };
+  if (!campaign || typeof campaign !== 'object') return campaign;
+  const party = normalizeParty(campaign);
+  if (!party) return campaign;
+  const oldHeroId = !campaign.party && campaign.character ? (campaign.character.id || PLAYER) : null;
+  // The lone hero of an older fight in progress was known as 'player'
+  const lead = party.members[0];
+  const renamed = oldHeroId && campaign.encounter && !Array.isArray(campaign.encounter.heroIds)
+    ? { ...party, members: party.members.map(m => (m.id === lead.id ? renameHeroUid(m, PLAYER, lead.id) : m)) }
+    : party;
   const encounter = campaign.encounter && Array.isArray(campaign.encounter.enemies)
-    ? { ...campaign.encounter, enemies: campaign.encounter.enemies.map(e => ({ ...e, conditions: normalizeConditions(e?.conditions) })) }
+    ? normalizeEncounter(
+      { ...campaign.encounter, enemies: campaign.encounter.enemies.map(e => ({ ...e, conditions: normalizeConditions(e?.conditions) })) },
+      renamed.members.map(m => m.id)
+    )
     : campaign.encounter;
   return {
-    ...campaign, character, encounter, shops: normalizeShops(campaign.shops), combatSnapshots: normalizeSnapshots(campaign.combatSnapshots),
+    ...campaign,
+    party: renamed,
+    character: memberSheet(renamed, renamed.members[0].id),
+    encounter,
+    shops: normalizeShops(campaign.shops),
+    combatSnapshots: normalizeSnapshots(campaign.combatSnapshots),
     quests: normalizeQuests(campaign.quests)
   };
 }
@@ -155,7 +176,7 @@ export function saveCampaign(campaignData) {
 /**
  * Create a new brand-new campaign initialized with world & character
  */
-export function createNewCampaign({ world, character, title }) {
+export function createNewCampaign({ world, character = null, party = null, title }) {
   const initialMessages = [
     {
       sender: 'duncan',
@@ -173,9 +194,9 @@ export function createNewCampaign({ world, character, title }) {
 
   const newCampaign = {
     id: generateCampaignId(),
-    title: title || `${character?.name || 'Aventurero'} — ${world?.name || 'Nueva Aventura'}`,
+    title: title || `${(party?.members?.[0] || character)?.name || 'Aventurero'} — ${world?.name || 'Nueva Aventura'}`,
     world: JSON.parse(JSON.stringify(world)),
-    character: JSON.parse(JSON.stringify(character)),
+    ...(party ? { party: JSON.parse(JSON.stringify(party)) } : { character: JSON.parse(JSON.stringify(character)) }),
     messages: initialMessages,
     suggestedActions: defaultActions,
     createdAt: new Date().toISOString(),
@@ -288,7 +309,7 @@ export function importCampaignsFromJson(jsonText) {
     } else if (Array.isArray(parsed.campaigns)) {
       // Campaign bundle export
       campaignsToImport = parsed.campaigns;
-    } else if (parsed.world && parsed.character && Array.isArray(parsed.messages)) {
+    } else if (parsed.world && (parsed.character || parsed.party) && Array.isArray(parsed.messages)) {
       // Direct raw campaign object
       campaignsToImport.push(parsed);
     } else if (Array.isArray(parsed)) {
@@ -305,7 +326,7 @@ export function importCampaignsFromJson(jsonText) {
     campaignsToImport.forEach(item => {
       if (!item || typeof item !== 'object') return;
       if (!item.world || typeof item.world !== 'object') return;
-      if (!item.character || typeof item.character !== 'object') return;
+      if ((!item.character || typeof item.character !== 'object') && !Array.isArray(item.party?.members)) return;
 
       // Assign a new ID to prevent colliding with existing ones unless desired
       const newId = generateCampaignId();

@@ -20,6 +20,7 @@
 //   linked    – lasts while another condition of the same `group` lasts
 //   rest      { rest: 'short' | 'long' } – until a rest of that kind (a long rest also counts as short)
 //   permanent – until something removes it (a spell, Duncan, the end of a fight for combat effects)
+//   down      – inconsciente of a hero at 0 HP: until they get hit points back (see encounter.js)
 //
 // Adaptations to this game (no map, no exact distances): every creature of a
 // fight can see the others and the hero is always within reach, so "while the
@@ -466,6 +467,7 @@ export function describeDuration(condition, nameOf = uid => uid) {
     case 'prone': return 'hasta que se levante (al empezar su turno, si puede moverse)';
     case 'linked': return 'mientras dure el efecto que lo causa';
     case 'rest': return d.rest === 'short' ? 'hasta un descanso corto o largo' : 'hasta un descanso largo';
+    case 'down': return 'hasta que recupere puntos de golpe (una curación, una poción o el final del combate)';
     default: return 'hasta que algo lo cure';
   }
 }

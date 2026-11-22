@@ -18,8 +18,9 @@ import { normalizeEquipment } from './equipment';
 import { normalizeConditions, createCondition, addCondition, removeConditions, conditionsOf, conditionName, EXHAUSTION_MAX } from './conditions';
 import { healingDice, potionForItem, makeItem, addItem } from './items';
 import { buildCharacter, randomDraft } from './characterBuilder';
-import { levelUpPlan, emptyLevelUpChoices, learnableSpells, levelUpIssues, applyLevelUp, canAdvance } from './leveling';
-import { XP_FOR_LEVEL, MAX_LEVEL, EPIC_BOONS } from '../data/progression';
+import { levelHeroTo, quickLevelUpChoices } from './leveling';
+
+export { levelHeroTo, quickLevelUpChoices };
 
 const clone = value => JSON.parse(JSON.stringify(value));
 
@@ -32,57 +33,6 @@ export function simulatorHero(character) {
 // ---------------------------------------------------------------------------
 // Quick heroes and levels
 // ---------------------------------------------------------------------------
-
-/** Valid choices for the next level, picked the way a hurried player would. */
-export function quickLevelUpChoices(character) {
-  const plan = levelUpPlan(character);
-  const choices = emptyLevelUpChoices(character);
-  const best = cap => Object.entries(character.stats).filter(([, v]) => v + 2 <= cap).sort((a, b) => b[1] - a[1])[0];
-  if (plan.asi) {
-    const pick = best(20);
-    choices.asi = pick
-      ? { mode: 'two', abilities: [pick[0]] }
-      : { mode: 'split', abilities: Object.entries(character.stats).filter(([, v]) => v < 20).slice(0, 2).map(([id]) => id) };
-  }
-  if (plan.epicBoon) {
-    choices.boon = { id: EPIC_BOONS[0].id, ability: Object.entries(character.stats).sort((a, b) => b[1] - a[1])[0][0] };
-  }
-  if (plan.spells) {
-    choices.spells.cantrips = learnableSpells(character, plan, 0).slice(0, plan.spells.cantrips).map(s => s.id);
-    const options = [];
-    for (let level = plan.spells.maxSpellLevel; level >= 1; level--) options.push(...learnableSpells(character, plan, level));
-    choices.spells.spells = options.slice(0, plan.spells.spells).map(s => s.id);
-    if (plan.spells.arcanumLevel) choices.spells.arcanum = learnableSpells(character, plan, plan.spells.arcanumLevel)[0]?.id || null;
-    if (plan.spells.prepared != null) {
-      const book = [
-        ...choices.spells.spells,
-        ...(character.spellcasting?.known || []).filter(k => k.sourceKey === 'class' && getSpell(k.id)?.level > 0).map(k => k.id)
-      ];
-      choices.spells.prepared = [...new Set(book)].slice(0, plan.spells.prepared);
-    }
-  }
-  return choices;
-}
-
-/**
- * The hero raised to `target` level with quick choices (only heroes made with
- * the creation wizard can level up; a lower target leaves the hero as is).
- * HP stay as full as they were.
- */
-export function levelHeroTo(character, target) {
-  const goal = Math.min(MAX_LEVEL, Math.max(1, Math.round(Number(target) || 1)));
-  if (!canAdvance(character)) return character;
-  let hero = character;
-  const wasFull = hero.hp >= hero.maxHp;
-  while ((hero.level || 1) < goal) {
-    const next = (hero.level || 1) + 1;
-    hero = { ...hero, xp: Math.max(Number(hero.xp) || 0, XP_FOR_LEVEL[next]) };
-    const choices = quickLevelUpChoices(hero);
-    if (levelUpIssues(hero, levelUpPlan(hero), choices).length) break;
-    hero = applyLevelUp(hero, choices).character;
-  }
-  return wasFull ? { ...hero, hp: hero.maxHp } : hero;
-}
 
 /** A random hero of this class (built like "Héroe al azar"), at this level. */
 export function quickHero({ classId, level = 1, rng = Math.random }) {
