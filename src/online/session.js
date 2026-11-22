@@ -22,11 +22,12 @@ export const HELLO_RETRY_MS = 2000;
  * @param transport see transport.js
  * @param room the room (room.js); identities: { [playerId]: { key, seq } } kept from earlier sessions
  * @param getGame () => game context for applyIntent (see protocol.js)
- * @param onCombat (characterId, action) => void: a combat action to play now
+ * @param onCombat (characterId, action, playerId) => void: a combat action to play now
+ * @param onDirect (direct, playerId) => void: equipment or level up of the player's own character
  * @param onChange (room, identities) => void: the room changed (to render and save it)
  */
 export function createHostSession({
-  transport, room: initialRoom, identities: savedIdentities = {}, getGame, onCombat = () => {}, onChange = () => {},
+  transport, room: initialRoom, identities: savedIdentities = {}, getGame, onCombat = () => {}, onDirect = () => {}, onChange = () => {},
   throttleMs = STATE_THROTTLE_MS, rateLimit = createRateLimiter({ max: 8, windowMs: 5000 }),
   helloGraceMs = 6000, now = () => Date.now()
 }) {
@@ -113,6 +114,7 @@ export function createHostSession({
     setRoom(res.room);
     schedule();
     if (res.combat) onCombat(res.combat.characterId, res.combat.action, playerId);
+    if (res.direct) onDirect(res.direct, playerId);
     return res;
   };
 

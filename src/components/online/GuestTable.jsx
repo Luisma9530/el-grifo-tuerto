@@ -5,6 +5,7 @@ import StoryStream from '../game/StoryStream';
 import CombatView from '../game/CombatView';
 import WorldMapPanel from '../game/WorldMapPanel';
 import RoomPanel from './RoomPanel';
+import LevelUpModal from '../game/LevelUpModal';
 import OnlineToast from './OnlineToast';
 import { useGuestRoom } from '../../online/useOnlineRoom';
 import { roomLink } from '../../online/transport';
@@ -13,8 +14,9 @@ import { sheetIntents, quickAttackOption } from '../../online/actions';
 import { memberSheets } from '../../utils/party';
 import { currentHeroUid } from '../../utils/encounter';
 import { longRestCost } from '../../utils/partyActions';
+import { canLevelUp } from '../../utils/leveling';
 
-const HOST_ONLY = 'En esta fase lo decide el anfitrión (descansos, tiendas, viajes, equipo y subir de nivel se hacen en su pantalla).';
+const HOST_ONLY = 'Esto lo decide el anfitrión (descansos, tiendas, viajes, compañeros y repartir objetos se hacen en su pantalla).';
 
 /**
  * A player's table in someone else's room: the game as the host shares it, and
@@ -28,6 +30,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
   const [mobileTab, setMobileTab] = useState('story');
   const [sideTab, setSideTab] = useState('room');
   const [localNotice, setLocalNotice] = useState(null);
+  const [levelUpId, setLevelUpId] = useState(null);
 
   const shared = view.room || null;
   const heroes = useMemo(() => (view.party ? memberSheets(view.party) : []), [view.party]);
@@ -79,6 +82,17 @@ export default function GuestTable({ code, name, kind, onLeave }) {
     send(build(...args));
   };
   const hostOnly = () => setLocalNotice(HOST_ONLY);
+  // Their own character: equipment (outside combat) and level up, checked by the host
+  const changeEquipment = next => {
+    if (!mayAct) return actFor(() => null)();
+    send({ type: 'equip', characterId: character.id, hands: { main: next.hands?.main || null, off: next.hands?.off || null }, armorId: next.wornArmor || null });
+  };
+  const openLevelUp = () => {
+    if (!mayAct) return actFor(() => null)();
+    if (inCombat) return setLocalNotice('Sube de nivel cuando acabe el combate.');
+    setLevelUpId(character.id);
+  };
+  const levelingHero = heroes.find(h => h.id === levelUpId && canLevelUp(h) && canControl(shared, playerId, h.id)) || null;
   const turnPlayer = turnUid && controllerOf(shared, turnUid) !== playerId ? playerName(shared, controllerOf(shared, turnUid)) : null;
   const storyNotice = mine.length === 0
     ? 'Aún no juegas con ningún personaje: elige uno libre en la pestaña «Sala» (o vota los que sobran).'
@@ -122,12 +136,12 @@ export default function GuestTable({ code, name, kind, onLeave }) {
             onDismissMember={hostOnly}
             onTransferItem={() => HOST_ONLY}
             longRestCost={longRestCost(view.party)}
-            onUpdateCharacter={hostOnly}
+            onUpdateCharacter={changeEquipment}
             onOrderDrink={hostOnly}
             onRollCheck={actFor(acts.check)}
             onCastSpell={actFor(acts.spell)}
             onRest={hostOnly}
-            onLevelUp={hostOnly}
+            onLevelUp={openLevelUp}
             onAttack={actFor(acts.attack)}
             onUseItem={actFor(acts.item)}
             busy={false}
@@ -206,6 +220,19 @@ export default function GuestTable({ code, name, kind, onLeave }) {
           </div>
         )}
       </div>
+
+      {levelingHero && (
+        <LevelUpModal
+          key={levelingHero.id}
+          character={levelingHero}
+          hostRolls
+          onSubmitChoices={choices => {
+            send({ type: 'levelUp', characterId: levelingHero.id, choices });
+            setLevelUpId(null);
+          }}
+          onClose={() => setLevelUpId(null)}
+        />
+      )}
 
       <OnlineToast text={notice} onClose={closeNotice} />
     </div>

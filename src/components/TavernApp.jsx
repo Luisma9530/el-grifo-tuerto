@@ -29,7 +29,7 @@ import {
 import { keyMoments, narrateMoment, MAX_MOMENTS } from '../utils/combatNarration';
 import CombatView from './game/CombatView';
 import { makeSnapshot, addSnapshot, setSnapshotResult, normalizeSnapshots } from '../utils/combatSnapshots';
-import { canLevelUp, describeLevelUp } from '../utils/leveling';
+import { canLevelUp, describeLevelUp, levelUpPlan } from '../utils/leveling';
 import LevelUpModal from './game/LevelUpModal';
 import {
   historyForPrompt, needsSummary, coverageAfterSummary, addEvent, eventsForPrompt
@@ -62,6 +62,7 @@ import {
   ownerOf, controllerOf, canControl, playerName, claimCharacter, releaseCharacter, breakTie, closeVote, removePlayer, dequeueAction
 } from '../online/room';
 import { stillValid } from '../online/protocol';
+import { applyOwnChange } from '../online/ownChanges';
 import { sheetIntents, labelFor, quickAttackOption, ABILITY_NAMES } from '../online/actions';
 import HostRoomDrawer from './online/HostRoomDrawer';
 import OnlineToast from './online/OnlineToast';
@@ -1028,11 +1029,13 @@ export default function TavernApp({
   const onlineKind = onlineConfig().kind;
   const gameRef = useRef(null);
   const combatIntentRef = useRef(() => {});
+  const directIntentRef = useRef(() => {});
   const online = useHostRoom({
     campaignId: currentCampaignId,
     kind: onlineKind,
     getGame: () => gameRef.current,
-    onCombat: (characterId, action) => combatIntentRef.current(characterId, action)
+    onCombat: (characterId, action) => combatIntentRef.current(characterId, action),
+    onDirect: (direct, playerId) => directIntentRef.current(direct, playerId)
   });
   const room = online.status === 'open' ? online.room : null;
   const [isRoomOpen, setIsRoomOpen] = useState(false);
@@ -1053,6 +1056,23 @@ export default function TavernApp({
   // A combat action from a player whose turn it is (already checked by the room)
   combatIntentRef.current = (characterId, action) => {
     if (encounter && currentHeroUid(encounter) === characterId) handleCombatAction(action);
+  };
+
+  // A player changes the equipment of their own character, or levels it up (already
+  // checked by the room: they control it and there is no fight); the rules decide the rest
+  directIntentRef.current = (direct, playerId) => {
+    const sheet = memberSheet(partyRef.current, direct.characterId);
+    const res = applyOwnChange(sheet, direct, sides => rollDie(sides, { silent: true }));
+    if (!res.ok) {
+      tell(playerId, res.error);
+      return;
+    }
+    if (direct.kind === 'equip') {
+      if (res.changed) updateMemberState(sheet.id, current => ({ ...res.character, gold: current.gold }));
+      return;
+    }
+    if (res.roll) pushSystemMessage(`🎲 ${sheet.name} tira su dado de golpe para subir de nivel: d${levelUpPlan(sheet).hitDie} = ${res.roll}.`);
+    handleLevelUpConfirmed(res.character, res.summary);
   };
 
   const tell = (playerId, text) => {
@@ -1194,6 +1214,12 @@ export default function TavernApp({
     combat: handleCombatAction
   };
   const hostActors = room ? heroes.filter(h => canControl(room, room.hostId, h.id)) : null;
+  // In a room, the equipment and level of a player's character are theirs to change
+  const notMine = () => {
+    if (!room || canControl(room, room.hostId, character.id)) return false;
+    setOnlineNotice(`${character.name} lo juega ${playerName(room, controllerOf(room, character.id))}: su equipo y su subida de nivel los decide su jugador.`);
+    return true;
+  };
   const turnPlayer = room && turnUid && controllerOf(room, turnUid) !== room.hostId ? playerName(room, controllerOf(room, turnUid)) : null;
   const storyNotice = !room ? null
     : !canControl(room, room.hostId, character.id) ? `${character.name} lo juega ${playerName(room, controllerOf(room, character.id))}: elige a uno de los tuyos para actuar.`
@@ -1420,12 +1446,12 @@ export default function TavernApp({
             onDismissMember={handleDismissMember}
             onTransferItem={handleTransferItem}
             longRestCost={longRestCost(party)}
-            onUpdateCharacter={next => setCharacter(normalizeEquipment(next))}
+            onUpdateCharacter={next => (notMine() ? null : setCharacter(normalizeEquipment(next)))}
             onOrderDrink={handleOrderDrink}
             onRollCheck={act.check}
             onCastSpell={act.spell}
             onRest={handleRest}
-            onLevelUp={() => setIsLevelUpOpen(true)}
+            onLevelUp={() => (notMine() ? null : setIsLevelUpOpen(true))}
             onAttack={act.attack}
             onUseItem={act.item}
             busy={isGenerating}

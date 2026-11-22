@@ -35,6 +35,7 @@ describe('a game between tabs (local transport)', () => {
   let bus;
   let host;
   let combat;
+  let direct;
   let game;
   const transports = [];
   const tab = (selfId) => {
@@ -53,12 +54,14 @@ describe('a game between tabs (local transport)', () => {
     localStorage.setItem('tavern_gemini_keys', JSON.stringify([{ id: 'k', label: 'Mía', key: GEMINI_KEY }]));
     bus = makeBus();
     combat = vi.fn();
+    direct = vi.fn();
     game = { characterIds: CHARS, names: { brena: 'Brena', tobias: 'Tobías', ilsa: 'Ilsa' }, inCombat: false, turnCharacterId: null, combatBusy: false };
     host = createHostSession({
       transport: tab('h'),
       room: createRoom({ code: 'ABC123', hostId: 'h', hostName: 'Luisma' }),
       getGame: () => game,
       onCombat: combat,
+      onDirect: direct,
       throttleMs: 0
     });
     host.publish(buildSections({ title: 'Prueba', party: { members: [{ id: 'brena', name: 'Brena' }] }, messages: [{ sender: 'duncan', text: 'Hola', keyIndex: 0 }] }));
@@ -114,6 +117,22 @@ describe('a game between tabs (local transport)', () => {
     await flush();
     await host.settle();
     expect(combat).toHaveBeenCalledWith('brena', { type: 'dodge' }, ana.identity.id);
+  });
+
+  it('equipment and level up of your own character reach the host, never for another player', async () => {
+    const ana = await guest('Ana');
+    await flush();
+    await ana.session.send({ type: 'claim', characterId: 'brena' });
+    await flush();
+    await host.settle();
+    await ana.session.send({ type: 'equip', characterId: 'tobias', hands: { main: 'x', off: null }, armorId: null });
+    await ana.session.send({ type: 'equip', characterId: 'brena', hands: { main: 'x', off: null }, armorId: null });
+    await flush();
+    await host.settle();
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(direct).toHaveBeenCalledWith({ kind: 'equip', characterId: 'brena', hands: { main: 'x', off: null }, armorId: null }, ana.identity.id);
+    await flush();
+    expect(ana.session.state.notices.map(n => n.text)).toEqual(['No controlas a Tobías.']);
   });
 
   it('outside combat the actions wait in a queue, in order', async () => {

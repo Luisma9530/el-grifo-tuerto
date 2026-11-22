@@ -42,12 +42,13 @@ export const wasOnline = campaignId => Boolean(campaignId && read(HOST_KEY(campa
  * The host's end of a room for one campaign.
  * @param getGame () => context for checking intents (see protocol.js applyIntent)
  * @param onCombat (characterId, action, playerId) => void
+ * @param onDirect (direct, playerId) => void (see protocol.js applyIntent)
  */
-export function useHostRoom({ campaignId, kind, getGame, onCombat }) {
+export function useHostRoom({ campaignId, kind, getGame, onCombat, onDirect = () => {} }) {
   const [state, setState] = useState({ status: 'off', room: null, error: null });
   const sessionRef = useRef(null);
-  const callbacks = useRef({ getGame, onCombat });
-  callbacks.current = { getGame, onCombat };
+  const callbacks = useRef({ getGame, onCombat, onDirect });
+  callbacks.current = { getGame, onCombat, onDirect };
 
   const save = useCallback((room, identities, active = true) => {
     if (!campaignId) return;
@@ -69,6 +70,7 @@ export function useHostRoom({ campaignId, kind, getGame, onCombat }) {
         identities: saved?.identities || {},
         getGame: () => callbacks.current.getGame(),
         onCombat: (...args) => callbacks.current.onCombat(...args),
+        onDirect: (...args) => callbacks.current.onDirect(...args),
         onChange: (next, identities) => {
           setState(s => ({ ...s, room: next }));
           save(next, identities);

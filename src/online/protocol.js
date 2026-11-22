@@ -82,6 +82,16 @@ export function sanitizeIntent(raw) {
       }
       return { ok: true, intent: { type: 'act', characterId, kind: raw.kind, payload } };
     }
+    case 'equip': {
+      // The hero's own equipment outside combat: what is in each hand and the armor worn
+      const hands = raw.hands && typeof raw.hands === 'object' ? raw.hands : {};
+      if (!characterId || (hands.main != null && !id(hands.main)) || (hands.off != null && !id(hands.off)) || (raw.armorId != null && !id(raw.armorId))) return bad;
+      return { ok: true, intent: { type: 'equip', characterId, hands: { main: hands.main ?? null, off: hands.off ?? null }, armorId: raw.armorId ?? null } };
+    }
+    case 'levelUp': {
+      const choices = sanitizeLevelUpChoices(raw.choices);
+      return characterId && choices ? { ok: true, intent: { type: 'levelUp', characterId, choices } } : bad;
+    }
     case 'combat': {
       const a = raw.action && typeof raw.action === 'object' ? raw.action : null;
       if (!characterId || !a || !COMBAT_TYPES.includes(a.type)) return bad;
@@ -103,6 +113,39 @@ export function sanitizeIntent(raw) {
   }
 }
 
+const idList = (value, max = 40) => {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.length > max || !value.every(v => id(v))) return null;
+  return [...value];
+};
+
+/**
+ * The choices of a level up (see leveling.js emptyLevelUpChoices), only with their
+ * known fields. The hit die is never taken from the player: with `roll` the host
+ * rolls it. Whether the choices are legal is checked by applyLevelUp on the host.
+ */
+export function sanitizeLevelUpChoices(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const hp = raw.hp?.method === 'roll' ? 'roll' : raw.hp?.method === 'average' ? 'average' : null;
+  const mode = raw.asi?.mode === 'split' ? 'split' : raw.asi?.mode === 'two' ? 'two' : null;
+  const abilities = Array.isArray(raw.asi?.abilities) && raw.asi.abilities.length <= 2 && raw.asi.abilities.every(a => ABILITIES.includes(a)) ? [...raw.asi.abilities] : null;
+  const spells = raw.spells && typeof raw.spells === 'object' ? raw.spells : {};
+  const cantrips = idList(spells.cantrips);
+  const learned = idList(spells.spells);
+  const prepared = idList(spells.prepared, 80);
+  const arcanum = spells.arcanum == null ? null : id(spells.arcanum);
+  const boonId = raw.boon?.id == null ? null : id(raw.boon.id);
+  const boonAbility = raw.boon?.ability == null ? null : ABILITIES.includes(raw.boon.ability) ? raw.boon.ability : undefined;
+  if (!hp || !mode || !abilities || !cantrips || !learned || !prepared || (spells.arcanum != null && !arcanum)
+    || (raw.boon?.id != null && !boonId) || boonAbility === undefined) return null;
+  return {
+    hp: { method: hp, roll: null },
+    asi: { mode, abilities },
+    spells: { cantrips, spells: learned, prepared, arcanum },
+    boon: { id: boonId, ability: boonAbility }
+  };
+}
+
 /** A short line for the queue: "Brena: «Abro la puerta»", "Brena: tirada de Percepción"... */
 export function describeQueued(name, kind, payload, extra = {}) {
   if (kind === 'text') return `${name}: «${payload.text.length > 70 ? `${payload.text.slice(0, 70)}…` : payload.text}»`;
@@ -117,7 +160,10 @@ export function describeQueued(name, kind, payload, extra = {}) {
  * @param game { characterIds, names: {id: name}, inCombat, turnCharacterId, combatBusy, labelFor?(kind, payload, characterId) }
  * @returns {{ ok: true, room, combat?: { characterId, action }, queued?: item }
  *         | { ok: false, error }}
+ *   (also `direct`, see below)
  *   combat: a combat action the host must play now (it is that player's turn).
+ *   direct: { kind: 'equip' | 'levelUp', characterId, ... } a change to the player's own
+ *   character the host applies now (and checks against the rules: equipment.js, leveling.js).
  */
 export function applyIntent(room, game, playerId, intent) {
   if (!room?.players?.[playerId]) return { ok: false, error: 'Primero tienes que entrar en la sala.' };
@@ -153,6 +199,19 @@ export function applyIntent(room, game, playerId, intent) {
         label: describeQueued(nameOf(intent.characterId), intent.kind, intent.payload, extra)
       });
       return res.ok ? { ok: true, room: res.room, queued: res.item } : res;
+    }
+    case 'equip':
+    case 'levelUp': {
+      // The player's own character, applied by the host right away (no Duncan involved)
+      if (!known(intent.characterId)) return { ok: false, error: 'Ese personaje no está en el grupo.' };
+      if (!canControl(room, playerId, intent.characterId)) return { ok: false, error: `No controlas a ${nameOf(intent.characterId)}.` };
+      if (game.inCombat) {
+        return { ok: false, error: intent.type === 'equip'
+          ? 'En combate, cambia de arma desde la vista de combate en tu turno: gasta tu acción.'
+          : 'Sube de nivel cuando acabe el combate.' };
+      }
+      const { type, ...rest } = intent;
+      return { ok: true, room, direct: { kind: type, ...rest } };
     }
     case 'combat': {
       if (!game.inCombat) return { ok: false, error: 'No hay ningún combate en marcha.' };

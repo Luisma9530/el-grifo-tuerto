@@ -74,8 +74,10 @@ function SpellPick({ spell, selected, disabled, onToggle }) {
 /**
  * Level-up dialog: hit points (average or a 3D die roll), new features, the
  * ability score improvement and new spells. Calls onConfirm(newCharacter, summary).
+ * Online, a player sends the choices instead (onSubmitChoices(choices)) and the
+ * host applies them; with `hostRolls` the hit die is rolled by the host.
  */
-export default function LevelUpModal({ character, onConfirm, onClose }) {
+export default function LevelUpModal({ character, onConfirm, onClose, onSubmitChoices = null, hostRolls = false }) {
   const plan = useMemo(() => levelUpPlan(character), [character]);
   const [choices, setChoices] = useState(() => emptyLevelUpChoices(character));
   const [rolling, setRolling] = useState(false);
@@ -83,14 +85,21 @@ export default function LevelUpModal({ character, onConfirm, onClose }) {
   const [spellLevelFilter, setSpellLevelFilter] = useState(() => plan.spells?.maxSpellLevel || 1);
   useEscapeKey(true, () => !rolling && onClose());
 
-  const issues = levelUpIssues(character, plan, choices);
-  const gain = hpGain(plan, choices);
+  // The host rolls the die later: check the rest of the choices as if it were the average
+  const hostRoll = hostRolls && choices.hp.method === 'roll';
+  const checked = hostRoll ? { ...choices, hp: { method: 'average', roll: null } } : choices;
+  const issues = levelUpIssues(character, plan, checked);
+  const gain = hpGain(plan, checked);
   const bonuses = plan.asi ? asiBonuses(choices) : {};
 
   const set = patch => setChoices(current => ({ ...current, ...patch }));
   const setSpells = patch => setChoices(current => ({ ...current, spells: { ...current.spells, ...patch } }));
 
   const rollHitDie = async () => {
+    if (hostRolls) {
+      set({ hp: { method: 'roll', roll: null } });
+      return;
+    }
     setRolling(true);
     const value = rollDie(plan.hitDie, { silent: true });
     await animateRoll({ sides: plan.hitDie, value, label: 'Puntos de golpe' });
@@ -141,6 +150,10 @@ export default function LevelUpModal({ character, onConfirm, onClose }) {
 
   const confirm = () => {
     if (issues.length > 0) return;
+    if (onSubmitChoices) {
+      onSubmitChoices(choices);
+      return;
+    }
     const { character: next, summary } = applyLevelUp(character, choices);
     onConfirm(next, summary);
   };
@@ -174,13 +187,19 @@ export default function LevelUpModal({ character, onConfirm, onClose }) {
                 Media fija: {plan.hpAverage}
               </Choice>
               <Choice selected={choices.hp.method === 'roll'} disabled={rolling || Boolean(choices.hp.roll)} onClick={rollHitDie}
-                title={choices.hp.roll ? 'Ya has tirado: el resultado se queda' : `Tira 1d${plan.hitDie}`}>
+                title={choices.hp.roll ? 'Ya has tirado: el resultado se queda' : hostRolls ? `El anfitrión tira 1d${plan.hitDie} al confirmar` : `Tira 1d${plan.hitDie}`}>
                 <span className="inline-flex items-center gap-1.5">
                   <Dice5 className="w-3.5 h-3.5" />
                   {choices.hp.roll ? `Tirada: ${choices.hp.roll}` : `Tirar 1d${plan.hitDie}`}
                 </span>
               </Choice>
             </div>
+            {hostRoll ? (
+              <p className="text-sm text-stone-200 mt-3 flex items-center gap-2">
+                <Heart className="w-4 h-4 text-red-400" />
+                <span>El anfitrión tirará 1d{plan.hitDie} al confirmar (el resultado aparecerá en la crónica).</span>
+              </p>
+            ) : (
             <p className="text-sm text-stone-200 mt-3 flex items-center gap-2">
               <Heart className="w-4 h-4 text-red-400" />
               <span>
@@ -191,6 +210,7 @@ export default function LevelUpModal({ character, onConfirm, onClose }) {
                 </span>
               </span>
             </p>
+            )}
             {choices.hp.method === 'average' && (
               <p className="text-[11px] text-stone-500 mt-1">Si tiras el dado, el resultado es definitivo.</p>
             )}
