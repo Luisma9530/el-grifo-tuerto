@@ -8,6 +8,7 @@ import { describeEquipmentForPrompt, LIMB_IDS } from './equipment';
 import { formatCoins } from './items';
 import { SHOP_REPLY_IDS } from './shops';
 import { STORY_CONDITION_IDS, EXHAUSTION_MAX, describeConditionsForPrompt } from './conditions';
+import { QUEST_REPLY_ACTIONS, QUEST_IMPORTANCE, cleanQuestChanges, questGoldCap } from './quests';
 
 /** Limb ids and states in the reply (Spanish, as the model writes them) -> sheet values. */
 export const LIMB_REPLY_IDS = { brazoDerecho: 'rightArm', brazoIzquierdo: 'leftArm', piernaDerecha: 'rightLeg', piernaIzquierda: 'leftLeg' };
@@ -70,6 +71,36 @@ export const DM_RESPONSE_SCHEMA = {
           causa: { type: 'STRING', nullable: true, description: 'Causa breve: "veneno de la ciénaga".' }
         },
         required: ['condicion', 'accion']
+      }
+    },
+    misiones: {
+      type: 'ARRAY',
+      nullable: true,
+      description: 'Solo si en esta escena alguien encarga una misión al héroe, avanza una misión activa o se cumple o fracasa. Casi siempre vacío.',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          accion: { type: 'STRING', enum: Object.keys(QUEST_REPLY_ACTIONS) },
+          id: { type: 'STRING', nullable: true, description: 'Id de una misión activa (m1, m2...); no para "abrir".' },
+          titulo: { type: 'STRING', nullable: true, description: 'Título breve de la misión (para "abrir").' },
+          quienEncarga: { type: 'STRING', nullable: true },
+          lugar: { type: 'STRING', nullable: true },
+          objetivo: { type: 'STRING', nullable: true, description: 'Qué hay que hacer, en una frase.' },
+          nota: { type: 'STRING', nullable: true, description: 'Nota breve de progreso.' },
+          recompensa: {
+            type: 'OBJECT',
+            nullable: true,
+            description: 'Solo para "abrir": lo que se promete. El juego la ajusta a sus topes y la paga al cumplirse.',
+            properties: {
+              oro: { type: 'INTEGER', nullable: true },
+              objeto: { type: 'STRING', nullable: true, description: 'Un objeto corriente: "Poción de curación", "Espada larga", "Cota de malla"...' },
+              experiencia: { type: 'BOOLEAN', nullable: true },
+              importancia: { type: 'STRING', enum: Object.keys(QUEST_IMPORTANCE), nullable: true },
+              soloHistoria: { type: 'BOOLEAN', nullable: true }
+            }
+          }
+        },
+        required: ['accion']
       }
     }
   },
@@ -212,12 +243,13 @@ function formatHistory(history, characterName) {
  * @param {string} [params.combatResult] summary of a fight the game just finished (and its loot): narrate its outcome
  * @param {boolean} [params.allowShop]   the model may open a shop with "tienda"
  * @param {string} [params.shopsHere]    the shops at the hero's location (see describeShopsForPrompt)
+ * @param {string} [params.quests]       the active quests (see describeQuestsForPrompt)
  */
 export function buildDMPrompt({
   playerAction, character, world, history, d20, playerRoll = null, structured = true,
   spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
   summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null,
-  allowShop = false, shopsHere = ''
+  allowShop = false, shopsHere = '', quests = ''
 }) {
   const name = character.name || 'Aventurero';
   const conditions = describeConditionsForPrompt(character);
@@ -262,6 +294,12 @@ Narra el desenlace (cómo queda el lugar, qué hacen los que se rindieron o huye
 ${bestiary ? `
 - "combate": SOLO si en esta escena empieza una pelea (alguien ataca al héroe, o el héroe ataca a alguien). En ese caso NO resuelvas la pelea: narra solo cómo aparecen los enemigos (sin golpes, aciertos, daño ni tiradas), pon "usaTirada": false y "danio": 0, y devuelve los enemigos; el juego llevará el combate con sus propias tiradas. Usa únicamente estas criaturas: ${describeBestiary(bestiary)}. Para ${name} solo, un combate normal suma unos ${bestiary.budget.moderate} PX (fácil ${bestiary.budget.low}, duro ${bestiary.budget.high}). Puedes dar a un único enemigo un "nombre" propio y un "rasgo" breve, y marcarlo "elite" si es un jefe. Si no empieza ninguna pelea, omite "combate".` : ''}${allowShop ? `
 - "tienda": SOLO si ${name} entra en una tienda, va al mercado o habla con un mercader para comprar o vender: {"tipo": "herrero" (armas y armaduras) | "alquimista" (pociones) | "general" (equipo de aventurero)}. El juego abrirá la tienda con sus propios precios y su género: tú no cobras ni pagas nada ("oro": 0), no inventas precios ni das objetos; narra solo la llegada y al tendero. ${shopsHere || 'Aquí no hay tiendas fijas: sería un buhonero o un puesto improvisado.'} Si el jugador intenta comprar o vender equipo, usa "tienda" en vez de "oro". Si no, omite "tienda".` : ''}
+
+- "misiones": casi siempre una lista vacía. Las misiones solo nacen y terminan en la historia, nunca porque el jugador lo pida fuera de ella.
+  · "abrir": cuando alguien encarga de verdad un trabajo a ${name} y lo acepta (un PNJ, un tablón de anuncios, un contrato): {"accion": "abrir", "titulo", "quienEncarga", "lugar", "objetivo", "recompensa": {"oro", "objeto", "experiencia": true, "importancia": "menor" | "normal" | "mayor"}} o {"soloHistoria": true} si no hay pago. Para el nivel ${character.level || 1} el oro más el valor del objeto no pasa de ${formatCoins(questGoldCap(character.level))}; el juego ajusta lo que se pase y calcula la experiencia por la importancia. Promete en la narración lo mismo que pongas aquí.
+  · "actualizar": {"accion": "actualizar", "id", "nota"} cuando hay un avance o una pista, o con "objetivo" si el encargo cambia.
+  · "cumplir" / "fallar": {"accion": "cumplir" | "fallar", "id", "nota"} cuando la historia la resuelve. Al cumplirla el juego entrega la recompensa prometida: narra que la recibe, pero no la sumes a "oro" ni a "experiencia".
+  ${quests ? `Misiones activas (usa SOLO estos ids, no inventes otros): ${quests}.` : 'Ahora no hay misiones activas: no uses "actualizar", "cumplir" ni "fallar".'}
 Lo que cuentes en la narración debe coincidir con "danio", "curacion" y "oro".`
     : `Al final de tu respuesta, en una línea separada que empiece con "OPCIONES:", proporciona 3 o 4 sugerencias breves de acción separadas por una pleca "|". Por ejemplo: OPCIONES: Sacar el arma | Negociar con el tabernero | Escabullirse por la puerta trasera.
 Mantén la respuesta en español, entre 1 y 3 párrafos breves.`;
@@ -280,6 +318,8 @@ ${summary}
 """
 
 ` : ''}${events.length ? `Hechos registrados por el juego: ${events.join(' · ')}.
+
+` : ''}${quests && !structured ? `Misiones activas de ${name}: ${quests}.
 
 ` : ''}Crónica reciente (mantén la coherencia con estos eventos):
 """
@@ -397,7 +437,8 @@ export function parseDMReply(raw, character = {}) {
         combat: data.combate && Array.isArray(data.combate.enemigos) && data.combate.enemigos.length ? data.combate : null,
         shop: cleanShopRequest(data.tienda),
         limbChanges: cleanLimbChanges(data.extremidades),
-        conditionChanges: cleanConditionChanges(data.condiciones)
+        conditionChanges: cleanConditionChanges(data.condiciones),
+        questChanges: cleanQuestChanges(data.misiones)
       };
     } catch {
       // Not valid JSON: treat it as plain text below
@@ -424,6 +465,7 @@ export function parseDMReply(raw, character = {}) {
     shop: null,
     limbChanges: [],
     conditionChanges: [],
+    questChanges: [],
     // Plain text can't tell us reliably; look for the dice marker the prompt asks for
     usedRoll: text.includes('🎲')
   };

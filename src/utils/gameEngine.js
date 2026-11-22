@@ -4,6 +4,8 @@ import { buildDMPrompt, parseDMReply, dmResponseSchema } from './dmPrompt';
 import { requestGemini } from './geminiClient';
 import { narrateSpell, narrateRest, narrateAttack } from './spellNarration';
 import { narrateCombatEnd, startLocalFight, isAggressive, shopForAction, narrateShopOpening } from './combatNarration';
+import { describeQuestsForPrompt } from './quests';
+import { localQuestScene } from './localQuests';
 
 // Helper to calculate D&D stat modifier from score (e.g. 16 -> +3, 10 -> 0, 8 -> -1)
 export function getModifier(score) {
@@ -167,7 +169,7 @@ export async function generateDMResponse({
   playerAction, character, world, history = [], apiKey = null, apiKeys = [], playerRoll = null,
   spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
   summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null,
-  allowShop = false, shopsHere = '', shopTypesHere = [], loot = null
+  allowShop = false, shopsHere = '', shopTypesHere = [], loot = null, quests = [], here = null
 }) {
   // Rests, finished fights and spells without an attack or a saving throw involve no d20 at all
   const needsNoRoll = Boolean(rest) || Boolean(weaponAttack) || Boolean(combatResult)
@@ -205,7 +207,8 @@ export async function generateDMResponse({
       try {
         const reply = await askGemini(keyToUse, {
           playerAction, character, world, history, d20, playerRoll, spellCast, rest, effectsApplied,
-          weaponAttack, summary, events, requestSummary, bestiary, combatResult, allowShop, shopsHere
+          weaponAttack, summary, events, requestSummary, bestiary, combatResult, allowShop, shopsHere,
+          quests: describeQuestsForPrompt(quests)
         });
 
         if (reply.ok) {
@@ -233,6 +236,8 @@ export async function generateDMResponse({
               limbChanges: combatResult ? [] : parsed.limbChanges || [],
               // Same for conditions; a fight that starts handles its own
               conditionChanges: combatResult || startsFight ? [] : parsed.conditionChanges || [],
+              // Quests opened, updated or closed by the story (the game pays the rewards)
+              questChanges: parsed.questChanges || [],
               // A fight that starts is rolled by the game, not by Duncan
               roll: parsed.usedRoll && !playerRoll && !needsNoRoll && !startsFight ? { sides: 20, value: d20 } : null,
               source: 'gemini',
@@ -274,6 +279,8 @@ export async function generateDMResponse({
   let spellXp = null;
   let combat = null;
   let shop = null;
+  let questChanges = [];
+  let questScene = null;
   if (combatResult) {
     ({ text, suggestedActions, goldEarned } = narrateCombatEnd(combatResult, { character, rng: Math.random, loot }));
     spellXp = 0;
@@ -342,6 +349,12 @@ La prueba de ${stat} no sale: te quedas corto por poco y la ocasión se te escap
   // Shops: the game opens the counter with its own prices
   else if (allowShop && (shop = shopForAction(actionLower, shopTypesHere))) {
     ({ text, suggestedActions } = narrateShopOpening(shop, { character, world }));
+    spellXp = 0;
+  }
+
+  // Work offered or handed over: a simple quest of the local engine
+  else if ((questScene = localQuestScene(actionLower, { quests, world, character, here, rng: Math.random }))) {
+    ({ text, suggestedActions, questChanges } = questScene);
     spellXp = 0;
   }
 
@@ -500,6 +513,7 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     shop,
     limbChanges: [],
     conditionChanges: [],
+    questChanges,
     // Set when Gemini keys exist but the AI could not answer this turn
     notice: aiFailure ? AI_FAILURE_NOTICES[aiFailure] || AI_FAILURE_NOTICES.overloaded : null,
     // Only when Duncan's own roll is mentioned in the narration
