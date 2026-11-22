@@ -224,9 +224,10 @@ describe('generateDMResponse (quests)', () => {
   const questWorld = { ...world, mapNodes: [{ id: 'a', name: 'Taberna', status: 'current' }] };
 
   it('the local engine opens a quest when the scene asks for work', async () => {
-    const res = await generateDMResponse({ playerAction: 'Miro el tablón de anuncios', character: { ...character, level: 1 }, world: questWorld, here: questWorld.mapNodes[0] });
+    const bestiary = { creatures: [{ id: 'bandit', name: 'Bandido', cr: 0.125, xp: 25, type: 'humanoide' }], budget: { low: 50, moderate: 75, high: 100 } };
+    const res = await generateDMResponse({ playerAction: 'Miro el tablón de anuncios', character: { ...character, level: 1 }, world: questWorld, here: questWorld.mapNodes[0], bestiary });
     expect(res.questChanges).toHaveLength(1);
-    expect(res.questChanges[0]).toMatchObject({ action: 'open', goal: { kind: 'hunt' } });
+    expect(res.questChanges[0]).toMatchObject({ action: 'open', goal: { kind: 'hunt', target: { by: 'creature', monsterId: 'bandit' } } });
     expect(res.xpEarned).toBe(0);
   });
 

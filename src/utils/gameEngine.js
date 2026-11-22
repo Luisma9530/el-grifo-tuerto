@@ -5,7 +5,7 @@ import { requestGemini } from './geminiClient';
 import { narrateSpell, narrateRest, narrateAttack } from './spellNarration';
 import { narrateCombatEnd, startLocalFight, isAggressive, shopForAction, narrateShopOpening } from './combatNarration';
 import { describeQuestsForPrompt } from './quests';
-import { localQuestScene } from './localQuests';
+import { localQuestScene, bestiaryForHunts } from './localQuests';
 
 // Helper to calculate D&D stat modifier from score (e.g. 16 -> +3, 10 -> 0, 8 -> -1)
 export function getModifier(score) {
@@ -286,7 +286,7 @@ export async function generateDMResponse({
     spellXp = 0;
   } else if (bestiary && !playerRoll && isAggressive(actionLower)) {
     // A fight starts: the game resolves it with creatures of the bestiary
-    ({ text, suggestedActions, combat } = startLocalFight(bestiary, { character, world, rng: Math.random }));
+    ({ text, suggestedActions, combat } = startLocalFight(bestiaryForHunts(bestiary, quests), { character, world, rng: Math.random }));
     spellXp = 0;
   } else if (rest) {
     ({ text, suggestedActions } = narrateRest(rest, character));
@@ -353,7 +353,7 @@ La prueba de ${stat} no sale: te quedas corto por poco y la ocasión se te escap
   }
 
   // Work offered or handed over: a simple quest of the local engine
-  else if ((questScene = localQuestScene(actionLower, { quests, world, character, here, rng: Math.random }))) {
+  else if ((questScene = localQuestScene(actionLower, { quests, world, character, here, bestiary, rng: Math.random }))) {
     ({ text, suggestedActions, questChanges } = questScene);
     spellXp = 0;
   }

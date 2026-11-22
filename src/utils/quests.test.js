@@ -4,7 +4,9 @@ import {
   abandonQuest, normalizeQuests, describeReward, describeQuestsForPrompt, activeQuests, finishedQuests,
   unseenQuestCount, describeQuestChange
 } from './quests';
-import { localQuestScene, huntChangesAfterVictory } from './localQuests';
+import { localQuestScene, huntChangesAfterVictory, pickHuntTarget, isHuntTarget, bestiaryForHunts, withHuntTargets } from './localQuests';
+import { characterLevel, withLevel } from './characterLevel';
+import { normalizeEquipment } from './equipment';
 import { buildDMPrompt, parseDMReply, DM_RESPONSE_SCHEMA } from './dmPrompt';
 
 const hero = { name: 'Aria', level: 1, xp: 0, gold: 10, hp: 10, maxHp: 10, inventory: [] };
@@ -175,15 +177,84 @@ describe('local engine quests', () => {
     expect(localQuestScene('pido una cerveza', { world, character: hero, here })).toBeNull();
   });
 
-  it('offers a hunt that a won fight completes', () => {
-    const scene = localQuestScene('miro el tablón de anuncios', { world, character: hero, here, rng: () => 0.9 });
-    expect(scene.questChanges[0]).toMatchObject({ action: 'open', goal: { kind: 'hunt' } });
+  const bestiary = {
+    creatures: [
+      { id: 'wolf', name: 'Lobo', cr: 0.25, xp: 50, type: 'bestia' },
+      { id: 'boar', name: 'Jabalí', cr: 0.25, xp: 50, type: 'bestia' },
+      { id: 'bandit', name: 'Bandido', cr: 0.125, xp: 25, type: 'humanoide' },
+      { id: 'ogre', name: 'Ogro', cr: 2, xp: 450, type: 'gigante' }
+    ],
+    budget: { low: 50, moderate: 75, high: 100 }
+  };
+  const fight = (status, enemies) => ({ status, enemies });
+  const enemy = (monsterId, type, status = 'dead') => ({ monsterId, type, status });
+
+  it('picks a hunt target the hero can face: a creature or a whole type', () => {
+    expect(pickHuntTarget(null)).toBeNull();
+    // 0.9: no type hunt; picks a creature within the moderate budget (never the ogre)
+    const creature = pickHuntTarget(bestiary, () => 0.9);
+    expect(creature).toMatchObject({ by: 'creature' });
+    expect(creature.monsterId).not.toBe('ogre');
+    // 0.1: a type with at least two creatures (beasts)
+    expect(pickHuntTarget(bestiary, () => 0.1)).toEqual({ by: 'type', type: 'bestia', name: 'bestias' });
+  });
+
+  it('offers a hunt that saves its target and only that target completes it', () => {
+    const scene = localQuestScene('miro el tablón de anuncios', { world, character: hero, here, bestiary, rng: () => 0.9 });
+    const target = scene.questChanges[0].goal.target;
+    expect(scene.questChanges[0]).toMatchObject({ action: 'open', goal: { kind: 'hunt', target: { by: 'creature' } } });
+    expect(scene.questChanges[0].title).toContain(target.name);
     const { quests } = applyQuestChanges([], scene.questChanges, { character: hero });
-    const changes = huntChangesAfterVictory(quests);
-    expect(changes).toEqual([{ action: 'complete', id: 'm1', note: expect.any(String) }]);
+    expect(quests[0].goal.target).toEqual(target);
+
+    // a victory against something else does not count
+    expect(huntChangesAfterVictory(quests, fight('victory', [enemy('ogre', 'gigante')]))).toEqual([]);
+    // the target fled: does not count; a lost fight does not count
+    expect(huntChangesAfterVictory(quests, fight('victory', [enemy('ogre', 'gigante'), enemy(target.monsterId, 'x', 'fled')]))).toEqual([]);
+    expect(huntChangesAfterVictory(quests, fight('defeat', [enemy(target.monsterId, 'x')]))).toEqual([]);
+    // killed or surrendered: done, and the reward is paid
+    expect(huntChangesAfterVictory(quests, fight('victory', [enemy(target.monsterId, 'x', 'surrendered')]))).toHaveLength(1);
+    const changes = huntChangesAfterVictory(quests, fight('victory', [enemy(target.monsterId, 'x')]));
+    expect(changes).toEqual([{ action: 'complete', id: 'm1', note: `Objetivo vencido en combate: ${target.name}.` }]);
     const done = applyQuestChanges(quests, changes, { character: hero });
     expect(done.quests[0].status).toBe('completed');
     expect(done.character.gold).toBeGreaterThan(hero.gold);
+  });
+
+  it('a hunt of a type is done by any creature of that type', () => {
+    const target = { by: 'type', type: 'bestia', name: 'bestias' };
+    expect(isHuntTarget(target, enemy('boar', 'bestia'))).toBe(true);
+    expect(isHuntTarget(target, enemy('bandit', 'humanoide'))).toBe(false);
+    const quests = [{ id: 'm1', title: 'Plaga de bestias', status: 'active', notes: [], goal: { kind: 'hunt', target } }];
+    expect(huntChangesAfterVictory(quests, fight('victory', [enemy('wolf', 'bestia')]))).toHaveLength(1);
+    // old hunts without a target are never closed by a fight
+    expect(huntChangesAfterVictory([{ ...quests[0], goal: { kind: 'hunt' } }], fight('victory', [enemy('wolf', 'bestia')]))).toEqual([]);
+  });
+
+  it('the local engine fights the hunt target most of the time', () => {
+    const quests = [{ id: 'm1', title: 'Se busca: Bandido', status: 'active', notes: [], goal: { kind: 'hunt', target: { by: 'creature', monsterId: 'bandit', name: 'Bandido' } } }];
+    expect(bestiaryForHunts(bestiary, quests, () => 0.1).creatures.map(c => c.id)).toEqual(['bandit']);
+    expect(bestiaryForHunts(bestiary, quests, () => 0.9)).toBe(bestiary);
+    expect(bestiaryForHunts(bestiary, [], () => 0.1)).toBe(bestiary);
+  });
+
+  it('the hunt target is always among the creatures offered for a fight', () => {
+    const quests = [{ id: 'm1', title: 'Se busca: Oso', status: 'active', notes: [], goal: { kind: 'hunt', target: { by: 'creature', monsterId: 'bear', name: 'Oso' } } }];
+    const getMonster = id => (id === 'bear' ? { id: 'bear', name: 'Oso', cr: 1, xp: 200, type: 'bestia', hp: 34 } : null);
+    const offered = withHuntTargets(bestiary, quests, getMonster);
+    expect(offered.creatures.at(-1)).toEqual({ id: 'bear', name: 'Oso', cr: 1, xp: 200, type: 'bestia' });
+    expect(withHuntTargets(offered, quests, getMonster)).toBe(offered);
+    expect(withHuntTargets(bestiary, [], getMonster)).toBe(bestiary);
+  });
+
+  it('the prompt tells Duncan the hunt target', () => {
+    const quests = [{ id: 'm1', title: 'Se busca: Bandido', objective: 'Vencer al bandido', status: 'active', notes: [], reward: { gold: 5, xp: 0 }, goal: { kind: 'hunt', target: { by: 'creature', monsterId: 'bandit', name: 'Bandido' } } }];
+    expect(describeQuestsForPrompt(quests)).toContain('objetivo de caza: Bandido (id bandit)');
+  });
+
+  it('without creatures nor other places, there is no work today', () => {
+    const lonely = { name: 'Valle', mapNodes: [here] };
+    expect(localQuestScene('busco trabajo', { world: lonely, character: hero, here }).questChanges).toEqual([]);
   });
 
   it('offers an errand that is handed over at its destination', () => {
@@ -204,5 +275,31 @@ describe('local engine quests', () => {
     }
     expect(activeQuests(quests)).toHaveLength(2);
     expect(localQuestScene('¿alguna misión?', { quests, world, character: hero, here }).questChanges).toEqual([]);
+  });
+});
+
+describe('characterLevel (older heroes without a level field)', () => {
+  it('reads the level field, then the class text, then the XP, then 1', () => {
+    expect(characterLevel({ level: 7, class: 'Pícaro (Nivel 3)' })).toBe(7);
+    expect(characterLevel({ class: 'Paladín de la Devoción (Nivel 3)' })).toBe(3);
+    expect(characterLevel({ class: 'Guerrero', xp: 2700 })).toBe(4);
+    expect(characterLevel({ class: 'Guerrero', xp: 2699 })).toBe(3);
+    expect(characterLevel({ class: 'Guerrero' })).toBe(1);
+    expect(characterLevel({ class: 'Mago (Nivel 99)' })).toBe(20);
+    expect(characterLevel(null)).toBe(1);
+  });
+
+  it('the sheet normalizer writes it, so the whole game uses the same level', () => {
+    const old = { name: 'Valeria', class: 'Paladín (Nivel 3)', hp: 30, maxHp: 30, ac: 18, inventory: [] };
+    expect(withLevel(old).level).toBe(3);
+    expect(normalizeEquipment(old).level).toBe(3);
+    const modern = { ...old, level: 5 };
+    expect(withLevel(modern)).toBe(modern);
+  });
+
+  it('quest caps use the real level of an older hero', () => {
+    const old = { name: 'Valeria', class: 'Paladín (Nivel 3)', gold: 0, inventory: [] };
+    const r = applyQuestChanges([], [open({ reward: { gold: 9999, xp: true, importance: 'normal' } })], { character: old });
+    expect(r.quests[0].reward).toMatchObject({ gold: questGoldCap(3), xp: questXp(3, 'normal') });
   });
 });

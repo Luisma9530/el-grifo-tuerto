@@ -44,7 +44,7 @@ import ShopModal from './game/ShopModal';
 import {
   normalizeQuests, applyQuestChanges, abandonQuest, describeQuestChange, questFact, unseenQuestCount, payReward
 } from '../utils/quests';
-import { huntChangesAfterVictory } from '../utils/localQuests';
+import { huntChangesAfterVictory, withHuntTargets } from '../utils/localQuests';
 
 // The bestiary (and its builder) is only needed when a fight is being prepared
 // The bestiary is big: loaded the first time Duncan may start a fight
@@ -301,8 +301,12 @@ export default function TavernApp({
       // ...or open a shop (the game sets the prices)
       const here = currentNode(world);
       const bestiaryModule = mayStartFight ? await loadBestiary().catch(() => null) : null;
+      // (the target of an active hunt is always among them)
       const bestiary = bestiaryModule
-        ? bestiaryModule.encounterCandidates(sheet.level || 1, { tags: bestiaryModule.WORLD_TAGS[world?.id] || null })
+        ? withHuntTargets(
+          bestiaryModule.encounterCandidates(sheet.level || 1, { tags: bestiaryModule.WORLD_TAGS[world?.id] || null }),
+          questsRef.current, bestiaryModule.getMonster
+        )
         : null;
 
       // Small requests: summary + uncovered messages; the summary is refreshed in
@@ -578,7 +582,7 @@ export default function TavernApp({
     // Hunting quests of the local engine are done with a victory
     let questLine = '';
     if (won) {
-      const result = applyQuestChanges(questsRef.current, huntChangesAfterVictory(questsRef.current), {
+      const result = applyQuestChanges(questsRef.current, huntChangesAfterVictory(questsRef.current, encounter), {
         character: hero, scene: messages.length + 1, place: currentNode(world)?.name || ''
       });
       if (result.applied.length) {
