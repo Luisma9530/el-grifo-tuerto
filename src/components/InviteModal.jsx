@@ -3,8 +3,8 @@ import { useEscapeKey } from '../hooks/useEscapeKey';
 import { X, Copy, Check, Download } from 'lucide-react';
 
 /**
- * Share the tavern with friends. There is no multiplayer (no server): everyone
- * plays their own adventure, and a campaign can be passed on as a .json file.
+ * Share the tavern with friends: everyone can play their own adventure, or join
+ * an online room (see src/online); a campaign can be passed on as a .json file.
  */
 export default function InviteModal({ isOpen, onClose, onOpenCampaigns }) {
   useEscapeKey(isOpen, onClose);
@@ -50,8 +50,9 @@ export default function InviteModal({ isOpen, onClose, onOpenCampaigns }) {
         </div>
 
         <p className="text-sm text-stone-300 leading-relaxed mb-6">
-          Pasa este enlace a tus amigos. Cada uno jugará <strong>su propia aventura</strong> en su navegador:
-          El Grifo Tuerto es una experiencia en solitario y no hay mesa compartida en línea.
+          Pasa este enlace a tus amigos para que cada uno juegue <strong>su propia aventura</strong> en su navegador.
+          ¿Queréis jugar juntos? Abre tu campaña y pulsa <strong>«Online»</strong>: tendrás un código de sala para que
+          entren con su nombre (botón «Unirse» de la portada), cada uno con un personaje del grupo.
         </p>
 
         <div className="mb-6">

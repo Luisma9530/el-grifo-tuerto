@@ -125,7 +125,7 @@ function HeroCard({ hero, encounter, isTurn, nameOf }) {
  * finishLabel: text of that button; endActions: more buttons for a finished fight
  * (e.g. "Revivir en el simulador"); banner: a line above the fight (the simulator's notice).
  */
-export default function CombatView({ encounter, heroes: heroesIn = null, character: lone = null, onAction, onFinish, busy, finishLabel = 'Volver a la crónica', endActions = null, banner = null }) {
+export default function CombatView({ encounter, heroes: heroesIn = null, character: lone = null, onAction, onFinish, busy, finishLabel = 'Volver a la crónica', endActions = null, banner = null, waitingFor = null, canFinish = true }) {
   const heroes = heroesIn || (lone ? [lone] : []);
   const turnUid = currentHeroUid(encounter);
   // The hero whose turn it is acts; between turns, the first one still standing is shown
@@ -137,7 +137,8 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
   const [raging, setRaging] = useState(false);
   const [tab, setTab] = useState('attacks');
   const logEnd = useRef(null);
-  const playerTurn = isPlayerTurn(encounter) && !busy;
+  // Online: the hero of this turn is played by somebody else (`waitingFor`: who)
+  const playerTurn = isPlayerTurn(encounter) && !busy && !waitingFor;
   const over = encounter.status !== 'active';
   const currentTurn = encounter.order[encounter.turn];
 
@@ -236,9 +237,13 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
             </p>
             <div className="flex flex-wrap items-center gap-2">
               {endActions}
-              <button onClick={onFinish} className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 text-sm font-cinzel font-bold">
-                {finishLabel}
-              </button>
+              {canFinish ? (
+                <button onClick={onFinish} className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 text-sm font-cinzel font-bold">
+                  {finishLabel}
+                </button>
+              ) : (
+                <span className="text-xs text-stone-400">El anfitrión cerrará el combate.</span>
+              )}
             </div>
           </div>
         ) : (
@@ -258,7 +263,7 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
               <span className={`text-[11px] font-mono ${playerTurn ? 'text-amber-300' : 'text-stone-500'}`}>
                 {playerTurn
                   ? `${group ? `Turno de ${character.name}` : 'Tu turno'} · objetivo: ${living.find(e => e.uid === targetUid)?.name || '—'}${bonusUsed ? ' · acción adicional usada' : ''}`
-                  : 'Los enemigos actúan…'}
+                  : waitingFor && isPlayerTurn(encounter) ? `Turno de ${character.name} · lo juega ${waitingFor}` : 'Los enemigos actúan…'}
               </span>
             </div>
 

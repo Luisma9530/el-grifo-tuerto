@@ -15,6 +15,10 @@ import CampaignsModal from './components/CampaignsModal';
 import WorldSavesModal from './components/WorldSavesModal';
 import BackupReminder from './components/BackupReminder';
 import DiceOverlay from './components/DiceOverlay';
+import JoinRoomModal from './components/online/JoinRoomModal';
+import { onlineConfig } from './online/transport';
+import { normalizeCode } from './online/room';
+import { storedPlayerName, storePlayerName } from './online/useOnlineRoom';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from './data/gameData';
 import { getStoredGeminiKeys } from './utils/gameEngine';
 import { createParty } from './utils/party';
@@ -32,9 +36,20 @@ const CharacterWizard = lazy(() => import('./components/wizard/CharacterWizard')
 const PartySetup = lazy(() => import('./components/wizard/PartySetup'));
 // The combat simulator is loaded only when opened
 const CombatSimulator = lazy(() => import('./components/simulator/CombatSimulator'));
+// A player's table in someone else's online room
+const GuestTable = lazy(() => import('./components/online/GuestTable'));
+
+// A shared link: ?sala=CODE opens the "join" window with the code filled in
+const linkedRoom = () => {
+  try {
+    return normalizeCode(new URLSearchParams(window.location.search).get('sala'));
+  } catch {
+    return '';
+  }
+};
 
 export default function App() {
-  const [currentView, setCurrentView] = useState('landing'); // 'landing' | 'app'
+  const [currentView, setCurrentView] = useState('landing'); // 'landing' | 'app' | 'guest'
   const [activeWorld, setActiveWorld] = useState(PRESET_WORLDS[0]);
   const [activeCharacter, setActiveCharacter] = useState(PRESET_CHARACTERS[0]);
   const [geminiKeys, setGeminiKeys] = useState(() => getStoredGeminiKeys());
@@ -57,6 +72,11 @@ export default function App() {
   const [pendingCampaign, setPendingCampaign] = useState(null);
   // Combat simulator open: { snapshot?, campaignId? } (it never changes a campaign)
   const [simulator, setSimulator] = useState(null);
+  // Online: the "join" window (with the code of a shared link) and the room joined as a player
+  const onlineKind = onlineConfig().kind;
+  const [joinCode, setJoinCode] = useState(() => linkedRoom());
+  const [isJoinOpen, setIsJoinOpen] = useState(() => Boolean(linkedRoom()));
+  const [guestRoom, setGuestRoom] = useState(null); // { code, name }
 
   const refreshCampaignsCount = () => {
     setCampaignsCount(getAllCampaigns().length);
@@ -150,6 +170,7 @@ export default function App() {
             onOpenGeminiConnect={() => setIsGeminiConnectOpen(true)}
             onOpenCampaigns={() => setIsCampaignsOpen(true)}
             onOpenSimulator={() => setSimulator({})}
+            onOpenJoin={() => setIsJoinOpen(true)}
             campaignsCount={campaignsCount}
             keysCount={geminiKeys.length}
           />
@@ -188,6 +209,18 @@ export default function App() {
           {/* Only on the landing page, so it never interrupts a game */}
           <BackupReminder refreshKey={`${campaignsCount}-${currentView}`} />
         </>
+      ) : currentView === 'guest' && guestRoom ? (
+        <Suspense fallback={null}>
+          <GuestTable
+            code={guestRoom.code}
+            name={guestRoom.name}
+            kind={onlineKind}
+            onLeave={() => {
+              setGuestRoom(null);
+              setCurrentView('landing');
+            }}
+          />
+        </Suspense>
       ) : (
         <TavernApp
           activeCampaign={activeCampaign}
@@ -248,6 +281,24 @@ export default function App() {
         isOpen={isInviteOpen}
         onClose={() => setIsInviteOpen(false)}
         onOpenCampaigns={() => setIsCampaignsOpen(true)}
+      />
+
+      <JoinRoomModal
+        key={joinCode}
+        isOpen={isJoinOpen}
+        kind={onlineKind}
+        initialCode={joinCode}
+        initialName={storedPlayerName()}
+        onClose={() => {
+          setIsJoinOpen(false);
+          setJoinCode('');
+        }}
+        onJoin={({ code, name }) => {
+          storePlayerName(name);
+          setIsJoinOpen(false);
+          setGuestRoom({ code, name });
+          setCurrentView('guest');
+        }}
       />
 
       <WorldForgeModal
