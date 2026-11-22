@@ -3,7 +3,8 @@
 //
 // A snapshot is plain data saved with the campaign (`campaign.combatSnapshots`,
 // newest first, at most MAX_SNAPSHOTS): a copy of the hero as it was when the
-// fight started (sheet, inventory, potions, spell slots, conditions, limbs)
+// fight started (sheet, inventory, potions, spell slots, conditions, limbs) —
+// the whole party in `party` (one to four heroes; `character` is the first one)
 // and the enemy groups by bestiary id (with their elite flag, name and trait),
 // plus when and where it happened and how it ended. Pure functions.
 
@@ -64,9 +65,12 @@ export function describeGroups(data = []) {
 
 /**
  * A snapshot of the start of a fight.
- * @param {{ character, groups, world?, place?, byDuncan?, date?, id? }} input
+ * @param {{ character?, party?, groups, world?, place?, byDuncan?, date?, id? }} input
+ *   party: the heroes in the fight (one to four); character: a lone hero
  */
-export function makeSnapshot({ character, groups, world = null, place = '', byDuncan = false, date = new Date().toISOString(), id = newSnapshotId() }) {
+export function makeSnapshot({ character = null, party = null, groups, world = null, place = '', byDuncan = false, date = new Date().toISOString(), id = newSnapshotId() }) {
+  const heroes = Array.isArray(party) && party.length ? party : [character];
+  const lead = heroes[0];
   return {
     id,
     date,
@@ -74,9 +78,10 @@ export function makeSnapshot({ character, groups, world = null, place = '', byDu
     worldId: world?.id || null,
     worldName: world?.name || '',
     byDuncan: Boolean(byDuncan),
-    heroName: character?.name || 'Héroe',
-    level: Number(character?.level) || 1,
-    character: clone(character),
+    heroName: heroes.length > 1 ? heroes.map(h => h?.name).filter(Boolean).join(', ') : lead?.name || 'Héroe',
+    level: Number(lead?.level) || 1,
+    character: clone(lead),
+    party: clone(heroes),
     groups: groupsToData(groups),
     result: null,
     rounds: null
@@ -107,6 +112,7 @@ export function normalizeSnapshots(list) {
       date: s.date || null,
       place: s.place || '',
       heroName: s.heroName || s.character.name || 'Héroe',
+      party: Array.isArray(s.party) && s.party.length ? s.party.filter(h => h && typeof h === 'object').slice(0, 4) : [s.character],
       level: Number(s.level || s.character.level) || 1,
       result: RESULT_LABELS[s.result] ? s.result : null,
       rounds: Number(s.rounds) || null
@@ -120,3 +126,6 @@ export function recentFights(campaigns = []) {
     .flatMap(c => normalizeSnapshots(c?.combatSnapshots).map(s => ({ ...s, campaignId: c.id, campaignTitle: c.title || '' })))
     .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 }
+
+/** The heroes of a snapshot (older snapshots have only `character`). */
+export const snapshotHeroes = snapshot => (Array.isArray(snapshot?.party) && snapshot.party.length ? snapshot.party : snapshot?.character ? [snapshot.character] : []);

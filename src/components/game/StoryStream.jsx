@@ -7,6 +7,10 @@ export default function StoryStream({
   isGenerating,
   suggestedActions = [],
   character,
+  party = [character],
+  onSelectMember = () => {},
+  pendingRecruit = null,
+  onAnswerRecruit = () => {},
   world,
   onSendAction,
   onOpenGeminiConnect,
@@ -131,8 +135,8 @@ export default function StoryStream({
 
               {msg.sender === 'player' && (
                 <div className="flex items-center gap-1.5 pb-1 mb-1 border-b border-amber-700/50 text-xs font-cinzel font-bold">
-                  <span>{character.avatar || '🛡️'}</span>
-                  <span>{character.name}</span>
+                  <span>{msg.actor ? msg.avatar || '🛡️' : character.avatar || '🛡️'}</span>
+                  <span>{msg.actor || character.name}</span>
                 </div>
               )}
 
@@ -169,7 +173,7 @@ export default function StoryStream({
             {/* Avatar for Player */}
             {msg.sender === 'player' && (
               <div className="w-10 h-10 rounded-full bg-stone-850 border border-amber-500/50 flex items-center justify-center text-xl shrink-0 shadow-md">
-                {character.avatar || '🛡️'}
+                {msg.actor ? msg.avatar || '🛡️' : character.avatar || '🛡️'}
               </div>
             )}
           </div>
@@ -204,16 +208,59 @@ export default function StoryStream({
         </div>
       )}
 
+      {/* A companion offered to join through the story: the player decides */}
+      {pendingRecruit && (
+        <div className="px-4 py-3 bg-emerald-950/30 border-t border-emerald-900/60 flex flex-wrap items-center gap-3 text-xs" role="status">
+          <span className="text-2xl">{pendingRecruit.character.avatar || '🧭'}</span>
+          <div className="flex-1 min-w-[12rem]">
+            <p className="text-emerald-100 font-semibold">
+              {pendingRecruit.character.name} quiere unirse al grupo
+            </p>
+            <p className="text-stone-300">
+              {pendingRecruit.character.race} · {pendingRecruit.character.className}, nivel {pendingRecruit.character.level} · {pendingRecruit.character.maxHp} PG · CA {pendingRecruit.character.ac}
+              {pendingRecruit.reason ? ` — ${pendingRecruit.reason}` : ''}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => onAnswerRecruit(true)} disabled={isGenerating || party.length >= 4}
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-stone-950 font-bold">
+              Aceptar
+            </button>
+            <button type="button" onClick={() => onAnswerRecruit(false)} disabled={isGenerating}
+              className="px-3 py-1.5 rounded-lg border border-stone-700 text-stone-300 hover:bg-stone-800 disabled:opacity-40">
+              Rechazar
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Input Action Form */}
       <form onSubmit={handleSubmit} className="p-3 sm:p-4 bg-[#110e17] border-t border-amber-950/60">
         <div className="flex items-center gap-2">
+          {party.length > 1 && (
+            <label className="shrink-0 flex items-center gap-1 bg-[#1a1523] border border-amber-900/40 rounded-xl px-2 py-2.5 text-xs text-stone-200" title="Quién actúa: la acción, las tiradas y los atajos usan su ficha">
+              <span aria-hidden="true">{character.avatar || '🛡️'}</span>
+              <span className="sr-only">Quién actúa</span>
+              <select
+                value={character.id}
+                disabled={isGenerating}
+                onChange={e => onSelectMember(e.target.value)}
+                className="bg-transparent focus:outline-none max-w-[7rem] sm:max-w-[10rem] truncate"
+                aria-label="Personaje que actúa"
+              >
+                {party.map(m => (
+                  <option key={m.id} value={m.id} className="bg-[#1a1523]">{m.name}{m.hp <= 0 ? ' (inconsciente)' : ''}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <input
             type="text"
             value={inputText}
             disabled={isGenerating}
             onChange={(e) => setInputText(e.target.value)}
-            placeholder="¿Qué hace tu personaje? (Ej: 'Desenvaino y exijo ver al cabecilla', 'Me acerco sigiloso por la sombra')..."
-            className="flex-1 bg-[#1a1523] border border-amber-900/40 focus:border-amber-500 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder-stone-500 focus:outline-none transition-colors"
+            placeholder={party.length > 1 ? `¿Qué hace ${character.name}?` : "¿Qué hace tu personaje? (Ej: 'Desenvaino y exijo ver al cabecilla', 'Me acerco sigiloso por la sombra')..."}
+            className="flex-1 min-w-0 bg-[#1a1523] border border-amber-900/40 focus:border-amber-500 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder-stone-500 focus:outline-none transition-colors"
           />
           <button
             type="submit"

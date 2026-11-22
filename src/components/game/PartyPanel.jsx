@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Heart, Shield, Coins, Backpack, Coffee, Sparkles, Wand2 } from 'lucide-react';
+import { Heart, Shield, Coins, Backpack, Coffee, Sparkles, Wand2, UserMinus } from 'lucide-react';
 import { getModifier, getModifierNumber } from '../../utils/gameEngine';
 import { skillRows, proficiencyBonus, formatModifier } from '../../utils/characterBuilder';
 import { TAVERN_MENU } from '../../data/gameData';
@@ -11,11 +11,83 @@ import EquipmentPanel from './EquipmentPanel';
 import { normalizeEquipment, HANDS, isWorn } from '../../utils/equipment';
 import { formatCoins, healingDice, inventoryWeight, formatKg } from '../../utils/items';
 
-const HELD_LABELS = { main: 'En la mano principal', off: 'En la mano secundaria', both: 'En las dos manos' };
 import { xpProgress, canLevelUp, canAdvance } from '../../utils/leveling';
+
+const HELD_LABELS = { main: 'En la mano principal', off: 'En la mano secundaria', both: 'En las dos manos' };
+
+/** Compact cards of the party: HP, AC, conditions. Clicking one selects who acts. */
+function PartyRoster({ party, activeId, onSelect, busy }) {
+  return (
+    <div className="p-2 border-b border-amber-950/60 bg-[#100d15]" role="radiogroup" aria-label="Miembros del grupo">
+      <div className="grid grid-cols-2 gap-1.5">
+        {party.map(member => {
+          const percent = Math.max(0, Math.min(100, Math.round((member.hp / Math.max(1, member.maxHp)) * 100)));
+          const active = member.id === activeId;
+          const down = member.hp <= 0;
+          return (
+            <button
+              key={member.id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onSelect(member.id)}
+              disabled={busy}
+              title={`${member.name}: ${member.hp}/${member.maxHp} PG, CA ${member.ac}${down ? ' (inconsciente)' : ''}`}
+              className={`text-left p-1.5 rounded-lg border transition-colors ${active ? 'bg-amber-500/15 border-amber-400' : 'bg-[#17131f] border-stone-800 hover:border-amber-700/60'} ${down ? 'opacity-70' : ''}`}
+            >
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className={`text-base leading-none ${down ? 'grayscale' : ''}`}>{member.avatar || '🛡️'}</span>
+                <span className="text-[11px] font-semibold text-stone-100 truncate flex-1">{member.name}</span>
+                {canLevelUp(member) && <Sparkles className="w-3 h-3 text-amber-300 shrink-0" aria-label="Puede subir de nivel" />}
+              </div>
+              <div className="mt-1 h-1 rounded-full bg-stone-900 overflow-hidden">
+                <div className={`h-full ${percent > 50 ? 'bg-emerald-500' : percent > 20 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${percent}%` }} />
+              </div>
+              <div className="mt-0.5 flex items-center justify-between text-[10px] font-mono text-stone-400">
+                <span>{down ? '💤 0' : member.hp}/{member.maxHp} PG</span>
+                <span>CA {member.ac}</span>
+              </div>
+              <ConditionBadges creature={member} nameOf={() => 'un enemigo'} focusable={false} size="xs" className="mt-0.5" />
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Give an item to another member (outside combat). */
+function GiveItem({ item, character, party, onTransfer }) {
+  const [error, setError] = useState(null);
+  const others = party.filter(m => m.id !== character.id);
+  if (!others.length) return null;
+  return (
+    <div className="mt-1.5">
+      <select
+        value=""
+        onChange={e => {
+          if (!e.target.value) return;
+          setError(onTransfer(character.id, e.target.value, item.id));
+        }}
+        aria-label={`Pasar ${item.name} a otro miembro del grupo`}
+        className="bg-[#1a1523] border border-stone-800 rounded px-1.5 py-0.5 text-[10px] text-stone-300"
+      >
+        <option value="">Pasar a…</option>
+        {others.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+      </select>
+      {error && <p className="text-[10px] text-amber-300 mt-0.5">{error}</p>}
+    </div>
+  );
+}
 
 export default function PartyPanel({
   character,
+  party = [character],
+  purse = character.gold,
+  onSelectMember = () => {},
+  onDismissMember = () => {},
+  onTransferItem = () => null,
+  longRestCost,
   onUpdateCharacter,
   onOrderDrink,
   onRollCheck,
@@ -45,10 +117,16 @@ export default function PartyPanel({
     onUseItem(item);
   };
   const weight = inventoryWeight(character);
+  const group = party.length > 1;
+  const dismiss = () => {
+    if (window.confirm(`¿Despedir a ${character.name}? Dejará el grupo y se llevará su equipo (pásale antes lo que quieras conservar).`)) onDismissMember(character.id);
+  };
 
   return (
     <div className="h-full flex flex-col bg-[#120f18] border-r border-amber-950/60 overflow-hidden text-stone-200">
       
+      {group && <PartyRoster party={party} activeId={character.id} onSelect={onSelectMember} busy={false} />}
+
       {/* Character Profile Header */}
       <div className="p-4 bg-gradient-to-b from-[#1c1626] to-[#120f18] border-b border-amber-950/50">
         <div className="flex items-start justify-between gap-3">
@@ -75,6 +153,12 @@ export default function PartyPanel({
               <ConditionBadges creature={character} nameOf={() => 'un enemigo'} className="mt-1" />
             </div>
           </div>
+          {group && !inCombat && (
+            <button onClick={dismiss} disabled={busy} title={`Despedir a ${character.name} del grupo`}
+              className="p-1.5 rounded-lg text-stone-500 hover:text-red-300 hover:bg-red-950/40 disabled:opacity-40" aria-label={`Despedir a ${character.name}`}>
+              <UserMinus className="w-4 h-4" />
+            </button>
+          )}
 
         </div>
 
@@ -146,10 +230,10 @@ export default function PartyPanel({
             <div className="p-2 rounded-lg bg-[#181320] border border-stone-800 flex items-center justify-between">
               <div className="flex items-center gap-1.5 text-xs text-stone-400">
                 <Coins className="w-3.5 h-3.5 text-amber-400" />
-                <span>Oro</span>
+                <span>{group ? 'Bolsa común' : 'Oro'}</span>
               </div>
-              <span className="font-mono font-bold text-amber-300 text-sm">
-                {formatCoins(character.gold)}
+              <span className="font-mono font-bold text-amber-300 text-sm" title={group ? 'El oro es de todo el grupo' : undefined}>
+                {formatCoins(purse)}
               </span>
             </div>
           </div>
@@ -314,7 +398,7 @@ export default function PartyPanel({
 
         {/* SPELLS TAB */}
         {activeTab === 'spells' && hasMagic && (
-          <SpellsTab character={character} onCastSpell={onCastSpell} onRest={onRest} busy={busy} />
+          <SpellsTab character={character} onCastSpell={onCastSpell} onRest={onRest} busy={busy} partyNames={party.map(m => m.name)} restCost={longRestCost} partySize={party.length} />
         )}
 
         {/* INVENTORY TAB */}
@@ -352,6 +436,7 @@ export default function PartyPanel({
                       Usos restantes: {item.uses}
                     </span>
                   )}
+                  {group && !inCombat && <GiveItem item={item} character={character} party={party} onTransfer={onTransferItem} />}
                 </div>
 
                 {heldIn(item.id) && (
@@ -384,7 +469,7 @@ export default function PartyPanel({
         {/* TAVERN BAR / MENU TAB */}
         {activeTab === 'menu' && (
           <div className="space-y-2.5">
-            <RestButtons character={character} onRest={onRest} busy={busy} />
+            <RestButtons character={character} onRest={onRest} busy={busy} cost={longRestCost} partySize={party.length} />
 
             <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block">
               Bebidas & Viandas de Maese Duncan:

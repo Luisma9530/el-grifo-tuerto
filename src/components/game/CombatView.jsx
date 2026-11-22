@@ -3,7 +3,7 @@ import { FlaskConical, Footprints, Shield, Skull, Swords, Wand2, Heart, Flag, Ha
 import { attackOptions, damageLabel, rageBonus } from '../../utils/combat';
 import { spellRows, spellSummary } from '../../utils/spellcasting';
 import { formatModifier } from '../../utils/characterBuilder';
-import { activeEnemies, isPlayerTurn, escapableCondition, escapeBonus } from '../../utils/encounter';
+import { activeEnemies, isPlayerTurn, escapableCondition, escapeBonus, currentHeroUid, concentrationOf } from '../../utils/encounter';
 import { speedZeroReason, conditionName } from '../../utils/conditions';
 import ConditionBadges from './ConditionBadges';
 import { normalizeEquipment, fleeDC } from '../../utils/equipment';
@@ -15,7 +15,7 @@ const LOG_COLORS = {
   heal: 'text-sky-300', down: 'text-amber-300 font-semibold', morale: 'text-amber-200', end: 'text-amber-100 font-semibold',
   enemyHit: 'text-red-300', enemyCrit: 'text-red-200 font-semibold', enemyMiss: 'text-stone-500',
   duncan: 'text-amber-100/90 italic font-serif', injury: 'text-red-400 font-bold',
-  condition: 'text-fuchsia-300', conditionEnd: 'text-teal-300'
+  condition: 'text-fuchsia-300', conditionEnd: 'text-teal-300', herodown: 'text-red-300 font-semibold'
 };
 
 const ACTION_TABS = [
@@ -90,14 +90,49 @@ function EnemyCard({ enemy, selected, onSelect, isTurn, nameOf }) {
   );
 }
 
+/** A hero of the party in the fight: HP, AC, conditions, concentration; the one whose turn it is is highlighted. */
+function HeroCard({ hero, encounter, isTurn, nameOf }) {
+  const conc = concentrationOf(encounter, hero.id || 'player');
+  const down = hero.hp <= 0;
+  return (
+    <div className={`flex items-center gap-3 p-2.5 rounded-xl border ${isTurn ? 'bg-sky-950/40 border-amber-400 ring-2 ring-amber-400/50' : 'bg-[#121620] border-sky-900/40'} ${down ? 'opacity-70' : ''}`}>
+      <span className={`text-xl ${down ? 'grayscale' : ''}`}>{hero.avatar || '🛡️'}</span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="font-semibold text-sky-100 truncate">{hero.name}{isTurn ? ' · su turno' : ''}</span>
+          <span className="font-mono text-stone-300 flex items-center gap-1 shrink-0"><Heart className="w-3 h-3 text-red-400" /> {hero.hp}/{hero.maxHp} · CA {hero.ac}</span>
+        </div>
+        <div className="mt-1 h-1.5 rounded-full bg-stone-900 overflow-hidden">
+          <div className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400" style={{ width: `${Math.max(0, Math.round((hero.hp / hero.maxHp) * 100))}%` }} />
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          <ConditionBadges creature={hero} nameOf={nameOf} />
+          {conc && (
+            <span className="inline-flex items-center gap-1 rounded border border-purple-600/60 bg-purple-950/40 px-1.5 py-0.5 text-[10px] font-semibold text-purple-200"
+              title={`${hero.name} se concentra en ${conc.name}: si recibe daño, salvación de Constitución (CD 10 o la mitad del daño) para mantenerlo.`}>
+              <Brain className="w-3 h-3" /> Concentración: {conc.name}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * The combat screen (it replaces the chronicle while a fight is on).
  * onAction(action) — see playerAction in encounter.js; onFinish() closes a finished fight.
  * finishLabel: text of that button; endActions: more buttons for a finished fight
  * (e.g. "Revivir en el simulador"); banner: a line above the fight (the simulator's notice).
  */
-export default function CombatView({ encounter, character, onAction, onFinish, busy, finishLabel = 'Volver a la crónica', endActions = null, banner = null }) {
+export default function CombatView({ encounter, heroes: heroesIn = null, character: lone = null, onAction, onFinish, busy, finishLabel = 'Volver a la crónica', endActions = null, banner = null }) {
+  const heroes = heroesIn || (lone ? [lone] : []);
+  const turnUid = currentHeroUid(encounter);
+  // The hero whose turn it is acts; between turns, the first one still standing is shown
+  const character = heroes.find(h => (h.id || 'player') === turnUid) || heroes.find(h => h.hp > 0) || heroes[0];
+  const group = heroes.length > 1;
   const living = activeEnemies(encounter);
+  const [allyUid, setAllyUid] = useState(null);
   const [targetUid, setTargetUid] = useState(living[0]?.uid || null);
   const [raging, setRaging] = useState(false);
   const [tab, setTab] = useState('attacks');
@@ -118,7 +153,10 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
   const spells = spellRows(character).filter(s => !s.blocked);
   const potions = (character.inventory || []).filter(i => healingDice(i));
   const act = action => onAction({ ...action, targetUid });
-  const nameOf = uid => (uid === 'player' ? character.name : encounter.enemies.find(e => e.uid === uid)?.name || 'alguien');
+  // Potions and healing spells: on themselves, or on an ally
+  const ally = group ? heroes.find(h => h.id === allyUid && h.id !== character.id) : null;
+  const actOnAlly = action => onAction({ ...action, targetUid: ally ? ally.id : targetUid });
+  const nameOf = uid => heroes.find(h => (h.id || 'player') === uid)?.name || encounter.enemies.find(e => e.uid === uid)?.name || 'alguien';
   const held = escapableCondition(character);
   const stuck = speedZeroReason(character);
   // Drinking a potion is a Bonus Action: one per turn, and the turn goes on
@@ -141,12 +179,12 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
             if (enemy && enemy.status !== 'active') return null;
             const current = index === encounter.turn && !over;
             return (
-              <span key={slot.kind === 'player' ? 'player' : slot.uid}
+              <span key={slot.uid || 'player'}
                 className={`px-2 py-0.5 rounded border whitespace-nowrap ${
                   current ? 'bg-amber-500/20 border-amber-400 text-amber-200' :
                   slot.kind === 'player' ? 'border-sky-800/60 text-sky-300' : 'border-stone-800 text-stone-400'
                 }`}>
-                {slot.initiative} · {slot.kind === 'player' ? character.name : enemy.name}
+                {slot.initiative} · {slot.kind === 'player' ? nameOf(slot.uid || 'player') : enemy.name}
               </span>
             );
           })}
@@ -168,27 +206,11 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
           ))}
         </div>
 
-        {/* Hero */}
-        <div className="flex items-center gap-3 p-2.5 rounded-xl bg-[#121620] border border-sky-900/40">
-          <span className="text-xl">{character.avatar || '🛡️'}</span>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-sky-100 truncate">{character.name}</span>
-              <span className="font-mono text-stone-300 flex items-center gap-1"><Heart className="w-3 h-3 text-red-400" /> {character.hp}/{character.maxHp} · CA {character.ac}</span>
-            </div>
-            <div className="mt-1 h-1.5 rounded-full bg-stone-900 overflow-hidden">
-              <div className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400" style={{ width: `${Math.max(0, Math.round((character.hp / character.maxHp) * 100))}%` }} />
-            </div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-1">
-              <ConditionBadges creature={character} nameOf={nameOf} />
-              {encounter.concentration && (
-                <span className="inline-flex items-center gap-1 rounded border border-purple-600/60 bg-purple-950/40 px-1.5 py-0.5 text-[10px] font-semibold text-purple-200"
-                  title={`Te concentras en ${encounter.concentration.name}: si recibes daño, salvación de Constitución (CD 10 o la mitad del daño) para mantenerlo.`}>
-                  <Brain className="w-3 h-3" /> Concentración: {encounter.concentration.name}
-                </span>
-              )}
-            </div>
-          </div>
+        {/* The party */}
+        <div className={`grid gap-2 ${group ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
+          {heroes.map(hero => (
+            <HeroCard key={hero.id || 'player'} hero={hero} encounter={encounter} nameOf={nameOf} isTurn={!over && (hero.id || 'player') === turnUid} />
+          ))}
         </div>
 
         {/* Log */}
@@ -208,7 +230,9 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm text-amber-100 flex items-center gap-2">
               {encounter.status === 'victory' ? <Flag className="w-4 h-4 text-emerald-400" /> : <Skull className="w-4 h-4 text-red-400" />}
-              {encounter.status === 'victory' ? `¡Victoria! +${encounter.xp} PX` : encounter.status === 'fled' ? 'Has escapado del combate.' : 'Has caído en combate.'}
+              {encounter.status === 'victory'
+                ? `¡Victoria! +${encounter.xp} PX${group ? ' para repartir' : ''}`
+                : encounter.status === 'fled' ? (group ? 'El grupo ha escapado del combate.' : 'Has escapado del combate.') : (group ? 'Todo el grupo ha caído.' : 'Has caído en combate.')}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               {endActions}
@@ -233,7 +257,7 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
               </div>
               <span className={`text-[11px] font-mono ${playerTurn ? 'text-amber-300' : 'text-stone-500'}`}>
                 {playerTurn
-                  ? `Tu turno · objetivo: ${living.find(e => e.uid === targetUid)?.name || '—'}${bonusUsed ? ' · acción adicional usada' : ''}`
+                  ? `${group ? `Turno de ${character.name}` : 'Tu turno'} · objetivo: ${living.find(e => e.uid === targetUid)?.name || '—'}${bonusUsed ? ' · acción adicional usada' : ''}`
                   : 'Los enemigos actúan…'}
               </span>
             </div>
@@ -249,6 +273,22 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
                   className="px-2.5 py-1 rounded-lg bg-sky-700 hover:bg-sky-600 text-stone-50 text-[11px] font-bold shrink-0">
                   Terminar turno
                 </button>
+              </div>
+            )}
+
+            {group && (tab === 'spells' || tab === 'other') && (
+              <div className="mb-2 flex flex-wrap items-center gap-1 text-[10px]" role="radiogroup" aria-label="Sobre quién usar pociones y curaciones">
+                <span className="text-stone-500">Pociones y curaciones sobre:</span>
+                {heroes.map(h => {
+                  const self = h.id === character.id;
+                  const on = self ? !ally : ally?.id === h.id;
+                  return (
+                    <button key={h.id} type="button" role="radio" aria-checked={on} onClick={() => setAllyUid(self ? null : h.id)}
+                      className={`px-1.5 py-0.5 rounded border ${on ? 'border-sky-400 text-sky-100 bg-sky-950/50' : 'border-stone-700 text-stone-400 hover:text-stone-200'}`}>
+                      {self ? `${h.name} (sí mismo)` : `${h.name}${h.hp <= 0 ? ' 💤' : ''} ${h.hp}/${h.maxHp}`}
+                    </button>
+                  );
+                })}
               </div>
             )}
 
@@ -279,7 +319,7 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                   {spells.map(spell => (
                     <button key={spell.id} disabled={!canAct || (['attack', 'save', 'auto'].includes(spell.kind) && !targetUid)}
-                      onClick={() => act({ type: 'spell', spellId: spell.id })}
+                      onClick={() => (spell.kind === 'heal' ? actOnAlly : act)({ type: 'spell', spellId: spell.id })}
                       className="text-left p-2 rounded-lg bg-[#17121f] border border-stone-800 hover:border-purple-500/60 disabled:opacity-40">
                       <span className="block text-xs font-semibold text-purple-100">{spell.name} <span className="text-stone-500 font-normal">· {spell.level === 0 ? 'truco' : `nivel ${spell.level}`}</span></span>
                       <span className="block text-[10px] font-mono text-stone-400">{spellSummary(spell)}</span>
@@ -290,7 +330,7 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
 
               {tab === 'gear' && (
                 <SwapGear
-                  key={JSON.stringify([normalizeEquipment(character).hands, character.limbs])}
+                  key={JSON.stringify([character.id, normalizeEquipment(character).hands, character.limbs])}
                   character={character}
                   disabled={!canAct}
                   onSwap={hands => act({ type: 'equip', hands })}
@@ -307,11 +347,11 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
                     </p>
                   )}
                   {potions.map(item => (
-                    <button key={item.id} disabled={!playerTurn || bonusUsed} onClick={() => act({ type: 'potion', itemId: item.id })}
+                    <button key={item.id} disabled={!playerTurn || bonusUsed} onClick={() => actOnAlly({ type: 'potion', itemId: item.id })}
                       title={bonusUsed ? 'Ya has usado tu acción adicional este turno' : 'Acción adicional: no gasta tu acción'}
                       className="text-left p-2 rounded-lg bg-[#121a1a] border border-stone-800 hover:border-sky-600/60 disabled:opacity-40 flex items-center gap-2">
                       <FlaskConical className="w-4 h-4 text-sky-300" />
-                      <span className="text-xs text-stone-100">{item.name}{item.uses !== undefined ? ` (${item.uses})` : ''} <span className="text-stone-500">· {healingDice(item)} PG · acción adicional</span></span>
+                      <span className="text-xs text-stone-100">{ally ? `Dar ${item.name} a ${ally.name}` : item.name}{item.uses !== undefined ? ` (${item.uses})` : ''} <span className="text-stone-500">· {healingDice(item)} PG · acción adicional</span></span>
                     </button>
                   ))}
                   <button disabled={!canAct} onClick={() => act({ type: 'dodge' })}
