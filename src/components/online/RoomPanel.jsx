@@ -73,7 +73,7 @@ export default function RoomPanel({ room, me, isHost = false, characters = [], l
               <span className={`w-2 h-2 rounded-full ${p.connected ? 'bg-emerald-400' : 'bg-stone-600'}`} aria-hidden="true" />
               <span className={p.connected ? 'text-stone-100' : 'text-stone-500'}>{p.name}{p.id === me ? ' (tú)' : ''}</span>
               {p.isHost && <Crown className="w-3 h-3 text-amber-400" aria-label="anfitrión" />}
-              {!p.connected && <span className="text-[10px] text-stone-500">desconectado</span>}
+              {!p.connected && <span className="text-[10px] text-stone-500">sin conexión</span>}
               {hostOps && !p.isHost && !p.connected && (
                 <button onClick={() => hostOps.remove(p.id)} className="ml-auto text-[10px] text-red-300 hover:underline">Quitar</button>
               )}
@@ -102,7 +102,7 @@ export default function RoomPanel({ room, me, isHost = false, characters = [], l
                     <p className="font-semibold text-stone-100 truncate">{c.name}</p>
                     <p className="text-[10px] text-stone-400">
                       Lo juega <strong className={controller === me ? 'text-amber-300' : 'text-stone-200'}>{controller === me ? 'tú' : playerName(room, controller)}</strong>
-                      {away && ` (${playerName(room, owner)} está desconectado)`}
+                      {away && ` (${playerName(room, owner)} se ha desconectado)`}
                       {!claimed && room.voted[c.id] && ' · por votación'}
                     </p>
                   </div>
@@ -124,7 +124,7 @@ export default function RoomPanel({ room, me, isHost = false, characters = [], l
                     <select value={claimed || ''} onChange={e => hostOps.assign(c.id, e.target.value || null)}
                       className="bg-[#1a1523] border border-stone-700 rounded px-1 py-0.5 text-stone-200">
                       <option value="">— nadie (votación) —</option>
-                      {players.map(p => <option key={p.id} value={p.id}>{p.name}{p.connected ? '' : ' (desconectado)'}</option>)}
+                      {players.map(p => <option key={p.id} value={p.id}>{p.name}{p.connected ? '' : ' (sin conexión)'}</option>)}
                     </select>
                   </label>
                 )}

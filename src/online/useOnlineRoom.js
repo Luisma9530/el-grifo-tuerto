@@ -54,12 +54,13 @@ export function useHostRoom({ campaignId, kind, getGame, onCombat }) {
     write(HOST_KEY(campaignId), { room: roomToSave(room), identities, active });
   }, [campaignId]);
 
+  // hostName: the name typed when opening it (null when it reopens by itself: the saved one is kept)
   const open = useCallback(async hostName => {
     if (!kind || !campaignId || sessionRef.current) return;
     setState(s => ({ ...s, status: 'opening', error: null }));
     const saved = read(HOST_KEY(campaignId));
     const restored = saved?.room ? restoreRoom(saved.room, { hostName }) : null;
-    const room = restored || createRoom({ code: newRoomCode(), hostId: randomId('h'), hostName });
+    const room = restored || createRoom({ code: newRoomCode(), hostId: randomId('h'), hostName: hostName || storedPlayerName() || 'Anfitrión' });
     try {
       const transport = await connectTransport({ kind, code: room.code, selfId: room.hostId, meta: { role: 'host' } });
       const session = createHostSession({

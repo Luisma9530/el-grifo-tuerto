@@ -1067,7 +1067,7 @@ export default function TavernApp({
 
   // The room was open when the page was left (a reload): open it again, same code
   useEffect(() => {
-    if (onlineKind && wasOnline(currentCampaignId)) online.open(storedPlayerName() || 'Anfitrión');
+    if (onlineKind && wasOnline(currentCampaignId)) online.open(null);
     // Only when the campaign changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentCampaignId]);
