@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, lazy, Suspense } from 'react';
 import { ArrowLeft, Wifi, WifiOff, Loader2 } from 'lucide-react';
 import PartyPanel from '../game/PartyPanel';
 import StoryStream from '../game/StoryStream';
@@ -9,12 +9,15 @@ import LevelUpModal from '../game/LevelUpModal';
 import OnlineToast from './OnlineToast';
 import { useGuestRoom } from '../../online/useOnlineRoom';
 import { roomLink } from '../../online/transport';
-import { controllerOf, canControl, playerName } from '../../online/room';
+import { controllerOf, canControl, playerName, claimOf } from '../../online/room';
 import { sheetIntents, quickAttackOption } from '../../online/actions';
-import { memberSheets } from '../../utils/party';
+import { memberSheets, MAX_PARTY } from '../../utils/party';
 import { currentHeroUid } from '../../utils/encounter';
 import { longRestCost } from '../../utils/partyActions';
 import { canLevelUp } from '../../utils/leveling';
+
+// The creation wizard: only loaded if this player creates a character
+const CharacterWizard = lazy(() => import('../wizard/CharacterWizard'));
 
 const HOST_ONLY = 'Esto lo decide el anfitrión (descansos, tiendas, viajes, compañeros y repartir objetos se hacen en su pantalla).';
 
@@ -31,6 +34,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
   const [sideTab, setSideTab] = useState('room');
   const [localNotice, setLocalNotice] = useState(null);
   const [levelUpId, setLevelUpId] = useState(null);
+  const [creating, setCreating] = useState(false);
 
   const shared = view.room || null;
   const heroes = useMemo(() => (view.party ? memberSheets(view.party) : []), [view.party]);
@@ -92,10 +96,14 @@ export default function GuestTable({ code, name, kind, onLeave }) {
     if (inCombat) return setLocalNotice('Sube de nivel cuando acabe el combate.');
     setLevelUpId(character.id);
   };
+  // A player without a character of their own creates one while the party has room
+  const canCreate = Boolean(shared) && !claimOf(shared, playerId) && heroes.length < MAX_PARTY && !inCombat;
   const levelingHero = heroes.find(h => h.id === levelUpId && canLevelUp(h) && canControl(shared, playerId, h.id)) || null;
   const turnPlayer = turnUid && controllerOf(shared, turnUid) !== playerId ? playerName(shared, controllerOf(shared, turnUid)) : null;
   const storyNotice = mine.length === 0
-    ? 'Aún no juegas con ningún personaje: elige uno libre en la pestaña «Sala» (o vota los que sobran).'
+    ? (heroes.length < MAX_PARTY
+      ? 'Aún no juegas con ningún personaje: crea el tuyo («Crear mi personaje») o elige uno libre en la pestaña «Sala».'
+      : 'Aún no juegas con ningún personaje: el grupo está completo, así que elige uno libre en la pestaña «Sala» o espera a la votación.')
     : !mayAct ? `${character.name} lo juega ${playerName(shared, controllerOf(shared, character.id))}: elige a uno de los tuyos para actuar.`
       : meta.isGenerating ? 'Duncan está respondiendo: lo que escribas esperará en la cola de la sala.' : null;
   const tabClass = on => `flex-1 py-2 text-center border-b-2 ${on ? 'border-amber-500 text-amber-300 bg-amber-500/10' : 'border-transparent text-stone-400'}`;
@@ -150,6 +158,16 @@ export default function GuestTable({ code, name, kind, onLeave }) {
         </div>
 
         <div className={`flex-1 min-w-0 flex-col h-full overflow-hidden ${mobileTab === 'story' ? 'flex' : 'hidden lg:flex'}`}>
+          {canCreate && (
+            <div className="px-4 py-2.5 bg-emerald-950/30 border-b border-emerald-900/60 flex flex-wrap items-center gap-2 text-xs" role="region" aria-label="Crear personaje">
+              <span className="flex-1 min-w-[12rem] text-emerald-100">
+                El grupo tiene sitio ({heroes.length}/{MAX_PARTY}): crea tu personaje y se unirá a la partida al nivel del grupo.
+              </span>
+              <button onClick={() => setCreating(true)} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-stone-950 font-bold">
+                Crear mi personaje
+              </button>
+            </div>
+          )}
           {encounter ? (
             <CombatView
               encounter={encounter}
@@ -220,6 +238,22 @@ export default function GuestTable({ code, name, kind, onLeave }) {
           </div>
         )}
       </div>
+
+      {creating && canCreate && (
+        <Suspense fallback={null}>
+          <CharacterWizard
+            world={view.world}
+            completeLabel="Unirme al grupo"
+            onCancel={() => setCreating(false)}
+            onComplete={(_character, draft) => {
+              // Only the choices travel: the host builds the sheet with the rules
+              send({ type: 'create', draft });
+              setCreating(false);
+              setLocalNotice('Ficha enviada al anfitrión: tu personaje aparecerá en el grupo en un momento.');
+            }}
+          />
+        </Suspense>
+      )}
 
       {levelingHero && (
         <LevelUpModal

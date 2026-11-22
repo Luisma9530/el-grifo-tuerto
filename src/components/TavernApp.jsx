@@ -59,10 +59,11 @@ import { onlineConfig, roomLink } from '../online/transport';
 import { useHostRoom, wasOnline, storedPlayerName, storePlayerName } from '../online/useOnlineRoom';
 import { buildSections } from '../online/snapshot';
 import {
-  ownerOf, controllerOf, canControl, playerName, claimCharacter, releaseCharacter, breakTie, closeVote, removePlayer, dequeueAction
+  ownerOf, controllerOf, canControl, playerName, claimCharacter, releaseCharacter, breakTie, closeVote, removePlayer, dequeueAction, enqueueAction
 } from '../online/room';
 import { stillValid } from '../online/protocol';
 import { applyOwnChange } from '../online/ownChanges';
+import { buildPlayerHero } from '../online/newHero';
 import { sheetIntents, labelFor, quickAttackOption, ABILITY_NAMES } from '../online/actions';
 import HostRoomDrawer from './online/HostRoomDrawer';
 import OnlineToast from './online/OnlineToast';
@@ -1061,6 +1062,10 @@ export default function TavernApp({
   // A player changes the equipment of their own character, or levels it up (already
   // checked by the room: they control it and there is no fight); the rules decide the rest
   directIntentRef.current = (direct, playerId) => {
+    if (direct.kind === 'create') {
+      addPlayerHero(direct.draft, playerId);
+      return;
+    }
     const sheet = memberSheet(partyRef.current, direct.characterId);
     const res = applyOwnChange(sheet, direct, sides => rollDie(sides, { silent: true }));
     if (!res.ok) {
@@ -1073,6 +1078,41 @@ export default function TavernApp({
     }
     if (res.roll) pushSystemMessage(`🎲 ${sheet.name} tira su dado de golpe para subir de nivel: d${levelUpPlan(sheet).hitDie} = ${res.roll}.`);
     handleLevelUpConfirmed(res.character, res.summary);
+  };
+
+  // A player without a character creates one (the room checked: room in the party, no fight,
+  // no character of their own). The host builds the sheet with the rules, at the party's
+  // level and without gold for the purse (see newHero.js); Duncan narrates the arrival.
+  const addPlayerHero = (draft, playerId) => {
+    const built = buildPlayerHero(draft, { level: partyLevel(partyRef.current), rollD6: () => rollDie(6, { silent: true }) });
+    if (!built.ok) {
+      tell(playerId, built.error);
+      return;
+    }
+    const res = addMember(partyRef.current, built.character);
+    if (!res.ok) {
+      tell(playerId, res.error);
+      return;
+    }
+    setParty(res.party);
+    const hero = res.member;
+    const who = playerName(room, playerId);
+    const ids = membersOf(res.party).map(m => m.id);
+    recordEvent(`${hero.name} (${hero.race} · ${hero.className}) se une al grupo; lo juega ${who}`);
+    pushSystemMessage(`🧭 ${hero.name} (${hero.race} · ${hero.className} de nivel ${hero.level}) se une al grupo: lo juega ${who}.${built.rolled ? ` Sus características se tiraron en la mesa del anfitrión (4d6): ${built.rolled.join(', ')}.` : ''}`);
+    const place = currentNode(world)?.name;
+    online.update(r => {
+      const claimed = claimCharacter(r, playerId, hero.id, ids);
+      const next = claimed.ok ? claimed.room : r;
+      const arrival = enqueueAction(next, {
+        playerId,
+        characterId: hero.id,
+        kind: 'text',
+        payload: { text: `Llego${place ? ` a ${place}` : ''} y me presento ante el grupo: soy ${hero.name}, ${hero.race.toLowerCase()} ${hero.className.toLowerCase()}, y me uno a vosotros.` },
+        label: `${hero.name}: llega y se une al grupo`
+      });
+      return arrival.ok ? arrival.room : next;
+    });
   };
 
   const tell = (playerId, text) => {
@@ -1230,7 +1270,11 @@ export default function TavernApp({
       : releaseCharacter(r, r.claims[characterId], characterId, heroIds, { byHost: true })).room || r),
     breakTie: (characterId, playerId) => online.update(r => breakTie(r, characterId, playerId).room || r),
     closeVote: characterId => online.update(r => closeVote(r, characterId)),
-    remove: playerId => online.update(r => removePlayer(r, playerId)),
+    remove: playerId => {
+      const theirs = heroes.filter(h => ownerOf(room, h.id) === playerId).map(h => h.name);
+      online.update(r => removePlayer(r, playerId));
+      if (theirs.length) setOnlineNotice(`${theirs.join(' y ')} ${theirs.length > 1 ? 'se quedan' : 'se queda'} en el grupo y ahora ${theirs.length > 1 ? 'los juegas' : 'lo juegas'} tú. Si quieres que se despida, hazlo desde su ficha («Despedir») o deja que lo cuente la historia.`);
+    },
     closeRoom: () => {
       online.close();
       setIsRoomOpen(false);

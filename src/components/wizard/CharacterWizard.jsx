@@ -80,7 +80,7 @@ function Preview({ draft }) {
  * Full-screen character creation, shown before a new campaign starts.
  * @param {object} props
  * @param {object} props.world              the world the campaign will be played in
- * @param {(character: object) => void} props.onComplete
+ * @param {(character: object, draft: object) => void} props.onComplete  (draft: the choices, for an online host to build the sheet itself)
  * @param {() => void} props.onCancel
  */
 export default function CharacterWizard({ world, onComplete, onCancel, completeLabel = 'Comenzar la aventura' }) {
@@ -134,7 +134,7 @@ export default function CharacterWizard({ world, onComplete, onCancel, completeL
       setShowIssues(true);
       return;
     }
-    if (isSummary) onComplete(character);
+    if (isSummary) onComplete(character, draft);
     else goTo(steps[stepIndex + 1].id);
   };
 

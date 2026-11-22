@@ -7,8 +7,10 @@
 // itself is then played by the host with the same pure functions as offline
 // (party.js, partyActions.js, encounter.js), which check the rules again.
 
+import { cleanDraft } from './newHero';
+import { MAX_PARTY } from '../utils/party';
 import {
-  isConnected, canControl, claimCharacter, releaseCharacter, castVote, restartVotes,
+  isConnected, canControl, claimOf, claimCharacter, releaseCharacter, castVote, restartVotes,
   enqueueAction, cancelAction, addChat
 } from './room';
 
@@ -16,7 +18,7 @@ export const MAX_ACTION_TEXT = 400;
 export const MAX_CHAT_TEXT = 300;
 export const MAX_ID = 80;
 /** Largest signed body accepted from a player (characters, before parsing). */
-export const MAX_INTENT_BYTES = 4000;
+export const MAX_INTENT_BYTES = 8000;
 
 const ABILITIES = ['fue', 'des', 'con', 'int', 'sab', 'car'];
 const ACT_KINDS = ['text', 'check', 'attack', 'spell', 'item'];
@@ -87,6 +89,11 @@ export function sanitizeIntent(raw) {
       const hands = raw.hands && typeof raw.hands === 'object' ? raw.hands : {};
       if (!characterId || (hands.main != null && !id(hands.main)) || (hands.off != null && !id(hands.off)) || (raw.armorId != null && !id(raw.armorId))) return bad;
       return { ok: true, intent: { type: 'equip', characterId, hands: { main: hands.main ?? null, off: hands.off ?? null }, armorId: raw.armorId ?? null } };
+    }
+    case 'create': {
+      // A new character for this player: the wizard's choices (the host builds the sheet)
+      const draft = cleanDraft(raw.draft);
+      return draft ? { ok: true, intent: { type: 'create', draft } } : { ok: false, error: 'La ficha que llegó no es válida.' };
     }
     case 'levelUp': {
       const choices = sanitizeLevelUpChoices(raw.choices);
@@ -162,7 +169,7 @@ export function describeQueued(name, kind, payload, extra = {}) {
  *         | { ok: false, error }}
  *   (also `direct`, see below)
  *   combat: a combat action the host must play now (it is that player's turn).
- *   direct: { kind: 'equip' | 'levelUp', characterId, ... } a change to the player's own
+ *   direct: { kind: 'equip' | 'levelUp', characterId, ... } or { kind: 'create', draft } a change to the player's own
  *   character the host applies now (and checks against the rules: equipment.js, leveling.js).
  */
 export function applyIntent(room, game, playerId, intent) {
@@ -199,6 +206,14 @@ export function applyIntent(room, game, playerId, intent) {
         label: describeQueued(nameOf(intent.characterId), intent.kind, intent.payload, extra)
       });
       return res.ok ? { ok: true, room: res.room, queued: res.item } : res;
+    }
+    case 'create': {
+      if (playerId === room.hostId) return { ok: false, error: 'El anfitrión suma compañeros por la historia.' };
+      if (characterIds.length >= MAX_PARTY) return { ok: false, error: `El grupo ya tiene ${MAX_PARTY} personajes: elige uno libre o espera a la votación.` };
+      if (game.inCombat) return { ok: false, error: 'Espera a que acabe el combate para unirte al grupo.' };
+      const own = claimOf(room, playerId);
+      if (own) return { ok: false, error: `Ya juegas con ${nameOf(own)}: suéltalo antes de crear otro personaje.` };
+      return { ok: true, room, direct: { kind: 'create', draft: intent.draft } };
     }
     case 'equip':
     case 'levelUp': {
