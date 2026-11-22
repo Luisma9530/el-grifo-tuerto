@@ -6,6 +6,7 @@ import { narrateSpell, narrateRest, narrateAttack } from './spellNarration';
 import { narrateCombatEnd, startLocalFight, isAggressive, shopForAction, narrateShopOpening } from './combatNarration';
 import { describeQuestsForPrompt } from './quests';
 import { localQuestScene, bestiaryForHunts } from './localQuests';
+import { localRecruitScene } from './localRecruit';
 
 // Helper to calculate D&D stat modifier from score (e.g. 16 -> +3, 10 -> 0, 8 -> -1)
 export function getModifier(score) {
@@ -124,7 +125,7 @@ export async function testGeminiKey(key) {
 async function askGemini(key, context) {
   const structured = await requestGemini(key, {
     prompt: buildDMPrompt({ ...context, structured: true }),
-    generationConfig: { responseMimeType: 'application/json', responseSchema: dmResponseSchema(context.requestSummary, Boolean(context.bestiary), Boolean(context.allowShop)) }
+    generationConfig: { responseMimeType: 'application/json', responseSchema: dmResponseSchema(context.requestSummary, Boolean(context.bestiary), Boolean(context.allowShop), { allowRecruit: Boolean(context.allowRecruit), allowDeparture: Boolean(context.allowDeparture) }) }
   });
   if (structured.ok || structured.reason !== 'bad-request') return structured;
 
@@ -169,7 +170,8 @@ export async function generateDMResponse({
   playerAction, character, world, history = [], apiKey = null, apiKeys = [], playerRoll = null,
   spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
   summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null,
-  allowShop = false, shopsHere = '', shopTypesHere = [], loot = null, quests = [], here = null
+  allowShop = false, shopsHere = '', shopTypesHere = [], loot = null, quests = [], here = null,
+  companions = '', partySize = 1, partyNames = [], allowRecruit = false, allowDeparture = false
 }) {
   // Rests, finished fights and spells without an attack or a saving throw involve no d20 at all
   const needsNoRoll = Boolean(rest) || Boolean(weaponAttack) || Boolean(combatResult)
@@ -208,7 +210,7 @@ export async function generateDMResponse({
         const reply = await askGemini(keyToUse, {
           playerAction, character, world, history, d20, playerRoll, spellCast, rest, effectsApplied,
           weaponAttack, summary, events, requestSummary, bestiary, combatResult, allowShop, shopsHere,
-          quests: describeQuestsForPrompt(quests)
+          quests: describeQuestsForPrompt(quests), companions, partySize, allowRecruit, allowDeparture
         });
 
         if (reply.ok) {
@@ -225,6 +227,9 @@ export async function generateDMResponse({
               suggestedActions: parsed.suggestedActions,
               // After a finished fight: no damage, healing or XP from the narration (already resolved)
               damageTaken: combatResult ? 0 : parsed.damageTaken,
+              // In a party: who the damage and healing hit (whoever acts when missing)
+              damageTargets: combatResult ? null : parsed.damageTargets,
+              healingTargets: combatResult ? null : parsed.healingTargets,
               healing: combatResult ? 0 : parsed.healing,
               // After a fight the loot was given by the game; in a shop the game handles the gold
               goldEarned: combatResult || shop ? 0 : parsed.goldEarned,
@@ -238,6 +243,9 @@ export async function generateDMResponse({
               conditionChanges: combatResult || startsFight ? [] : parsed.conditionChanges || [],
               // Quests opened, updated or closed by the story (the game pays the rewards)
               questChanges: parsed.questChanges || [],
+              // A companion offers to join, or a member leaves (the game validates and asks the player)
+              recruit: allowRecruit && !startsFight && !combatResult ? parsed.recruit : null,
+              departure: allowDeparture && !combatResult ? parsed.departure : null,
               // A fight that starts is rolled by the game, not by Duncan
               roll: parsed.usedRoll && !playerRoll && !needsNoRoll && !startsFight ? { sides: 20, value: d20 } : null,
               source: 'gemini',
@@ -281,6 +289,8 @@ export async function generateDMResponse({
   let shop = null;
   let questChanges = [];
   let questScene = null;
+  let recruit = null;
+  let recruitScene = null;
   if (combatResult) {
     ({ text, suggestedActions, goldEarned } = narrateCombatEnd(combatResult, { character, rng: Math.random, loot }));
     spellXp = 0;
@@ -349,6 +359,12 @@ La prueba de ${stat} no sale: te quedas corto por poco y la ocasión se te escap
   // Shops: the game opens the counter with its own prices
   else if (allowShop && (shop = shopForAction(actionLower, shopTypesHere))) {
     ({ text, suggestedActions } = narrateShopOpening(shop, { character, world }));
+    spellXp = 0;
+  }
+
+  // Looking for companions: someone offers to join the party
+  else if (allowRecruit && (recruitScene = localRecruitScene(actionLower, { character, partyNames, partySize, rng: Math.random }))) {
+    ({ text, suggestedActions, recruit } = recruitScene);
     spellXp = 0;
   }
 
@@ -514,6 +530,8 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     limbChanges: [],
     conditionChanges: [],
     questChanges,
+    recruit,
+    departure: null,
     // Set when Gemini keys exist but the AI could not answer this turn
     notice: aiFailure ? AI_FAILURE_NOTICES[aiFailure] || AI_FAILURE_NOTICES.overloaded : null,
     // Only when Duncan's own roll is mentioned in the narration

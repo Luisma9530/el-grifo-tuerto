@@ -15,10 +15,11 @@ import { getMonster, eliteVersion, encounterXp, difficultyOf } from '../../utils
 import { playerAction } from '../../utils/encounter';
 import { rollDie } from '../../utils/gameEngine';
 import { animateRoll } from '../../dice3d/controller';
-import { recentFights, groupsFromData, describeGroups, RESULT_LABELS, MAX_SNAPSHOTS } from '../../utils/combatSnapshots';
+import { recentFights, groupsFromData, describeGroups, RESULT_LABELS, MAX_SNAPSHOTS, snapshotHeroes } from '../../utils/combatSnapshots';
 import {
-  simulatorHero, quickHero, levelHeroTo, setPotions, potionCount, startSimulation, fightSummary, simulateMany
+  simulatorHero, simulatorParty, quickHero, levelHeroTo, setPotions, potionCount, startSimulation, fightSummary, simulateMany, MAX_SIM_PARTY
 } from '../../utils/simulator';
+import { normalizeParty, memberSheets } from '../../utils/party';
 
 const combatDie = sides => rollDie(sides, { silent: true });
 const DEFAULT_POTIONS = 2;
@@ -68,21 +69,32 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
     return campaignId ? [...all.filter(f => f.campaignId === campaignId), ...all.filter(f => f.campaignId !== campaignId)] : all;
   }, [campaigns, campaignId]);
 
+  // The whole party of a fight (older snapshots have one hero)
   const fromSnapshot = snapshot => ({
-    base: { hero: simulatorHero(snapshot.character), label: `${snapshot.heroName} · combate del ${formatDate(snapshot.date)}${snapshot.place ? ` en ${snapshot.place}` : ''}`, kind: 'snapshot', minLevel: snapshot.level },
+    members: snapshotHeroes(snapshot).map(h => {
+      const hero = simulatorHero(h);
+      return { base: { hero, label: `${hero.name} · combate del ${formatDate(snapshot.date)}${snapshot.place ? ` en ${snapshot.place}` : ''}`, kind: 'snapshot', minLevel: hero.level || snapshot.level }, hero };
+    }),
     groups: groupsFromData(snapshot.groups, { getMonster, eliteVersion }),
     snapshot
   });
 
   const initial = initialSnapshot ? fromSnapshot(initialSnapshot) : null;
   const [tab, setTab] = useState(initialSnapshot || fights.length ? 'recent' : 'quick');
-  const [base, setBase] = useState(initial?.base || null);   // the chosen hero, before adjustments
-  const [hero, setHero] = useState(initial?.base.hero || null); // the adjusted copy that will fight
+  // The party that will fight (one to four): each member is { base (as chosen), hero (the adjusted copy) }
+  const [members, setMembers] = useState(initial?.members || []);
+  const [selected, setSelected] = useState(0); // the member being adjusted
+  const current = members[Math.min(selected, members.length - 1)] || null;
+  const base = current?.base || null;
+  const hero = current?.hero || null;
+  const heroes = members.map(m => m.hero);
+  const setHero = next => setMembers(list => list.map((m, i) => (i === Math.min(selected, list.length - 1) ? { ...m, hero: typeof next === 'function' ? next(m.hero) : next } : m)));
+  const setBase = next => setMembers(list => list.map((m, i) => (i === Math.min(selected, list.length - 1) ? { ...m, base: next } : m)));
   const [groups, setGroups] = useState(initial?.groups || []);
   const [replaying, setReplaying] = useState(initial?.snapshot || null);
   const [builderOpen, setBuilderOpen] = useState(false);
   const [quick, setQuick] = useState({ classId: CLASSES[0].id, level: 3 });
-  const [fight, setFight] = useState(null); // { encounter, character, start }
+  const [fight, setFight] = useState(null); // { encounter, heroes, start }
   const [phase, setPhase] = useState('setup'); // setup | fight | summary
   const [busy, setBusy] = useState(false);
   const [batch, setBatch] = useState({ runs: 100, healBelow: 35, result: null });
@@ -90,24 +102,50 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
 
   useEscapeKey(!builderOpen && phase !== 'fight', onClose);
 
-  const choose = (nextBase, nextGroups = null, snapshot = null) => {
-    setBase(nextBase);
-    setHero(nextBase.hero);
-    if (nextGroups) setGroups(nextGroups);
-    setReplaying(snapshot);
+  const reset = () => {
     setBatch(b => ({ ...b, result: null }));
     setError('');
   };
-
-  const chooseFight = snapshot => {
-    const { base: b, groups: g } = fromSnapshot(snapshot);
-    if (!g.length) { setError('Los enemigos de ese combate ya no están en el bestiario.'); return; }
-    choose(b, g, snapshot);
+  // A hero joins the party being prepared (when it is full, it replaces the selected one)
+  const choose = nextBase => {
+    setMembers(list => {
+      if (list.length < MAX_SIM_PARTY) {
+        setSelected(list.length);
+        return [...list, { base: nextBase, hero: nextBase.hero }];
+      }
+      return list.map((m, i) => (i === selected ? { base: nextBase, hero: nextBase.hero } : m));
+    });
+    setReplaying(null);
+    reset();
+  };
+  const removeMember = index => {
+    setMembers(list => list.filter((_, i) => i !== index));
+    setSelected(0);
+    reset();
   };
 
-  const chooseCampaignHero = campaign => choose({
-    hero: simulatorHero(campaign.character), label: `${campaign.character.name} · copia de «${campaign.title}»`, kind: 'campaign', minLevel: campaign.character.level || 1
-  });
+  const chooseFight = snapshot => {
+    const { members: m, groups: g } = fromSnapshot(snapshot);
+    if (!g.length) { setError('Los enemigos de ese combate ya no están en el bestiario.'); return; }
+    setMembers(m);
+    setSelected(0);
+    setGroups(g);
+    setReplaying(snapshot);
+    reset();
+  };
+
+  // A campaign: a copy of its whole party
+  const chooseCampaignParty = campaign => {
+    const party = normalizeParty(campaign);
+    if (!party) return;
+    setMembers(memberSheets(party).slice(0, MAX_SIM_PARTY).map(sheet => {
+      const h = simulatorHero(sheet);
+      return { base: { hero: h, label: `${h.name} · copia de «${campaign.title}»`, kind: 'campaign', minLevel: h.level || 1 }, hero: h };
+    }));
+    setSelected(0);
+    setReplaying(null);
+    reset();
+  };
 
   const choosePreset = preset => choose({ hero: simulatorHero(preset), label: `${preset.name} · predefinido`, kind: 'preset' });
 
@@ -136,20 +174,21 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
     }
   };
 
-  const rating = groups.length && hero ? difficultyOf(hero.level || 1, encounterXp(groups)) : null;
+  const levels = heroes.map(h => h.level || 1);
+  const rating = groups.length && heroes.length ? difficultyOf(levels, encounterXp(groups)) : null;
 
   // ------------------------------------------------------------------ fights
   const begin = () => {
-    if (!hero || !groups.length) return;
-    const start = simulatorHero(hero);
-    const { encounter, character } = startSimulation(start, groups, combatDie);
-    setFight({ encounter, character, start });
+    if (!heroes.length || !groups.length) return;
+    const start = simulatorParty(heroes);
+    const { encounter, heroes: fighting } = startSimulation(start, groups, combatDie);
+    setFight({ encounter, heroes: fighting, start });
     setPhase('fight');
   };
 
   const handleAction = async action => {
     if (!fight || busy) return;
-    const result = playerAction(fight.encounter, fight.character, action, combatDie);
+    const result = playerAction(fight.encounter, fight.heroes, action, combatDie);
     if (!result.ok) {
       setFight(f => ({ ...f, encounter: { ...f.encounter, log: [...f.encounter.log, { round: f.encounter.round, kind: 'info', text: `⚠️ ${result.error}` }] } }));
       return;
@@ -158,7 +197,7 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
     try {
       for (const roll of result.animations) await animateRoll(roll);
     } finally {
-      setFight(f => ({ ...f, encounter: result.encounter, character: result.character }));
+      setFight(f => ({ ...f, encounter: result.encounter, heroes: result.heroes }));
       setBusy(false);
     }
   };
@@ -166,11 +205,11 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
   const giveUp = () => setFight(f => ({ ...f, encounter: { ...f.encounter, status: 'fled', log: [...f.encounter.log, { round: f.encounter.round, kind: 'end', text: 'Abandonas el simulacro.' }] } }));
 
   const runBatch = () => {
-    if (!hero || !groups.length) return;
-    setBatch(b => ({ ...b, result: simulateMany(hero, groups, b.runs, { healBelow: b.healBelow / 100 }) }));
+    if (!heroes.length || !groups.length) return;
+    setBatch(b => ({ ...b, result: simulateMany(heroes, groups, b.runs, { healBelow: b.healBelow / 100 }) }));
   };
 
-  const summary = fight && phase === 'summary' ? fightSummary(fight.encounter, fight.start, fight.character) : null;
+  const summary = fight && phase === 'summary' ? fightSummary(fight.encounter, fight.start, fight.heroes) : null;
 
   // ------------------------------------------------------------------ render
   if (phase === 'fight' && fight) {
@@ -179,7 +218,7 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
         <div className="flex-1 min-h-0">
           <CombatView
             encounter={fight.encounter}
-            character={fight.character}
+            heroes={fight.heroes}
             onAction={handleAction}
             onFinish={() => setPhase('summary')}
             busy={busy}
@@ -219,12 +258,24 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
           {error && <p className="text-xs text-red-300 bg-red-950/40 border border-red-900/60 rounded-lg p-2">{error}</p>}
 
           {phase === 'summary' && summary ? (
-            <FightSummaryPanel summary={summary} hero={fight.character} />
+            <FightSummaryPanel summary={summary} />
           ) : (
             <>
               {/* 1. Hero */}
               <section>
-                <h3 className="text-sm font-cinzel font-bold text-sky-100 mb-2">1. El héroe {base && <span className="font-sans font-normal text-xs text-stone-400">— {base.label}</span>}</h3>
+                <h3 className="text-sm font-cinzel font-bold text-sky-100 mb-2">1. El grupo <span className="font-sans font-normal text-xs text-stone-400">— de 1 a {MAX_SIM_PARTY} héroes ({members.length}/{MAX_SIM_PARTY}){members.length >= MAX_SIM_PARTY ? ': el que elijas sustituye al seleccionado' : ''}</span></h3>
+                {members.length > 0 && (
+                  <ul className="flex flex-wrap gap-1.5 mb-3" aria-label="Héroes del simulacro">
+                    {members.map((m, index) => (
+                      <li key={`${m.hero.id}-${index}`} className={`flex items-center gap-1 pl-2 pr-1 py-1 rounded-lg border text-xs ${index === selected ? 'bg-sky-500/20 border-sky-400 text-sky-100' : 'border-stone-800 text-stone-300'}`}>
+                        <button onClick={() => setSelected(index)} aria-pressed={index === selected} title={m.base.label} className="flex items-center gap-1">
+                          <span>{m.hero.avatar}</span><span className="max-w-[9rem] truncate">{m.hero.name}</span><span className="text-stone-500">nv. {m.hero.level || 1}</span>
+                        </button>
+                        <button onClick={() => removeMember(index)} className="p-0.5 rounded text-stone-500 hover:text-red-300" aria-label={`Quitar a ${m.hero.name} del simulacro`}><X className="w-3 h-3" /></button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 <div className="flex flex-wrap gap-1.5 mb-3">
                   {TABS.map(t => {
                     const Icon = t.icon;
@@ -267,10 +318,10 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
                   campaigns.length === 0 ? <p className="text-xs text-stone-500">No tienes campañas guardadas.</p> : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-56 overflow-y-auto pr-1">
                       {campaigns.map(c => (
-                        <button key={c.id} onClick={() => chooseCampaignHero(c)}
+                        <button key={c.id} onClick={() => chooseCampaignParty(c)}
                           className="text-left p-2 rounded-lg bg-[#16121d] border border-stone-800 hover:border-sky-700/60">
-                          <span className="block text-xs text-stone-100 truncate">{c.character.avatar} {c.character.name} · {c.character.className || c.character.class} nv. {c.character.level || 1}</span>
-                          <span className="block text-[10px] text-stone-500 truncate">{c.title} · {c.character.hp}/{c.character.maxHp} PG</span>
+                          <span className="block text-xs text-stone-100 truncate">{(c.party?.members || [c.character]).map(m => `${m.avatar || ''} ${m.name}`).join(' · ')}</span>
+                          <span className="block text-[10px] text-stone-500 truncate">{c.title} · {(c.party?.members?.length || 1) > 1 ? `grupo de ${c.party.members.length}` : `${c.character.className || c.character.class} nv. ${c.character.level || 1}`}</span>
                         </button>
                       ))}
                     </div>
@@ -311,11 +362,11 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
                 <section>
                   <h3 className="text-sm font-cinzel font-bold text-sky-100 mb-2 flex items-center gap-2">
                     <Settings2 className="w-4 h-4" /> Ajustes antes de empezar
-                    <span className="font-sans font-normal text-[11px] text-stone-400">{hero.avatar} {hero.name} · CA {hero.ac}</span>
+                    <span className="font-sans font-normal text-[11px] text-stone-400">{hero.avatar} {hero.name} · CA {hero.ac}{members.length > 1 ? ' (elige arriba a quién ajustar)' : ''}</span>
                     <button onClick={() => setHero(base.hero)} className="ml-auto font-sans font-normal text-[11px] text-sky-300 hover:underline">Deshacer ajustes</button>
                   </h3>
                   <HeroTuner
-                    key={`${base.label}-${hero.level}`}
+                    key={`${selected}-${base.label}-${hero.level}`}
                     hero={hero}
                     onChange={setHero}
                     onLevel={changeLevel}
@@ -331,9 +382,9 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
                 <div className="p-3 rounded-xl bg-[#16121d] border border-red-900/30 flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs text-stone-300">
                     {groups.length ? describeGroups(groups.map(g => ({ monsterName: g.monster.name, count: g.count, name: g.name, elite: g.elite }))) : 'Ninguno todavía.'}
-                    {rating && <span className="ml-2 text-stone-500">· {rating.name} para nivel {hero.level || 1} · {encounterXp(groups)} PX</span>}
+                    {rating && <span className="ml-2 text-stone-500">· {rating.name} para {heroes.length > 1 ? `el grupo (niveles ${levels.join(', ')})` : `nivel ${hero.level || 1}`} · {encounterXp(groups)} PX</span>}
                   </p>
-                  <button disabled={!hero} onClick={() => setBuilderOpen(true)}
+                  <button disabled={!heroes.length} onClick={() => setBuilderOpen(true)}
                     className="px-3 py-1.5 rounded-lg bg-red-800 hover:bg-red-700 disabled:opacity-40 text-white text-xs font-bold flex items-center gap-1.5">
                     <Swords className="w-3.5 h-3.5" /> {groups.length ? 'Cambiar enemigos' : 'Elegir enemigos'}
                   </button>
@@ -341,7 +392,7 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
               </section>
 
               {/* Optional: many fights with a simple AI */}
-              {hero && groups.length > 0 && (
+              {heroes.length > 0 && groups.length > 0 && (
                 <section className="p-3 rounded-xl bg-[#121620] border border-sky-900/40">
                   <h3 className="text-xs font-bold text-sky-100 mb-2 flex items-center gap-1.5"><BarChart3 className="w-3.5 h-3.5" /> Simular N veces (IA sencilla)</h3>
                   <div className="flex flex-wrap items-center gap-2 text-xs text-stone-300">
@@ -355,14 +406,15 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
                     </label>
                     <button onClick={runBatch} className="px-3 py-1.5 rounded-lg bg-sky-800 hover:bg-sky-700 text-white font-bold">Simular</button>
                   </div>
-                  <p className="mt-1 text-[10px] text-stone-500">El héroe ataca con su mejor arma o truco al enemigo más débil y se cura por debajo del umbral. No gasta espacios de conjuro.</p>
+                  <p className="mt-1 text-[10px] text-stone-500">Cada héroe ataca con su mejor arma o truco al enemigo más débil, se cura por debajo del umbral y da una poción a un compañero inconsciente. No gasta espacios de conjuro.</p>
                   {batch.result && (
-                    <div className="mt-2 grid grid-cols-2 sm:grid-cols-5 gap-2 text-center">
+                    <div className={`mt-2 grid grid-cols-2 ${heroes.length > 1 ? 'sm:grid-cols-6' : 'sm:grid-cols-5'} gap-2 text-center`}>
                       <Stat label="Victorias" value={percent(batch.result.winRate)} tone="text-emerald-300" />
                       <Stat label="Derrotas" value={`${batch.result.defeat}/${batch.result.runs}`} tone="text-red-300" />
                       <Stat label="Rondas (media)" value={batch.result.avgRounds.toFixed(1)} />
                       <Stat label="PG al ganar" value={percent(batch.result.avgHpLeft)} />
                       <Stat label="Pociones (media)" value={batch.result.avgPotions.toFixed(1)} />
+                      {heroes.length > 1 && <Stat label="Caídos al ganar" value={batch.result.avgFallen.toFixed(1)} />}
                     </div>
                   )}
                 </section>
@@ -382,7 +434,7 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
               </button>
             </>
           ) : (
-            <button onClick={begin} disabled={!hero || !groups.length}
+            <button onClick={begin} disabled={!heroes.length || !groups.length}
               className="px-5 py-2.5 rounded-xl text-sm font-cinzel font-bold flex items-center gap-2 bg-gradient-to-r from-sky-700 to-sky-600 hover:brightness-110 text-white disabled:opacity-40">
               <Swords className="w-4 h-4" /> ¡Al simulacro!
             </button>
@@ -393,6 +445,7 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
       {builderOpen && hero && (
         <EncounterBuilder
           character={hero}
+          party={heroes}
           world={replaying?.worldId ? { id: replaying.worldId } : null}
           initialGroups={groups}
           allowElite
@@ -422,14 +475,27 @@ const OUTCOME = {
   timeout: { text: 'Sin final', icon: Footprints, tone: 'text-stone-300' }
 };
 
-function FightSummaryPanel({ summary, hero }) {
+function FightSummaryPanel({ summary }) {
   const outcome = OUTCOME[summary.status] || OUTCOME.timeout;
   const Icon = outcome.icon;
+  const group = summary.heroes.length > 1;
+  const lone = summary.heroes[0];
   return (
     <div className="space-y-3">
       <p className={`text-lg font-cinzel font-bold flex items-center gap-2 ${outcome.tone}`}>
-        <Icon className="w-5 h-5" /> {outcome.text} <span className="text-sm font-sans font-normal text-stone-400">· {hero.name} termina con {summary.hpLeft}/{hero.maxHp} PG</span>
+        <Icon className="w-5 h-5" /> {outcome.text}
+        {!group && lone && <span className="text-sm font-sans font-normal text-stone-400">· {lone.name} termina con {lone.hp}/{lone.maxHp} PG</span>}
       </p>
+      {group && (
+        <ul className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-xs">
+          {summary.heroes.map(h => (
+            <li key={h.name} className="p-2 rounded-lg bg-[#121620] border border-sky-900/40 flex justify-between gap-2">
+              <span className="text-stone-100 truncate">{h.avatar} {h.name}{h.hp <= 0 ? ' 💤' : ''}</span>
+              <span className="font-mono text-stone-400 shrink-0">{h.hp}/{h.maxHp} PG · −{h.taken} · {h.potionsUsed} poc.</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center">
         <Stat label="Rondas" value={summary.rounds} />
         <Stat label="Daño hecho" value={summary.dealt} tone="text-emerald-300" />

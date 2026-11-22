@@ -369,6 +369,9 @@ export default function CampaignsModal({
                             <span>{camp.character?.avatar || '👤'}</span>
                             <strong className="text-amber-200">{camp.character?.name}</strong>
                             <span>({camp.character?.class})</span>
+                            {camp.party?.members?.length > 1 && (
+                              <span className="text-stone-400" title={camp.party.members.map(m => m.name).join(', ')}>+{camp.party.members.length - 1} en el grupo</span>
+                            )}
                           </span>
 
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-950/30 border border-amber-900/40 text-amber-300">

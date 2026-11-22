@@ -4,15 +4,16 @@ import { spellRows, slotTable, slotRecovery, spellSummary, hasHitDie, hitDiceLef
 import { formatModifier } from '../../utils/characterBuilder';
 
 /** Short and long rest buttons (shown in the spells tab and at the tavern bar). */
-export function RestButtons({ character, onRest, busy }) {
+export function RestButtons({ character, onRest, busy, cost = LONG_REST_COST, partySize = 1 }) {
   const pactMagic = slotRecovery(character.spellcasting) === 'short';
   const shortRestHelps = (hasHitDie(character) && character.hp < character.maxHp)
     || (pactMagic && slotTable(character.spellcasting).some(row => row.used > 0));
-  const canAffordRoom = character.gold >= LONG_REST_COST;
+  const canAffordRoom = character.gold >= cost;
+  const group = partySize > 1;
 
   return (
     <div className="p-3 rounded-xl bg-stone-900/60 border border-stone-800">
-      <span className="text-[10px] font-mono uppercase text-stone-400 tracking-wider block mb-2">Descansar:</span>
+      <span className="text-[10px] font-mono uppercase text-stone-400 tracking-wider block mb-2">{group ? `Descansar (todo el grupo, ${partySize}):` : 'Descansar:'}</span>
       <div className="grid grid-cols-2 gap-2">
         <button
           onClick={() => onRest('short')}
@@ -28,12 +29,12 @@ export function RestButtons({ character, onRest, busy }) {
           onClick={() => onRest('long')}
           disabled={busy || !canAffordRoom}
           title={canAffordRoom
-            ? 'Una noche en la posada: recuperas todos tus puntos de golpe y conjuros'
-            : `Necesitas ${LONG_REST_COST} po para la habitación`}
+            ? (group ? `Una noche en la posada, una habitación por cabeza (${LONG_REST_COST} po cada una): todos recuperan PG y conjuros` : 'Una noche en la posada: recuperas todos tus puntos de golpe y conjuros')
+            : `Necesitáis ${cost} po para ${group ? 'las habitaciones' : 'la habitación'}`}
           className="px-2.5 py-2 rounded-lg bg-[#1c1726] hover:bg-amber-950/40 border border-stone-700 hover:border-amber-600/50 disabled:opacity-40 text-xs text-stone-200 flex items-center justify-center gap-1.5 transition-colors"
         >
           <BedDouble className="w-3.5 h-3.5 text-amber-400" /> Descanso largo
-          <span className="font-mono text-amber-300">{LONG_REST_COST} po</span>
+          <span className="font-mono text-amber-300">{cost} po</span>
         </button>
       </div>
     </div>
@@ -85,7 +86,7 @@ function SpellList({ title, rows, onCast, busy }) {
 }
 
 /** Spells tab of the character sheet: slots, target, cantrips and prepared spells. */
-export default function SpellsTab({ character, onCastSpell, onRest, busy }) {
+export default function SpellsTab({ character, onCastSpell, onRest, busy, partyNames = [], restCost, partySize = 1 }) {
   const [target, setTarget] = useState('');
   const rows = spellRows(character);
   const slots = slotTable(character.spellcasting);
@@ -134,6 +135,17 @@ export default function SpellsTab({ character, onCastSpell, onRest, busy }) {
           placeholder="el encapuchado, la puerta, mí mismo…"
           className="w-full bg-[#1a1523] border border-stone-800 focus:border-purple-500 rounded-lg px-3 py-1.5 text-xs text-stone-100 placeholder-stone-600 focus:outline-none"
         />
+        {partyNames.length > 1 && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px]">
+            <span className="text-stone-500">Curar a un compañero:</span>
+            {partyNames.filter(n => n !== character.name).map(name => (
+              <button key={name} type="button" onClick={() => setTarget(name)}
+                className={`px-1.5 py-0.5 rounded border ${target === name ? 'border-purple-400 text-purple-200' : 'border-stone-700 text-stone-400 hover:text-stone-200'}`}>
+                {name}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <SpellList title="Trucos (a voluntad):" rows={rows.filter(s => s.level === 0)} onCast={cast} busy={busy} />
@@ -141,7 +153,7 @@ export default function SpellsTab({ character, onCastSpell, onRest, busy }) {
         <SpellList key={level} title={`Conjuros de nivel ${level}:`} rows={rows.filter(s => s.level === level)} onCast={cast} busy={busy} />
       ))}
 
-      <RestButtons character={character} onRest={onRest} busy={busy} />
+      <RestButtons character={character} onRest={onRest} busy={busy} cost={restCost} partySize={partySize} />
     </div>
   );
 }

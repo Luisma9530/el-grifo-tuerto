@@ -1,34 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Volume2, VolumeX, Users, Settings, ArrowLeft, Dice5, Compass, User, Sparkles, BookOpen, Download, Check, AlertTriangle, FlaskConical, RotateCcw } from 'lucide-react';
+import { Volume2, VolumeX, Users, Settings, ArrowLeft, Download, Check, AlertTriangle, FlaskConical, RotateCcw, BookOpen, Sparkles } from 'lucide-react';
 import PartyPanel from './game/PartyPanel';
 import StoryStream from './game/StoryStream';
 import WorldMapPanel from './game/WorldMapPanel';
 import DiceRollerTray from './game/DiceRollerTray';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from '../data/gameData';
 import { generateDMResponse, rollCheck, rollDie, getStoredGeminiKeys } from '../utils/gameEngine';
-import { castSpell, describeCast, longRest, shortRest, LONG_REST_COST } from '../utils/spellcasting';
-import { 
-  saveCampaign, 
-  createNewCampaign, 
-  getCampaignById, 
-  getActiveCampaignId, 
+import { castSpell, describeCast } from '../utils/spellcasting';
+import {
+  saveCampaign,
+  createNewCampaign,
+  getCampaignById,
+  getActiveCampaignId,
   exportCampaignAsJson,
   getLastSaveError,
-  isQuotaError
+  isQuotaError,
+  migrateCampaign
 } from '../utils/campaignStorage';
 import { tavernAudio } from '../utils/audio';
 import { animateRoll, is3DDiceEnabled } from '../dice3d/controller';
-import { applySceneOutcome, rescueKnockedOut } from '../utils/sceneOutcome';
-import { createEncounter, runEnemyTurns, playerAction, describeEncounterResult, injuriesIn } from '../utils/encounter';
-import { normalizeEquipment, applyLimbChanges, limbFact } from '../utils/equipment';
 import {
-  checkModifiers, applyConditionChanges, describeConditionChange, conditionFact, endCombatConditions,
-  restConditions, reduceExhaustion, isIncapacitated, activeIds, conditionName
+  createEncounter, runEnemyTurns, playerAction, describeEncounterResult, injuriesIn, currentHeroUid
+} from '../utils/encounter';
+import { normalizeEquipment, limbFact } from '../utils/equipment';
+import {
+  checkModifiers, describeConditionChange, conditionFact, isIncapacitated, activeIds, conditionName, describeConditionsForPrompt
 } from '../utils/conditions';
 import { keyMoments, narrateMoment, MAX_MOMENTS } from '../utils/combatNarration';
 import CombatView from './game/CombatView';
 import { makeSnapshot, addSnapshot, setSnapshotResult, normalizeSnapshots } from '../utils/combatSnapshots';
-import { addXp, canLevelUp, describeLevelUp } from '../utils/leveling';
+import { canLevelUp, describeLevelUp } from '../utils/leveling';
 import LevelUpModal from './game/LevelUpModal';
 import {
   historyForPrompt, needsSummary, coverageAfterSummary, addEvent, eventsForPrompt
@@ -38,17 +39,28 @@ import { skillModifier, getSkill } from '../utils/characterBuilder';
 import {
   openShop, shopKey, currentNode, shopsAt, buyItem, sellItem, describeTrade, describeShopsForPrompt, normalizeShops, SHOP_TYPES
 } from '../utils/shops';
-import { drinkPotion, healingDice, addItem, roundCoins } from '../utils/items';
+import { drinkPotion, healingDice } from '../utils/items';
 import { generateLoot, describeLoot } from '../utils/loot';
 import ShopModal from './game/ShopModal';
 import {
-  normalizeQuests, applyQuestChanges, abandonQuest, describeQuestChange, questFact, unseenQuestCount, payReward
+  normalizeQuests, applyQuestChanges, abandonQuest, describeQuestChange, questFact, unseenQuestCount
 } from '../utils/quests';
 import { huntChangesAfterVictory, withHuntTargets } from '../utils/localQuests';
+import {
+  createParty, activeSheet, memberSheet, memberSheets, updateMember, setActiveMember, mergeHeroes,
+  addMember, removeMember, transferItem, describeCompanions, findMemberByName, partyLevel, MAX_PARTY, members as membersOf
+} from '../utils/party';
+import {
+  restParty, finishFight, storyXp, payPartyReward, longRestCost, applySceneEffects, applySceneConditions, applySceneLimbs
+} from '../utils/partyActions';
+import { makeRecruitOffer, departingMember } from '../utils/recruit';
 
 // The bestiary (and its builder) is only needed when a fight is being prepared
 // The bestiary is big: loaded the first time Duncan may start a fight
 const loadBestiary = () => import('../utils/bestiary');
+
+const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const levelReadyLine = name => `✨ ¡${name} tiene experiencia suficiente para subir de nivel! Selecciónalo y pulsa «Subir de nivel» en su ficha.`;
 
 export default function TavernApp({
   activeCampaign = null,
@@ -69,33 +81,34 @@ export default function TavernApp({
     return null;
   });
 
+  // Campaign memory for the AI Dungeon Master (see campaignMemory.js)
+  const storedCampaign = () => activeCampaign || (currentCampaignId ? getCampaignById(currentCampaignId) : null);
+
   const [campaignTitle, setCampaignTitle] = useState(() => {
-    if (activeCampaign?.title) return activeCampaign.title;
-    if (currentCampaignId) {
-      const camp = getCampaignById(currentCampaignId);
-      if (camp) return camp.title;
-    }
+    const camp = storedCampaign();
+    if (camp?.title) return camp.title;
     return `${activeCharacter?.name || 'Héroe'} en ${activeWorld?.name || 'la Taberna'}`;
   });
 
-  const [world, setWorld] = useState(() => {
-    if (activeCampaign?.world) return activeCampaign.world;
-    if (currentCampaignId) {
-      const camp = getCampaignById(currentCampaignId);
-      if (camp?.world) return camp.world;
-    }
-    return activeWorld;
-  });
+  const [world, setWorld] = useState(() => storedCampaign()?.world || activeWorld);
 
-  // Older saves get hands and limbs (see equipment.js)
-  const [character, setCharacter] = useState(() => {
-    if (activeCampaign?.character) return normalizeEquipment(activeCampaign.character);
-    if (currentCampaignId) {
-      const camp = getCampaignById(currentCampaignId);
-      if (camp?.character) return normalizeEquipment(camp.character);
-    }
-    return normalizeEquipment(activeCharacter);
+  // The party (see party.js): older campaigns become a party of one. The ref
+  // holds the latest party for handlers that wait on Duncan or on the dice.
+  const [party, setPartyState] = useState(() => {
+    const camp = storedCampaign();
+    return (camp && migrateCampaign(camp).party) || createParty([activeCharacter]);
   });
+  const partyRef = useRef(party);
+  const setParty = next => {
+    const value = typeof next === 'function' ? next(partyRef.current) : next;
+    partyRef.current = value;
+    setPartyState(value);
+  };
+  // Change one member (functions get the latest sheet, with the purse as `gold`)
+  const updateMemberState = (id, update) => setParty(p => updateMember(p, id, update));
+  // The member who acts outside combat
+  const character = activeSheet(party);
+  const setCharacter = update => updateMemberState(character.id, update);
 
   const [isAudioActive, setIsAudioActive] = useState(false);
   const [mobileTab, setMobileTab] = useState('story'); // 'story' | 'party' | 'map'
@@ -103,11 +116,8 @@ export default function TavernApp({
   const [geminiKeys, setGeminiKeys] = useState(() => getStoredGeminiKeys());
 
   const [suggestedActions, setSuggestedActions] = useState(() => {
-    if (activeCampaign?.suggestedActions?.length > 0) return activeCampaign.suggestedActions;
-    if (currentCampaignId) {
-      const camp = getCampaignById(currentCampaignId);
-      if (camp?.suggestedActions?.length > 0) return camp.suggestedActions;
-    }
+    const camp = storedCampaign();
+    if (camp?.suggestedActions?.length > 0) return camp.suggestedActions;
     return [
       'Preguntar a Maese Duncan por el encapuchado del rincón',
       'Pedir una jarra de cerveza negra para entrar en calor',
@@ -117,29 +127,21 @@ export default function TavernApp({
   });
 
   const [messages, setMessages] = useState(() => {
-    if (activeCampaign?.messages?.length > 0) return activeCampaign.messages;
-    if (currentCampaignId) {
-      const camp = getCampaignById(currentCampaignId);
-      if (camp?.messages?.length > 0) return camp.messages;
-    }
-    return [
-      {
-        sender: 'duncan',
-        text: activeWorld.initialStory,
-        timestamp: 'Inicio de Campaña'
-      }
-    ];
+    const camp = storedCampaign();
+    if (camp?.messages?.length > 0) return camp.messages;
+    return [{ sender: 'duncan', text: activeWorld.initialStory, timestamp: 'Inicio de Campaña' }];
   });
 
-  // Campaign memory for the AI Dungeon Master (see campaignMemory.js)
-  const storedCampaign = () => activeCampaign || (currentCampaignId ? getCampaignById(currentCampaignId) : null);
   const [summary, setSummary] = useState(() => storedCampaign()?.summary || '');
   const [summaryCoverage, setSummaryCoverage] = useState(() => storedCampaign()?.summaryCoverage || 0);
   const [events, setEvents] = useState(() => storedCampaign()?.events || []);
   const recordEvent = text => setEvents(prev => addEvent(prev, text));
 
   // Combat encounter in progress (null outside combat); saved with the campaign
-  const [encounter, setEncounter] = useState(() => storedCampaign()?.encounter || null);
+  const [encounter, setEncounter] = useState(() => {
+    const camp = storedCampaign();
+    return camp ? migrateCampaign(camp).encounter || null : null;
+  });
   // How each recent fight started (the last MAX_SNAPSHOTS), to replay it in the simulator
   const [combatSnapshots, setCombatSnapshots] = useState(() => normalizeSnapshots(storedCampaign()?.combatSnapshots));
 
@@ -147,6 +149,9 @@ export default function TavernApp({
   const [shops, setShops] = useState(() => normalizeShops(storedCampaign()?.shops));
   const [activeShopKey, setActiveShopKey] = useState(null);
   const [combatBusy, setCombatBusy] = useState(false);
+
+  // A companion who offered to join (by the story), waiting for the player's answer
+  const [pendingRecruit, setPendingRecruit] = useState(() => storedCampaign()?.pendingRecruit || null);
 
   // Quest journal (see quests.js): opened and closed by the story, saved with the campaign.
   // The ref holds the latest list for handlers that wait on Duncan.
@@ -164,8 +169,6 @@ export default function TavernApp({
   // Guards against double-creation under React.StrictMode (effects run twice in dev)
   const campaignInitRef = useRef(false);
   // Skip prop-sync effects on first mount so a stored campaign isn't overwritten by default props
-  // (compare with the previous prop value; a "first run" flag breaks under StrictMode's double effects)
-  const prevActiveCharacterRef = useRef(activeCharacter);
   const prevActiveWorldRef = useRef(activeWorld);
 
   // Warm up the 3D dice engine in the background so the first roll starts instantly
@@ -182,14 +185,8 @@ export default function TavernApp({
     if (campaignInitRef.current) return;
     campaignInitRef.current = true;
     if (!currentCampaignId) {
-      const newCamp = createNewCampaign({
-        world,
-        character,
-        title: campaignTitle
-      });
-      if (newCamp) {
-        setCurrentCampaignId(newCamp.id);
-      }
+      const newCamp = createNewCampaign({ world, party, title: campaignTitle });
+      if (newCamp) setCurrentCampaignId(newCamp.id);
     }
     // Run once on mount only: creates the campaign from the initial state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -198,34 +195,26 @@ export default function TavernApp({
   // When activeCampaign prop changes from modal
   useEffect(() => {
     if (activeCampaign) {
-      setCurrentCampaignId(activeCampaign.id);
-      setCampaignTitle(activeCampaign.title);
-      setWorld(activeCampaign.world);
-      setCharacter(normalizeEquipment(activeCampaign.character));
-      setMessages(activeCampaign.messages || []);
-      setSummary(activeCampaign.summary || '');
-      setSummaryCoverage(activeCampaign.summaryCoverage || 0);
-      setEvents(activeCampaign.events || []);
-      setEncounter(activeCampaign.encounter || null);
-      setCombatSnapshots(normalizeSnapshots(activeCampaign.combatSnapshots));
-      setShops(normalizeShops(activeCampaign.shops));
-      setQuests(normalizeQuests(activeCampaign.quests));
+      const camp = migrateCampaign(activeCampaign);
+      setCurrentCampaignId(camp.id);
+      setCampaignTitle(camp.title);
+      setWorld(camp.world);
+      setParty(camp.party);
+      setMessages(camp.messages || []);
+      setSummary(camp.summary || '');
+      setSummaryCoverage(camp.summaryCoverage || 0);
+      setEvents(camp.events || []);
+      setEncounter(camp.encounter || null);
+      setCombatSnapshots(normalizeSnapshots(camp.combatSnapshots));
+      setShops(normalizeShops(camp.shops));
+      setQuests(normalizeQuests(camp.quests));
+      setPendingRecruit(camp.pendingRecruit || null);
       setActiveShopKey(null);
-      if (activeCampaign.suggestedActions?.length > 0) {
-        setSuggestedActions(activeCampaign.suggestedActions);
+      if (camp.suggestedActions?.length > 0) {
+        setSuggestedActions(camp.suggestedActions);
       }
     }
   }, [activeCampaign]);
-
-  // Keep character synced if activeCharacter prop changes (e.g. Character Creator),
-  // also inside an active campaign: the new hero replaces the campaign's character.
-  useEffect(() => {
-    if (prevActiveCharacterRef.current === activeCharacter) return;
-    prevActiveCharacterRef.current = activeCharacter;
-    if (activeCharacter) {
-      setCharacter(normalizeEquipment(activeCharacter));
-    }
-  }, [activeCharacter]);
 
   // Keep world synced if activeWorld prop changes from modal
   useEffect(() => {
@@ -245,7 +234,7 @@ export default function TavernApp({
       id: currentCampaignId,
       title: campaignTitle,
       world,
-      character,
+      party,
       messages,
       suggestedActions,
       summary,
@@ -254,23 +243,28 @@ export default function TavernApp({
       encounter,
       shops,
       combatSnapshots,
-      quests
+      quests,
+      pendingRecruit
     });
     if (saved) {
       setSaveStatus('saved');
     } else {
       setSaveStatus(isQuotaError(getLastSaveError()) ? 'quota' : 'error');
     }
-  }, [messages, character, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter, shops, combatSnapshots, quests]);
+  }, [messages, party, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter, shops, combatSnapshots, quests, pendingRecruit]);
 
   const toggleSound = () => {
     const newState = tavernAudio.toggleTavernAmbience();
     setIsAudioActive(newState);
   };
 
+  const pushSystemMessage = (text) => {
+    setMessages(prev => [...prev, { sender: 'system', text, timestamp: now() }]);
+  };
+
   // Main Action Dispatcher
-  // `sheet`: pass the just-updated character when the caller changed it in this same tick
-  // (state updates are not visible here until the next render)
+  // `sheet`: the member who acts, as it is now (pass the just-updated sheet when the
+  // caller changed it in this same tick: state updates are not visible here until the next render)
   // `spellCast` / `rest`: what the action was, so the Dungeon Master narrates it properly
   // `effectsApplied`: HP / gold for this action were already changed here (drinks, rests, healing)
   const handleSendAction = async (actionText, {
@@ -278,15 +272,14 @@ export default function TavernApp({
     weaponAttack = null, combatResult = null, loot = null
   } = {}) => {
     if (!actionText || isGenerating) return;
+    const actorId = sheet.id;
+    const partyNow = partyRef.current;
+    const size = membersOf(partyNow).length;
 
-    // Add player's action to messages (not for the narration after a fight)
+    // Add the action to messages, with who did it (not for the narration after a fight)
     const newMsgList = combatResult ? messages : [
       ...messages,
-      {
-        sender: 'player',
-        text: actionText,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      }
+      { sender: 'player', actor: sheet.name, avatar: sheet.avatar, text: actionText, timestamp: now() }
     ];
     // (the fight's own system lines were just added with functional updates: keep them)
     if (!combatResult) setMessages(newMsgList);
@@ -298,13 +291,14 @@ export default function TavernApp({
 
       // A plain action outside combat may start a fight: Duncan gets a short list of creatures
       const mayStartFight = !encounter && !combatResult && !playerRoll && !spellCast && !rest && !weaponAttack;
-      // ...or open a shop (the game sets the prices)
+      // ...or open a shop (the game sets the prices), or bring in a companion
       const here = currentNode(world);
+      const levels = membersOf(partyNow).map(m => m.level || 1);
       const bestiaryModule = mayStartFight ? await loadBestiary().catch(() => null) : null;
       // (the target of an active hunt is always among them)
       const bestiary = bestiaryModule
         ? withHuntTargets(
-          bestiaryModule.encounterCandidates(sheet.level || 1, { tags: bestiaryModule.WORLD_TAGS[world?.id] || null }),
+          bestiaryModule.encounterCandidates(levels, { tags: bestiaryModule.WORLD_TAGS[world?.id] || null }),
           questsRef.current, bestiaryModule.getMonster
         )
         : null;
@@ -333,11 +327,16 @@ export default function TavernApp({
         shopTypesHere: shopsAt(here, world),
         loot,
         quests: questsRef.current,
-        here
+        here,
+        companions: describeCompanions(partyNow, actorId, describeConditionsForPrompt),
+        partySize: size,
+        partyNames: membersOf(partyNow).map(m => m.name),
+        allowRecruit: mayStartFight && size < MAX_PARTY && !pendingRecruit,
+        allowDeparture: !combatResult && !encounter && size > 1
       });
       // A fight starts: the game resolves it, so nothing from this reply touches the sheet
       const fightGroups = response.combat && bestiaryModule
-        ? bestiaryModule.resolveCombatRequest(response.combat, sheet.level || 1)
+        ? bestiaryModule.resolveCombatRequest(response.combat, levels)
         : [];
       if (fightGroups.length) {
         response.damageTaken = 0;
@@ -346,8 +345,9 @@ export default function TavernApp({
         response.xpEarned = 0;
       }
       // Quests opened, updated or closed by the story; the game pays the rewards it fixed
+      // (rewards sized to the party's level; gold to the purse, the item to who acted, XP to everyone)
       const questResult = applyQuestChanges(questsRef.current, response.questChanges || [], {
-        character: sheet, scene: newMsgList.length + 1, place: here?.name || ''
+        character: { ...sheet, level: partyLevel(partyNow) }, scene: newMsgList.length + 1, place: here?.name || ''
       });
       const questsPaid = questResult.applied.filter(a => a.action === 'complete');
       if (questResult.applied.length) {
@@ -358,7 +358,6 @@ export default function TavernApp({
         // The reward is the one promised: nothing extra from the narration of this scene
         response.goldEarned = Math.min(0, response.goldEarned || 0);
         response.xpEarned = 0;
-        setCharacter(prev => questsPaid.reduce((hero, a) => payReward(hero, a.quest.reward).character, prev));
       }
       if (response.summary) {
         setSummary(response.summary);
@@ -372,49 +371,52 @@ export default function TavernApp({
         await animateRoll({ ...response.roll, label: isEnemySave ? 'Salvación del objetivo' : 'Tirada de acción' });
       }
 
-      // Apply the consequences of the scene to the character sheet
+      // Apply the consequences of the scene: to the member who acted, or to the members
+      // Duncan names (a trap, an explosion...); the gold is the party's (see partyActions.js).
       // When the game already applied this action's healing and gold, the narrator can only add damage
       const damage = response.damageTaken || 0;
       const healing = effectsApplied ? 0 : response.healing || 0;
       const goldChange = effectsApplied ? 0 : response.goldEarned || 0;
-      const effects = { damage, healing, goldChange };
-      const outcome = applySceneOutcome(sheet, effects);
-      if (damage || healing || goldChange) {
-        // Recomputed from the latest state, in case the sheet changed while Duncan was thinking
-        setCharacter(prev => {
-          const next = applySceneOutcome(prev, effects);
-          return { ...prev, hp: next.hp, gold: next.gold };
-        });
-      }
+      const scene = applySceneEffects(partyRef.current, actorId, {
+        damage, healing, goldChange, damageTargets: response.damageTargets, healingTargets: response.healingTargets
+      });
+      if (damage || healing || goldChange) setParty(scene.party);
+      const groupHit = scene.hit.length > 1 || (scene.hit[0] && scene.hit[0] !== sheet.name);
+      const groupHealed = scene.healed.length > 1 || (scene.healed[0] && scene.healed[0] !== sheet.name);
 
       // Limbs lost, disabled or healed in the story (validated by parseDMReply)
-      const limbs = fightGroups.length ? { applied: [] } : applyLimbChanges(sheet, response.limbChanges || []);
+      const limbs = fightGroups.length ? { applied: [] } : applySceneLimbs(partyRef.current, actorId, response.limbChanges || []);
       if (limbs.applied.length) {
-        setCharacter(prev => applyLimbChanges(prev, response.limbChanges).character);
-        limbs.applied.forEach(change => recordEvent(limbFact(sheet.name, change)));
+        setParty(limbs.party);
+        limbs.applied.forEach(({ name, change }) => recordEvent(limbFact(name, change)));
       }
 
       // Conditions applied or removed by the story (validated by parseDMReply)
-      const conditionResult = fightGroups.length ? { applied: [], collapsed: false } : applyConditionChanges(sheet, response.conditionChanges || []);
+      const conditionResult = fightGroups.length ? { applied: [], collapsed: [] } : applySceneConditions(partyRef.current, actorId, response.conditionChanges || []);
       if (conditionResult.applied.length) {
-        setCharacter(prev => {
-          const next = applyConditionChanges(prev, response.conditionChanges).character;
-          // Exhaustion 6: the hero collapses and Duncan picks them up (level 5 left)
-          if (!conditionResult.collapsed) return next;
-          const rescue = rescueKnockedOut(next);
-          return { ...reduceExhaustion(next, 1).creature, hp: Math.min(next.hp, rescue.hp), gold: rescue.gold };
-        });
-        conditionResult.applied.forEach(change => {
-          const fact = conditionFact(sheet.name, change);
+        setParty(conditionResult.party);
+        conditionResult.applied.forEach(({ name, change }) => {
+          const fact = conditionFact(name, change);
           if (fact) recordEvent(fact);
         });
       }
 
-      // Experience: tell the player once when they can go up a level
-      const questXp = questsPaid.reduce((sum, a) => sum + (a.given?.xp || 0), 0);
-      const xpGained = (response.xpEarned || 0) + questXp;
-      const reachesNewLevel = xpGained > 0 && !canLevelUp(sheet) && canLevelUp(addXp(sheet, xpGained));
-      if (response.xpEarned > 0) setCharacter(prev => addXp(prev, response.xpEarned));
+      // Experience from the story goes to every member; quest rewards to the party
+      const ready = new Set();
+      if (response.xpEarned > 0 || questsPaid.length) {
+        let next = partyRef.current;
+        if (response.xpEarned > 0) {
+          const res = storyXp(next, response.xpEarned);
+          next = res.party;
+          res.ready.forEach(n => ready.add(n));
+        }
+        questsPaid.forEach(a => {
+          const res = payPartyReward(next, a.quest.reward, actorId);
+          next = res.party;
+          res.ready.forEach(n => ready.add(n));
+        });
+        setParty(next);
+      }
 
       setMessages(prev => [
         ...prev,
@@ -426,47 +428,62 @@ export default function TavernApp({
           xp: response.xpEarned || undefined,
           keyIndex: response.keyIndex,
           totalKeys: response.totalKeys,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          timestamp: now()
         }
       ]);
 
-      limbs.applied.forEach(change => {
+      if (groupHit) pushSystemMessage(`🩸 ${scene.hit.join(', ')} ${scene.hit.length > 1 ? 'pierden' : 'pierde'} ${damage} PG${scene.hit.length > 1 ? ' cada uno' : ''}.`);
+      if (groupHealed) pushSystemMessage(`💚 ${scene.healed.join(', ')} ${scene.healed.length > 1 ? 'recuperan' : 'recupera'} ${healing} PG${scene.healed.length > 1 ? ' cada uno' : ''}.`);
+
+      limbs.applied.forEach(({ name, change }) => {
         const icon = change.status === 'ok' ? '🩹' : '🦴';
         const dropped = change.dropped.length ? ` ${change.dropped.join(' y ')} va${change.dropped.length > 1 ? 'n' : ''} a la mochila.` : '';
         const effect = change.status === 'ok' ? ''
           : /Arm$/.test(change.limb) ? ' Esa mano ya no puede sostener nada.' : ' Huir de un combate será más difícil.';
-        pushSystemMessage(`${icon} ${limbFact(sheet.name, change)}.${effect}${dropped}`);
+        pushSystemMessage(`${icon} ${limbFact(name, change)}.${effect}${dropped}`);
       });
 
-      conditionResult.applied.forEach(change => pushSystemMessage(describeConditionChange(sheet.name, change)));
+      conditionResult.applied.forEach(({ name, change }) => pushSystemMessage(describeConditionChange(name, change)));
       questResult.applied.forEach(change => pushSystemMessage(describeQuestChange(change)));
-      if (conditionResult.collapsed) {
-        recordEvent(`${sheet.name} se desplomó de agotamiento y Duncan lo recogió`);
-        pushSystemMessage(`💀 ${sheet.name} llega al sexto nivel de agotamiento y se desploma. Maese Duncan te recoge y te mete en un catre: sigues con agotamiento de nivel 5 y la mitad de tu oro se va en cuidados.`);
-      }
+      conditionResult.collapsed.forEach(name => {
+        recordEvent(`${name} se desplomó de agotamiento y Duncan lo recogió`);
+        pushSystemMessage(`💀 ${name} llega al sexto nivel de agotamiento y se desploma. Maese Duncan lo recoge y lo mete en un catre: sigue con agotamiento de nivel 5.`);
+      });
+      if (conditionResult.goldLost > 0) pushSystemMessage(`🪙 Los cuidados de Duncan cuestan ${conditionResult.goldLost} monedas de oro de la bolsa.`);
 
-      if (reachesNewLevel) {
-        pushSystemMessage(`✨ ¡${sheet.name} tiene experiencia suficiente para subir a nivel ${(sheet.level || 1) + 1}! Pulsa «Subir de nivel» en tu ficha.`);
-      }
+      ready.forEach(name => pushSystemMessage(levelReadyLine(name)));
 
-      // Dropping to 0 HP: Duncan patches the hero up... at a price
-      if (outcome.knockedOut) {
-        recordEvent(`${sheet.name} cayó inconsciente y Duncan lo curó`);
-        setMessages(prev => [
-          ...prev,
-          {
-            sender: 'system',
-            text: `💀 ${sheet.name} cae inconsciente. Maese Duncan te arrastra junto a la chimenea y te remienda: despiertas con ${outcome.hp} HP${outcome.goldLost > 0 ? ` y ${outcome.goldLost} monedas de oro menos por los cuidados` : ''}.`,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          }
-        ]);
+      // Dropping to 0 HP: Duncan patches the hero up... at a price (paid once from the purse)
+      scene.knockedOut.forEach(k => {
+        recordEvent(`${k.name} cayó inconsciente y Duncan lo curó`);
+        pushSystemMessage(`💀 ${k.name} cae inconsciente. Maese Duncan lo arrastra junto a la chimenea y lo remienda: despierta con ${k.hp} HP.`);
+      });
+      if (scene.goldLost > 0) pushSystemMessage(`🪙 Los cuidados de Duncan cuestan ${scene.goldLost} monedas de oro de la bolsa.`);
+
+      // A companion offers to join: the game builds the sheet, the player decides
+      if (response.recruit && !fightGroups.length) {
+        const offer = makeRecruitOffer(response.recruit, partyRef.current, { scene: newMsgList.length + 1 });
+        if (offer) {
+          setPendingRecruit(offer);
+          pushSystemMessage(`🤝 ${offer.character.name} (${offer.character.race} · ${offer.character.className}, nivel ${offer.character.level}) quiere unirse al grupo. Decide si lo aceptas bajo la crónica.`);
+        }
+      }
+      // A member leaves the party through the story
+      const leaving = response.departure ? departingMember(partyRef.current, response.departure) : null;
+      if (leaving) {
+        const res = removeMember(partyRef.current, leaving.id);
+        if (res.ok) {
+          setParty(res.party);
+          recordEvent(`${leaving.name} deja el grupo${response.departure.reason ? ` (${response.departure.reason})` : ''}`);
+          pushSystemMessage(`🚪 ${leaving.name} deja el grupo${response.departure.reason ? `: ${response.departure.reason}` : ''}. Se lleva su equipo.`);
+        }
       }
 
       if (response.suggestedActions) {
         setSuggestedActions(response.suggestedActions);
       }
 
-      if (fightGroups.length) startEncounter(fightGroups, sheet, { byDuncan: true });
+      if (fightGroups.length) startEncounter(fightGroups, { byDuncan: true });
       else if (response.shop && SHOP_TYPES[response.shop]) handleOpenShop(response.shop, { byDuncan: true });
     } catch (err) {
       console.error(err);
@@ -475,19 +492,65 @@ export default function TavernApp({
     }
   };
 
+  // ---------------------------------------------------------------- companions
+  const handleAnswerRecruit = accept => {
+    const offer = pendingRecruit;
+    if (!offer) return;
+    setPendingRecruit(null);
+    if (!accept) {
+      recordEvent(`El grupo rechaza la compañía de ${offer.character.name}`);
+      pushSystemMessage(`🙅 ${offer.character.name} no se une al grupo.`);
+      return;
+    }
+    const res = addMember(partyRef.current, offer.character);
+    if (!res.ok) {
+      pushSystemMessage(`🤝 ${res.error}`);
+      return;
+    }
+    setParty(res.party);
+    recordEvent(`${res.member.name} (${res.member.className}) se une al grupo`);
+    pushSystemMessage(`🤝 ${res.member.name} se une al grupo: ${res.member.race} · ${res.member.className} de nivel ${res.member.level}, con su equipo inicial. Selecciónalo en la ficha para verlo o hacerlo actuar.`);
+  };
+
+  // The player dismisses a member (outside combat). They take their own equipment.
+  const handleDismissMember = id => {
+    if (encounter) return;
+    const res = removeMember(partyRef.current, id);
+    if (!res.ok) {
+      pushSystemMessage(`🚪 ${res.error}`);
+      return;
+    }
+    setParty(res.party);
+    recordEvent(`${res.member.name} deja el grupo (despedido)`);
+    pushSystemMessage(`🚪 ${res.member.name} se despide del grupo y se marcha con su equipo.`);
+  };
+
+  const handleTransferItem = (fromId, toId, itemId) => {
+    if (encounter) return 'En mitad de un combate no hay tiempo para repartir el equipo.';
+    const res = transferItem(partyRef.current, fromId, toId, itemId);
+    if (!res.ok) return res.error;
+    setParty(res.party);
+    const from = memberSheet(partyRef.current, fromId);
+    const to = memberSheet(partyRef.current, toId);
+    pushSystemMessage(`🎒 ${from.name} pasa ${res.item.name} a ${to.name}.`);
+    return null;
+  };
+
+  const handleSelectMember = id => setParty(p => setActiveMember(p, id));
+
   // ---------------------------------------------------------------- combat encounters
   const combatDie = sides => rollDie(sides, { silent: true });
 
-  // `sheet`: the hero as it is now (Duncan may start a fight right after changing it)
-  const startEncounter = (groups, sheet = character, { byDuncan = false } = {}) => {
-    // How the fight starts, kept so it can be fought again in the simulator
-    const snapshot = makeSnapshot({ character: sheet, groups, world, place: currentNode(world)?.name || '', byDuncan });
-    let next = { ...createEncounter(groups, sheet, combatDie), byDuncan, narrated: 0, snapshotId: snapshot.id };
-    let hero = sheet;
-    // Enemies that won initiative act before the hero
+  const startEncounter = (groups, { byDuncan = false } = {}) => {
+    const heroes = memberSheets(partyRef.current);
+    // How the fight starts (the whole party), kept so it can be fought again in the simulator
+    const snapshot = makeSnapshot({ party: heroes, groups, world, place: currentNode(world)?.name || '', byDuncan });
+    let next = { ...createEncounter(groups, heroes, combatDie), byDuncan, narrated: 0, snapshotId: snapshot.id };
+    // Enemies that won initiative act before the heroes
     const logStart = next.log.length;
-    ({ encounter: next, character: hero } = runEnemyTurns(next, hero, combatDie));
-    recordInjuries(next.log.slice(logStart), sheet.name);
+    const after = runEnemyTurns(next, heroes, combatDie);
+    next = after.encounter;
+    recordInjuries(next.log.slice(logStart));
     const finished = next;
     setCombatSnapshots(prev => {
       const list = addSnapshot(prev, snapshot);
@@ -497,10 +560,15 @@ export default function TavernApp({
       const label = g.name ? `${g.name} (${g.monster.name}${g.elite ? ', élite' : ''})` : g.monster.name;
       return g.count > 1 ? `${g.count} × ${label}` : label;
     }).join(', ');
-    pushSystemMessage(`⚔️ ¡Combate! ${sheet.name} se enfrenta a: ${names}.`);
+    const who = heroes.length > 1 ? 'El grupo' : heroes[0].name;
+    pushSystemMessage(`⚔️ ¡Combate! ${who} se enfrenta a: ${names}.`);
     setActiveShopKey(null);
     setEncounter(next);
-    if (hero !== sheet) setCharacter(hero);
+    setParty(p => {
+      const merged = mergeHeroes(p, after.heroes);
+      const turn = currentHeroUid(next);
+      return turn ? setActiveMember(merged, turn) : merged;
+    });
     setMobileTab('story');
   };
 
@@ -519,18 +587,20 @@ export default function TavernApp({
   };
 
   // Grave wounds suffered in a fight are facts of the campaign
-  const recordInjuries = (entries, name) => {
-    injuriesIn(entries).forEach(injury => recordEvent(limbFact(name, injury, injury.by ? `en combate contra ${injury.by}` : 'en combate')));
+  const recordInjuries = (entries) => {
+    injuriesIn(entries).forEach(injury => recordEvent(limbFact(injury.heroName || character.name, injury, injury.by ? `en combate contra ${injury.by}` : 'en combate')));
   };
 
+  // The action of the hero whose turn it is
   const handleCombatAction = async (action) => {
     if (!encounter || combatBusy) return;
-    const result = playerAction(encounter, character, action, combatDie);
+    const heroes = memberSheets(partyRef.current);
+    const result = playerAction(encounter, heroes, action, combatDie);
     if (!result.ok) {
       setEncounter(prev => ({ ...prev, log: [...prev.log, { round: prev.round, kind: 'info', text: `⚠️ ${result.error}` }] }));
       return;
     }
-    recordInjuries(result.encounter.log.slice(encounter.log.length), character.name);
+    recordInjuries(result.encounter.log.slice(encounter.log.length));
     if (result.encounter.status !== 'active' && encounter.snapshotId) {
       setCombatSnapshots(prev => setSnapshotResult(prev, encounter.snapshotId, result.encounter));
     }
@@ -541,72 +611,68 @@ export default function TavernApp({
       }
     } finally {
       setEncounter(narrateKeyMoments(encounter, result.encounter, result.character));
-      setCharacter(result.character);
+      setParty(p => {
+        const merged = mergeHeroes(p, result.heroes);
+        const turn = currentHeroUid(result.encounter);
+        return turn ? setActiveMember(merged, turn) : merged;
+      });
       setCombatBusy(false);
     }
   };
 
-  // Close a finished fight: chronicle line, XP, loot, recorded fact, rescue if the hero fell
+  // Close a finished fight: chronicle line, shared XP, loot, recorded facts, rescue if everyone fell
   const handleFinishEncounter = () => {
     if (!encounter || encounter.status === 'active') return;
     const loot = generateLoot(encounter);
     const won = encounter.status === 'victory';
-    const line = `${describeEncounterResult(encounter, character)}${won ? ` Botín (ya en la mochila): ${describeLoot(loot)}.` : ''}`;
+    const heroes = memberSheets(partyRef.current).filter(h => (encounter.heroIds || []).includes(h.id));
+    const group = heroes.length > 1;
+    const receiver = activeSheet(partyRef.current);
+    const line = `${describeEncounterResult(encounter, heroes.length ? heroes : [character])}${won ? ` Botín: ${describeLoot(loot)}${loot.items.length ? ` (los objetos, en la mochila de ${receiver.name}; las monedas, a la bolsa común)` : ''}.` : ''}`;
     pushSystemMessage(line);
     const defeated = encounter.enemies.filter(e => e.status !== 'active').map(e => e.name);
-    if (encounter.status === 'victory') recordEvent(`Vence en combate a ${defeated.slice(0, 3).join(', ')}${defeated.length > 3 ? '…' : ''}`);
-    if (encounter.status === 'fled') recordEvent('Huye de un combate');
+    if (won) recordEvent(`${group ? 'El grupo vence' : 'Vence'} en combate a ${defeated.slice(0, 3).join(', ')}${defeated.length > 3 ? '…' : ''}`);
+    if (encounter.status === 'fled') recordEvent(`${group ? 'El grupo huye' : 'Huye'} de un combate`);
 
-    // Effects that lasted turns or depended on the enemies end with the fight
-    const { creature: afterFight, removed: endedConditions } = endCombatConditions(character);
-    let hero = afterFight;
-    if (endedConditions.length) {
-      const names = [...new Set(endedConditions.map(c => conditionName(c.id).toLowerCase()))];
-      pushSystemMessage(`🩹 Al acabar el combate, ${hero.name} deja de estar ${names.join(', ')}.`);
+    const result = finishFight(partyRef.current, encounter, { loot: won ? loot : null, receiverId: receiver.id });
+    let next = result.party;
+    result.ended.forEach(e => pushSystemMessage(`🩹 Al acabar el combate, ${e.name} deja de estar ${e.conditions.join(', ')}.`));
+    if (group && result.fallen.length && encounter.status !== 'defeat') {
+      recordEvent(`${result.fallen.join(' y ')} ${result.fallen.length > 1 ? 'cayeron' : 'cayó'} inconsciente${result.fallen.length > 1 ? 's' : ''} en combate`);
+      pushSystemMessage(`🩹 ${result.fallen.join(' y ')} ${result.fallen.length > 1 ? 'vuelven' : 'vuelve'} en sí con 1 PG.`);
     }
-    if (won) {
-      hero = {
-        ...hero,
-        gold: roundCoins((Number(hero.gold) || 0) + loot.coins),
-        inventory: loot.items.reduce((list, item) => addItem(list, item), hero.inventory || [])
-      };
-      if (loot.items.length) recordEvent(`Botín: ${loot.items.map(i => i.name).join(', ')}`);
-    }
-    if (encounter.xp > 0) {
-      const leveledBefore = canLevelUp(hero);
-      hero = addXp(hero, encounter.xp);
-      if (!leveledBefore && canLevelUp(hero)) {
-        pushSystemMessage(`✨ ¡${hero.name} tiene experiencia suficiente para subir a nivel ${(hero.level || 1) + 1}! Pulsa «Subir de nivel» en tu ficha.`);
-      }
-    }
+    if (group && result.share > 0) pushSystemMessage(`✨ ${encounter.xp} PX repartidos: +${result.share} PX para cada uno de los ${(encounter.heroIds || []).length} que lucharon.`);
+    if (won && loot.items.length) recordEvent(`Botín: ${loot.items.map(i => i.name).join(', ')}`);
+    const ready = new Set(result.ready);
+
     // Hunting quests of the local engine are done with a victory
     let questLine = '';
     if (won) {
-      const result = applyQuestChanges(questsRef.current, huntChangesAfterVictory(questsRef.current, encounter), {
-        character: hero, scene: messages.length + 1, place: currentNode(world)?.name || ''
+      const quest = applyQuestChanges(questsRef.current, huntChangesAfterVictory(questsRef.current, encounter), {
+        character: { ...receiver, level: partyLevel(next) }, scene: messages.length + 1, place: currentNode(world)?.name || ''
       });
-      if (result.applied.length) {
-        const leveledBefore = canLevelUp(hero);
-        hero = result.character;
-        setQuests(result.quests);
-        result.facts.forEach(recordEvent);
-        result.applied.forEach(change => pushSystemMessage(describeQuestChange(change)));
-        questLine = ` ${result.applied.map(a => `Misión cumplida: «${a.quest.title}» (la recompensa ya está entregada).`).join(' ')}`;
-        if (!leveledBefore && canLevelUp(hero)) {
-          pushSystemMessage(`✨ ¡${hero.name} tiene experiencia suficiente para subir a nivel ${(hero.level || 1) + 1}! Pulsa «Subir de nivel» en tu ficha.`);
-        }
+      if (quest.applied.length) {
+        setQuests(quest.quests);
+        quest.facts.forEach(recordEvent);
+        quest.applied.forEach(change => pushSystemMessage(describeQuestChange(change)));
+        quest.applied.filter(a => a.action === 'complete').forEach(a => {
+          const paid = payPartyReward(next, a.quest.reward, receiver.id);
+          next = paid.party;
+          paid.ready.forEach(n => ready.add(n));
+        });
+        questLine = ` ${quest.applied.map(a => `Misión cumplida: «${a.quest.title}» (la recompensa ya está entregada).`).join(' ')}`;
       }
     }
-    if (encounter.status === 'defeat') {
-      const rescue = rescueKnockedOut(hero);
-      hero = { ...hero, hp: rescue.hp, gold: rescue.gold };
-      recordEvent(`${hero.name} cayó en combate y Duncan lo curó`);
-      pushSystemMessage(`💀 ${hero.name} cae inconsciente. Maese Duncan te arrastra junto a la chimenea y te remienda: despiertas con ${rescue.hp} HP${rescue.goldLost > 0 ? ` y ${rescue.goldLost} monedas de oro menos por los cuidados` : ''}.`);
+    ready.forEach(name => pushSystemMessage(levelReadyLine(name)));
+    if (result.rescue) {
+      const who = group ? 'todo el grupo' : heroes[0]?.name || character.name;
+      recordEvent(`${group ? 'El grupo cayó' : `${heroes[0]?.name || character.name} cayó`} en combate y Duncan ${group ? 'los' : 'lo'} curó`);
+      pushSystemMessage(`💀 Cae ${who}. Maese Duncan ${group ? 'los arrastra' : 'lo arrastra'} junto a la chimenea y ${group ? 'los remienda' : 'lo remienda'}: ${group ? 'despiertan' : 'despierta'} con la mitad de sus PG${result.rescue.goldLost > 0 ? ` y ${result.rescue.goldLost} monedas de oro menos en la bolsa por los cuidados` : ''}.`);
     }
-    setCharacter(hero);
+    setParty(next);
     setEncounter(null);
     // Duncan narrates the outcome (and any loot) from the result the game computed
-    handleSendAction('Narra el final del combate', { sheet: hero, combatResult: `${line}${questLine}`, loot: won ? loot : null });
+    handleSendAction('Narra el final del combate', { sheet: activeSheet(next), combatResult: `${line}${questLine}`, loot: won ? loot : null });
   };
 
   // Paralyzed, stunned, petrified...: no attacks or spells outside a fight either
@@ -663,13 +729,13 @@ export default function TavernApp({
     const options = attackOptions(character);
     const option = options.find(o => o.weapon) || options[0];
     if (!option) {
-      pushSystemMessage('⚔️ No tienes nada con lo que atacar: equipa un arma o deja una mano libre (pestaña «Equipo» de tu ficha).');
+      pushSystemMessage(`⚔️ ${character.name} no tiene nada con lo que atacar: equipa un arma o deja una mano libre (pestaña «Equipo» de su ficha).`);
       return;
     }
     handleAttack({ optionId: option.id });
   };
 
-  // Shortcut under the chronicle: a skill check with the hero's sheet
+  // Shortcut under the chronicle: a skill check with the acting member's sheet
   const handleQuickCheck = (skillId) => {
     const skill = getSkill(skillId);
     if (skill) handleRollCheck({ label: skill.name, modifier: skillModifier(character, skillId), ability: skill.ability, skillId });
@@ -700,7 +766,7 @@ export default function TavernApp({
         modifier: check.modifier,
         dc: check.dc,
         success: check.success,
-        label: `Tirada de ${label}`
+        label: `${character.name} · ${label}`
       });
 
       const tired = mods.penalty ? ` (agotamiento: −${mods.penalty})` : '';
@@ -711,14 +777,8 @@ export default function TavernApp({
     }
   };
 
-  const pushSystemMessage = (text) => {
-    setMessages(prev => [
-      ...prev,
-      { sender: 'system', text, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
-    ]);
-  };
-
-  // Casting a spell from the sheet: roll its dice, spend the slot and tell the Dungeon Master
+  // Casting a spell from the sheet: roll its dice, spend the slot and tell the Dungeon Master.
+  // A healing spell whose target is a member of the party heals that member.
   const handleCastSpell = async (spellId, target = '') => {
     if (isGenerating || isRollingCheckRef.current) return;
     if (blockedByConditions()) return;
@@ -757,13 +817,25 @@ export default function TavernApp({
         await animateRoll({ dice: toDice(cast.heal), modifier: cast.heal.bonus, label: `${spell.name} · curación` });
       }
 
-      setCharacter(result.character);
+      const ally = cast.heal ? findMemberByName(partyRef.current, target) : null;
+      let sheet = result.character;
+      let castForDuncan = cast;
+      if (ally && ally.id !== character.id) {
+        // The caster keeps their own HP; the ally gets the healing
+        sheet = { ...result.character, hp: character.hp };
+        const healed = Math.min(ally.maxHp, ally.hp + cast.heal.total) - ally.hp;
+        setParty(p => updateMember(updateMember(p, character.id, sheet), ally.id, a => ({ ...a, hp: Math.min(a.maxHp, a.hp + cast.heal.total) })));
+        castForDuncan = { ...cast, heal: { ...cast.heal, applied: healed } };
+        pushSystemMessage(`✨ ${character.name} cura a ${ally.name}: recupera ${healed} PG.`);
+      } else {
+        setCharacter(sheet);
+      }
       if (cast.cured?.length) pushSystemMessage(`✨ ${character.name} se libra de: ${cast.cured.join(', ')}.`);
       setMobileTab('story');
-      handleSendAction(describeCast(cast, { target, dc: SPELL_ATTACK_DC }), {
-        sheet: result.character,
+      handleSendAction(describeCast(castForDuncan, { target, dc: SPELL_ATTACK_DC }), {
+        sheet,
         playerRoll,
-        spellCast: cast,
+        spellCast: castForDuncan,
         effectsApplied: Boolean(cast.heal)
       });
     } finally {
@@ -771,82 +843,75 @@ export default function TavernApp({
     }
   };
 
-  const handleLevelUpConfirmed = (next, summary) => {
-    setCharacter(next);
+  const handleLevelUpConfirmed = (next, levelSummary) => {
+    updateMemberState(next.id, sheet => ({ ...next, gold: sheet.gold }));
     setIsLevelUpOpen(false);
     tavernAudio.playCritSuccess();
-    pushSystemMessage(describeLevelUp(next, summary));
-    recordEvent(`Sube a nivel ${next.level}${summary.features.length ? ` (${summary.features.slice(0, 2).join(', ')})` : ''}`);
+    pushSystemMessage(describeLevelUp(next, levelSummary));
+    recordEvent(`${next.name} sube a nivel ${next.level}${levelSummary.features.length ? ` (${levelSummary.features.slice(0, 2).join(', ')})` : ''}`);
   };
 
-  // Short rest (an hour by the fire) or long rest (a night in a room, for a price)
+  // Short rest (an hour by the fire) or long rest (a night, a room each): the whole party rests
   const handleRest = (kind) => {
     if (isGenerating || isRollingCheckRef.current) return;
-
-    // What the rest does to the conditions (longRest / shortRest apply it): chronicle and memory
-    const describeRestConditions = () => {
-      const { removed, exhaustion } = restConditions(character, kind);
+    const result = restParty(partyRef.current, kind, sides => rollDie(sides, { silent: true }));
+    if (!result.ok) {
+      pushSystemMessage(`🛏️ ${result.error}`);
+      return;
+    }
+    const group = result.report.length > 1;
+    const extras = [];
+    result.report.forEach(r => {
       const parts = [];
-      const names = [...new Set(removed.map(c => conditionName(c.id).toLowerCase()))];
-      if (names.length) parts.push(`deja de estar ${names.join(', ')}`);
-      if (exhaustion.before > exhaustion.after) {
-        parts.push(exhaustion.after ? `su agotamiento baja a nivel ${exhaustion.after}` : 'ya no sufre agotamiento');
-        recordEvent(exhaustion.after ? `El agotamiento de ${character.name} baja a nivel ${exhaustion.after}` : `${character.name} se recupera del agotamiento`);
+      if (r.ended.length) parts.push(`deja de estar ${r.ended.join(', ')}`);
+      if (r.exhaustion.before > r.exhaustion.after) {
+        parts.push(r.exhaustion.after ? `su agotamiento baja a nivel ${r.exhaustion.after}` : 'ya no sufre agotamiento');
+        recordEvent(r.exhaustion.after ? `El agotamiento de ${r.name} baja a nivel ${r.exhaustion.after}` : `${r.name} se recupera del agotamiento`);
       }
-      removed.forEach(c => {
-        const fact = conditionFact(character.name, { id: c.id, action: 'remove', level: null, condition: c });
+      r.removed.forEach(c => {
+        const fact = conditionFact(r.name, { id: c.id, action: 'remove', level: null, condition: c });
         if (fact && c.id !== 'agotamiento') recordEvent(fact);
       });
-      if (parts.length) pushSystemMessage(`🛏️ Tras el descanso, ${character.name} ${parts.join(' y ')}.`);
-      return parts.length ? ` Además, ${parts.join(' y ')}.` : '';
-    };
-
-    if (kind === 'long') {
-      if (character.gold < LONG_REST_COST) {
-        pushSystemMessage(`🛏️ Necesitas ${LONG_REST_COST} monedas de oro para una habitación.`);
-        return;
+      if (parts.length) {
+        pushSystemMessage(`🛏️ Tras el descanso, ${r.name} ${parts.join(' y ')}.`);
+        extras.push(`${r.name} ${parts.join(' y ')}`);
       }
-      const rested = { ...longRest(character), gold: character.gold - LONG_REST_COST };
-      const extra = describeRestConditions();
-      setCharacter(rested);
-      setMobileTab('story');
+    });
+    const extra = extras.length ? ` Además, ${extras.join('; ')}.` : '';
+    setParty(result.party);
+    setMobileTab('story');
+    const sheet = activeSheet(result.party);
+    if (kind === 'long') {
       handleSendAction(
-        `Pago ${LONG_REST_COST} monedas de oro por una habitación y hago un descanso largo hasta el amanecer. Recupero todos mis puntos de golpe${rested.spellcasting ? ' y mi magia' : ''}.${extra}`,
-        { sheet: rested, rest: 'long', effectsApplied: true }
+        `${group ? `Pagamos ${result.cost} monedas de oro por ${result.report.length} habitaciones y el grupo hace` : `Pago ${result.cost} monedas de oro por una habitación y hago`} un descanso largo hasta el amanecer. ${group ? 'Todos recuperamos' : 'Recupero'} los puntos de golpe y la magia.${extra}`,
+        { sheet, rest: 'long', effectsApplied: true }
       );
       return;
     }
-
-    const { character: rested, healed, die, slotsRecovered } = shortRest(character, sides => rollDie(sides, { silent: true }));
-    const gains = [
-      healed > 0 && `gasto mi dado de golpe (d${character.hitDie}: ${die}) y recupero ${healed} puntos de golpe`,
-      slotsRecovered && 'recupero mi magia de pacto'
-    ].filter(Boolean);
-    const extra = describeRestConditions();
-    setCharacter(rested);
-    setMobileTab('story');
+    const gains = result.report.map(r => [
+      r.healed > 0 && `${group ? `${r.name} gasta` : 'gasto'} su dado de golpe (d${r.hitDie}: ${r.die}) y recupera ${r.healed} PG`,
+      r.slotsRecovered && `${group ? `${r.name} recupera` : 'recupero'} su magia de pacto`
+    ].filter(Boolean).join(' y ')).filter(Boolean);
     handleSendAction(
-      `Hago un descanso corto de una hora junto al fuego${gains.length ? `: ${gains.join(' y ')}` : ''}.${extra}`,
-      { sheet: rested, rest: 'short', effectsApplied: true }
+      `${group ? 'El grupo hace' : 'Hago'} un descanso corto de una hora junto al fuego${gains.length ? `: ${gains.join('; ')}` : ''}.${extra}`,
+      { sheet, rest: 'short', effectsApplied: true }
     );
   };
 
-  // When ordering a drink from Duncan's tavern menu
+  // When ordering a drink from Duncan's tavern menu (the acting member drinks, the purse pays)
   const handleOrderDrink = (drink) => {
     if (character.gold < drink.cost) return;
-
     const updated = {
       ...character,
       gold: character.gold - drink.cost,
       hp: Math.min(character.maxHp, character.hp + 4)
     };
     setCharacter(updated);
-
     handleSendAction(`Pido a Maese Duncan un/a "${drink.name}" (${drink.cost} po). ${drink.effect}`, { sheet: updated, effectsApplied: true });
   };
 
   // ---------------------------------------------------------------- shops
-  // Open a shop of the current location (from the map, or because Duncan took the hero there).
+  // Open a shop of the current location (from the map, or because Duncan took the party there).
   // The stock is generated the first time and kept in the campaign.
   const handleOpenShop = (type, { byDuncan = false } = {}) => {
     if (encounter && encounter.status === 'active') return;
@@ -858,13 +923,13 @@ export default function TavernApp({
 
   const activeShop = activeShopKey ? shops[activeShopKey] : null;
 
-  // Buy / sell at the open shop: returns an error for the shop window, or null
+  // Buy / sell at the open shop with the selected member (the purse pays): returns an error for the shop window, or null
   const trade = (result, kind) => {
     if (!result.ok) return result.error;
     setCharacter(normalizeEquipment(result.character));
     setShops(prev => ({ ...prev, [result.shop.key]: result.shop }));
-    pushSystemMessage(describeTrade(kind, result.item, result.price, result.shop));
-    if (result.price >= 100) recordEvent(`${kind === 'buy' ? 'Compra' : 'Vende'} ${result.item.name}`);
+    pushSystemMessage(`${character.name}: ${describeTrade(kind, result.item, result.price, result.shop)}`);
+    if (result.price >= 100) recordEvent(`${character.name} ${kind === 'buy' ? 'compra' : 'vende'} ${result.item.name}`);
     tavernAudio.playTankardClink();
     return null;
   };
@@ -904,7 +969,7 @@ export default function TavernApp({
     if (!quest) return;
     setQuests(next);
     recordEvent(questFact(quest));
-    pushSystemMessage(`🏳 ${character.name} abandona la misión «${quest.title}».`);
+    pushSystemMessage(`🏳 ${membersOf(party).length > 1 ? 'El grupo abandona' : `${character.name} abandona`} la misión «${quest.title}».`);
   };
 
   const handleQuestSeen = id => {
@@ -939,6 +1004,9 @@ export default function TavernApp({
       }
     ]);
   };
+
+  const heroes = memberSheets(party);
+  const inCombat = Boolean(encounter && encounter.status === 'active');
 
   return (
     <div className="h-screen flex flex-col bg-[#0b090e] overflow-hidden">
@@ -1002,11 +1070,28 @@ export default function TavernApp({
           )}
         </div>
 
-        {/* Center: the campaign's hero */}
+        {/* Center: the party (the one who acts is highlighted) */}
         <div className="hidden md:flex items-center gap-2 min-w-0 text-xs text-stone-300">
-          <span className="text-base leading-none">{character.avatar || '🛡️'}</span>
-          <span className="font-cinzel font-bold text-stone-100 truncate max-w-[180px]">{character.name}</span>
-          <span className="text-stone-500 truncate hidden lg:inline">{character.race} · {character.class}</span>
+          {heroes.length > 1 ? (
+            <>
+              <span className="flex -space-x-1">
+                {heroes.map(h => (
+                  <span key={h.id} title={`${h.name} · ${h.hp}/${h.maxHp} PG`}
+                    className={`w-7 h-7 rounded-full border flex items-center justify-center text-sm bg-[#1a1523] ${h.id === character.id ? 'border-amber-400 z-10' : 'border-stone-700 opacity-80'} ${h.hp <= 0 ? 'grayscale' : ''}`}>
+                    {h.avatar || '🛡️'}
+                  </span>
+                ))}
+              </span>
+              <span className="text-stone-500 hidden lg:inline">Actúa:</span>
+              <span className="font-cinzel font-bold text-stone-100 truncate max-w-[160px]">{character.name}</span>
+            </>
+          ) : (
+            <>
+              <span className="text-base leading-none">{character.avatar || '🛡️'}</span>
+              <span className="font-cinzel font-bold text-stone-100 truncate max-w-[180px]">{character.name}</span>
+              <span className="text-stone-500 truncate hidden lg:inline">{character.race} · {character.class}</span>
+            </>
+          )}
         </div>
 
         {/* Right Utility Buttons */}
@@ -1086,7 +1171,7 @@ export default function TavernApp({
             mobileTab === 'party' ? 'border-amber-500 text-amber-300 bg-amber-500/10' : 'border-transparent text-stone-400'
           }`}
         >
-          Ficha ({character.hp} HP)
+          {heroes.length > 1 ? `Grupo (${heroes.length})` : `Ficha (${character.hp} HP)`}
         </button>
         <button
           onClick={() => setMobileTab('map')}
@@ -1108,6 +1193,12 @@ export default function TavernApp({
         <div className={`w-full lg:w-72 xl:w-80 2xl:w-88 shrink-0 ${mobileTab === 'party' ? 'block' : 'hidden lg:block'}`}>
           <PartyPanel
             character={character}
+            party={heroes}
+            purse={party.gold}
+            onSelectMember={handleSelectMember}
+            onDismissMember={handleDismissMember}
+            onTransferItem={handleTransferItem}
+            longRestCost={longRestCost(party)}
             onUpdateCharacter={next => setCharacter(normalizeEquipment(next))}
             onOrderDrink={handleOrderDrink}
             onRollCheck={handleRollCheck}
@@ -1117,7 +1208,7 @@ export default function TavernApp({
             onAttack={handleAttack}
             onUseItem={handleUseItem}
             busy={isGenerating}
-            inCombat={Boolean(encounter && encounter.status === 'active')}
+            inCombat={inCombat}
           />
         </div>
 
@@ -1126,7 +1217,7 @@ export default function TavernApp({
           {encounter ? (
             <CombatView
               encounter={encounter}
-              character={character}
+              heroes={heroes}
               onAction={handleCombatAction}
               onFinish={handleFinishEncounter}
               busy={combatBusy}
@@ -1146,6 +1237,10 @@ export default function TavernApp({
               isGenerating={isGenerating}
               suggestedActions={suggestedActions}
               character={character}
+              party={heroes}
+              onSelectMember={handleSelectMember}
+              pendingRecruit={pendingRecruit}
+              onAnswerRecruit={handleAnswerRecruit}
               world={world}
               onSendAction={handleSendAction}
               onOpenGeminiConnect={onOpenGeminiConnect}

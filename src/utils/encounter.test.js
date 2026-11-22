@@ -201,7 +201,7 @@ describe('drinking a potion is a Bonus Action', () => {
     const hero = withPotions();
     const enc = createEncounter([{ monster: tough }], hero, dice(5, 15));
     const dodge = playerAction(enc, hero, { type: 'dodge' }, dice(3));
-    expect(dodge.encounter.dodging).toBe(true);
+    expect(dodge.encounter.dodging).toEqual([hero.id]);
     // The goblin attacks with Disadvantage once the turn ends: two d20, the lower one (19, 2 -> 2) misses
     const drink = playerAction(dodge.encounter, dodge.character, { type: 'potion', itemId: 'p' }, dice(4, 4, 19, 2));
     expect(drink.encounter.log.at(-1).kind).toBe('enemyMiss');
@@ -379,7 +379,7 @@ describe('grave wounds', () => {
     const wound = encounter.log.find(l => l.kind === 'injury');
     expect(wound.text).toContain('deja inutilizado el brazo izquierdo de Brega');
     expect(wound.text).toContain('Espadón cae a la mochila');
-    expect(injuriesIn(encounter.log)).toEqual([{ limb: 'leftArm', status: 'disabled', by: 'Goblin' }]);
+    expect(injuriesIn(encounter.log)).toEqual([expect.objectContaining({ limb: 'leftArm', status: 'disabled', by: 'Goblin' })]);
   });
 
   it('is rare: a 3 or more on the d20 leaves the hero whole', () => {

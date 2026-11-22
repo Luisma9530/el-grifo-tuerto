@@ -197,7 +197,7 @@ describe('the hero\'s control spells', () => {
     const res = playerAction(enc, hero, { type: 'spell', spellId: 'holdPerson', targetUid: 'bandit-1' }, dice(5, 2, 18, 4, 3));
     const log = texts(res.encounter);
     expect(log).toContain('pierde la concentración en Inmovilizar Persona');
-    expect(res.encounter.concentration).toBeNull();
+    expect(res.encounter.concentrations).toEqual({});
     expect(res.encounter.enemies[0].conditions).toHaveLength(0);
   });
 
@@ -279,7 +279,7 @@ describe('the hero\'s own conditions in a fight', () => {
   it('an exhausted hero subtracts 2 per level from attacks', () => {
     const hero = withCondition(fighter(), { id: 'agotamiento', level: 2 });
     const enc = createEncounter([{ monster: getMonster('bandit') }], hero, dice(1, 20));
-    const plainHero = fighter();
+    const plainHero = { ...fighter(), id: hero.id };
     const a = playerAction(enc, plainHero, { type: 'attack', optionId: attackOptions(hero).find(o => o.weapon?.kind === 'melee').id, targetUid: 'bandit-1' }, dice(10, 1));
     const b = playerAction(enc, hero, { type: 'attack', optionId: attackOptions(hero).find(o => o.weapon?.kind === 'melee').id, targetUid: 'bandit-1' }, dice(10, 1));
     const total = res => Number(/= (\d+) vs CA/.exec(res.encounter.log.find(l => l.text.includes('ataca a')).text)[1]);

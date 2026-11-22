@@ -15,7 +15,7 @@ const pick = (list, rng) => list[Math.floor(rng() * list.length)];
 
 /**
  * Local engine: start a fight with creatures of the candidate list, sized to an
- * easy encounter (the hero plays alone).
+ * easy encounter for the hero or the party (its budget is per character, added up).
  * @returns {{ text, suggestedActions, combat: { enemigos } }}
  */
 export function startLocalFight(bestiary, { character, rng = Math.random }) {
@@ -24,12 +24,13 @@ export function startLocalFight(bestiary, { character, rng = Math.random }) {
   const pool = usable.length ? usable : [...bestiary.creatures].sort((a, b) => a.xp - b.xp).slice(0, 1);
   const fitting = pool.filter(c => c.xp >= budget / 4);
   const foe = pick(fitting.length ? fitting : pool, rng);
-  const count = Math.max(1, Math.min(4, Math.floor(budget / Math.max(1, foe.xp))));
+  const group = (bestiary.partySize || 1) > 1;
+  const count = Math.max(1, Math.min(group ? 6 : 4, Math.floor(budget / Math.max(1, foe.xp))));
   const many = count > 1;
   const name = character.name || 'Aventurero';
   const text = `Duncan deja la jarra en el mostrador con un golpe seco.
 
-—*Pues ya está, ${name}: has encontrado pelea.* ${many ? `**${count} × ${foe.name}**` : `**${foe.name}**`} ${many ? 'salen' : 'sale'} a tu encuentro y no hay tiempo para palabras. Las armas, fuera.`;
+—*Pues ya está, ${name}: has encontrado pelea.* ${many ? `**${count} × ${foe.name}**` : `**${foe.name}**`} ${many ? 'salen' : 'sale'} ${group ? 'al encuentro del grupo' : 'a tu encuentro'} y no hay tiempo para palabras. Las armas, fuera.`;
   return {
     text,
     suggestedActions: [],

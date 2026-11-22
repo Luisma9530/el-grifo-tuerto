@@ -22,27 +22,30 @@ const keyOf = g => `${g.monster.id}${g.elite ? ':elite' : ''}${g.name ? `:${g.na
  * with the elite stat blocks already applied.
  * `initialGroups`: start from these enemies (the simulator's "Cambiar y repetir").
  */
-export default function EncounterBuilder({ character, world, onStart, onClose, initialGroups = null, startLabel = '¡A luchar!', note = null, allowElite = false }) {
+export default function EncounterBuilder({ character, party = null, world, onStart, onClose, initialGroups = null, startLabel = '¡A luchar!', note = null, allowElite = false }) {
   useEscapeKey(true, onClose);
   const level = character.level || 1;
+  // A party: the XP budget is per character, added up (SRD)
+  const levels = party?.length > 1 ? party.map(h => h.level || 1) : level;
+  const topLevel = Array.isArray(levels) ? Math.max(...levels) : level;
   const tags = WORLD_TAGS[world?.id] || null;
   // Solo play: the budgets are per character of a party, so start with an easy fight
   const [difficulty, setDifficulty] = useState('low');
-  const [groups, setGroups] = useState(() => (initialGroups?.length ? toBaseGroups(initialGroups) : suggestEncounter(level, { difficulty: 'low', tags })));
+  const [groups, setGroups] = useState(() => (initialGroups?.length ? toBaseGroups(initialGroups) : suggestEncounter(levels, { difficulty: 'low', tags })));
   const [query, setQuery] = useState('');
   const [onlyWorld, setOnlyWorld] = useState(Boolean(tags));
 
   const finalGroups = groups.map(g => (g.elite ? { ...g, monster: eliteVersion(g.monster) } : g));
   const xp = encounterXp(finalGroups);
-  const rating = difficultyOf(level, xp);
+  const rating = difficultyOf(levels, xp);
   const results = useMemo(
-    () => searchMonsters({ text: query, maxCr: Math.max(1, level + 4), tags: onlyWorld ? tags : null }).slice(0, 60),
-    [query, level, onlyWorld, tags]
+    () => searchMonsters({ text: query, maxCr: Math.max(1, topLevel + 4), tags: onlyWorld ? tags : null }).slice(0, 60),
+    [query, topLevel, onlyWorld, tags]
   );
 
   const suggest = id => {
     setDifficulty(id);
-    setGroups(suggestEncounter(level, { difficulty: id, tags }));
+    setGroups(suggestEncounter(levels, { difficulty: id, tags }));
   };
 
   // `key`: the group to change; a creature from the bestiary goes to its plain group
@@ -68,7 +71,7 @@ export default function EncounterBuilder({ character, world, onStart, onClose, i
       >
         <header className="p-5 border-b border-red-950/60 flex items-start justify-between gap-3 bg-gradient-to-r from-red-950/40 to-transparent">
           <div>
-            <p className="text-[11px] font-mono uppercase tracking-widest text-red-300/80">Preparar combate · nivel {level}</p>
+            <p className="text-[11px] font-mono uppercase tracking-widest text-red-300/80">Preparar combate · {Array.isArray(levels) ? `grupo de ${levels.length} (niveles ${levels.join(', ')})` : `nivel ${level}`}</p>
             <h2 id="encounter-title" className="font-cinzel text-xl font-bold text-stone-100">¿A quién te enfrentas?</h2>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg text-stone-400 hover:text-white hover:bg-stone-800" aria-label="Cerrar">
