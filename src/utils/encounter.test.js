@@ -305,7 +305,7 @@ describe('spells in combat', () => {
     const hero = wizard();
     const enc = createEncounter([{ monster: goblin }], hero, dice(5, 15));
     const res = playerAction(enc, hero, { type: 'spell', spellId: 'sleep', targetUid: 'goblin-1' }, dice(2));
-    expect(res.encounter.log.some(l => l.text.includes('fuera de combate'))).toBe(true);
+    expect(res.encounter.log.some(l => l.text.includes('queda incapacitado'))).toBe(true);
     expect(res.encounter.log.some(l => l.text.includes('no puede actuar'))).toBe(true);
     expect(res.character.hp).toBe(hero.hp);
   });

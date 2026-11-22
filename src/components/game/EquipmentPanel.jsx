@@ -7,6 +7,7 @@ import {
   lacksStrengthForArmor
 } from '../../utils/equipment';
 import { ARMOR_CATEGORY_NAMES } from '../../data/armor';
+import { speedWithConditions } from '../../utils/conditions';
 
 const LIMB_STYLES = {
   ok: 'border-emerald-900/60 text-emerald-300 bg-emerald-950/30',
@@ -168,7 +169,7 @@ export default function EquipmentPanel({ character, onChange, locked = null, sho
           </div>
           {legs > 0 && (
             <p className="mt-1.5 text-[10px] text-amber-300/90 flex items-center gap-1">
-              <Footprints className="w-3 h-3" /> Velocidad {formatMetres(speedInMetres(sheet))}. {flee == null ? 'No puedes huir de un combate.' : `Huir de un combate: CD ${flee}.`}
+              <Footprints className="w-3 h-3" /> Velocidad {formatMetres(speedWithConditions(sheet, speedInMetres(sheet)))}. {flee == null ? 'No puedes huir de un combate.' : `Huir de un combate: CD ${flee}.`}
             </p>
           )}
         </div>

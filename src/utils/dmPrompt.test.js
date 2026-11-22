@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildDMPrompt, parseDMReply, dmResponseSchema, DM_RESPONSE_SCHEMA, cleanLimbChanges, cleanShopRequest } from './dmPrompt';
+import { buildDMPrompt, parseDMReply, dmResponseSchema, DM_RESPONSE_SCHEMA, cleanLimbChanges, cleanShopRequest, cleanConditionChanges } from './dmPrompt';
+import { createCondition } from './conditions';
 
 const character = {
   name: 'Kaelen', race: 'Elfo Silvano', class: 'Pícaro (Nivel 3)', hp: 12, maxHp: 28, ac: 15, gold: 10,
@@ -94,7 +95,8 @@ describe('parseDMReply', () => {
       summary: null,
       combat: null,
       shop: null,
-      limbChanges: []
+      limbChanges: [],
+      conditionChanges: []
     });
     expect(parseDMReply(reply({ experiencia: 60 }), character).xpEarned).toBe(60);
     expect(parseDMReply(reply({ experiencia: 5000 }), character).xpEarned).toBe(300);
@@ -255,5 +257,55 @@ describe('shops in Duncan\'s structured reply', () => {
 
   it('the hero\'s money is shown with silver and copper', () => {
     expect(buildDMPrompt({ playerAction: 'x', character: { ...character, gold: 3.5 }, world, history: [], d20: 5 })).toContain('Dinero: 3 po 5 pp');
+  });
+});
+
+describe("conditions in Duncan's reply", () => {
+  it('the schema accepts an optional list of conditions with known values', () => {
+    const field = DM_RESPONSE_SCHEMA.properties.condiciones;
+    expect(field.nullable).toBe(true);
+    expect(field.items.properties.condicion.enum).toEqual(expect.arrayContaining(['agotamiento', 'envenenado', 'cegado']));
+    expect(field.items.properties.condicion.enum).not.toContain('derribado');
+    expect(field.items.properties.accion.enum).toEqual(['aplicar', 'quitar']);
+    expect(DM_RESPONSE_SCHEMA.required).not.toContain('condiciones');
+    expect(dmResponseSchema(true, true, true).properties.condiciones).toBeTruthy();
+  });
+
+  it('validates the changes: known conditions, actions, durations and levels', () => {
+    expect(cleanConditionChanges(null)).toEqual([]);
+    expect(cleanConditionChanges([
+      { condicion: 'envenenado', accion: 'aplicar', duracion: 'descansoCorto', causa: '  veneno   de araña ' },
+      { condicion: 'agotamiento', accion: 'aplicar', niveles: 9 },
+      { condicion: 'volando', accion: 'aplicar' },
+      { condicion: 'derribado', accion: 'aplicar' },
+      { condicion: 'cegado', accion: 'borrar' },
+      { condicion: 'cegado', accion: 'quitar', duracion: 'para siempre' },
+      'basura'
+    ])).toEqual([
+      { id: 'envenenado', action: 'add', duration: { rest: 'short' }, level: null, cause: 'veneno de araña' },
+      { id: 'agotamiento', action: 'add', duration: { rest: 'long' }, level: 6, cause: '' },
+      { id: 'cegado', action: 'remove', duration: { rest: 'long' }, level: null, cause: '' }
+    ]);
+  });
+
+  it('keeps one change per condition (the last) and at most four', () => {
+    const many = ['envenenado', 'cegado', 'ensordecido', 'asustado', 'encantado', 'envenenado'].map(condicion => ({ condicion, accion: 'aplicar' }));
+    const clean = cleanConditionChanges(many);
+    expect(clean).toHaveLength(4);
+    expect(clean[clean.length - 1].id).toBe('envenenado');
+  });
+
+  it('parseDMReply returns the condition changes (none in plain text)', () => {
+    const raw = JSON.stringify({ narracion: 'Te pica una araña.', usaTirada: false, danio: 2, curacion: 0, oro: 0, experiencia: 0, opciones: ['a'], condiciones: [{ condicion: 'envenenado', accion: 'aplicar' }] });
+    expect(parseDMReply(raw, character).conditionChanges).toEqual([{ id: 'envenenado', action: 'add', duration: { rest: 'long' }, level: null, cause: '' }]);
+    expect(parseDMReply('Texto sin JSON', character).conditionChanges).toEqual([]);
+  });
+
+  it("the prompt explains the field and lists the hero's conditions", () => {
+    const tired = { ...character, conditions: [createCondition({ id: 'agotamiento', level: 2, duration: 'permanent' })] };
+    const prompt = buildDMPrompt({ playerAction: 'Sigo andando', character: tired, world, history: [], d20: 10 });
+    expect(prompt).toContain('"condiciones"');
+    expect(prompt).toContain('Condiciones: Agotamiento nivel 2');
+    expect(buildDMPrompt({ playerAction: 'x', character, world, d20: 10 })).not.toContain('- Condiciones:');
   });
 });

@@ -11,6 +11,7 @@ import {
   deleteCampaign,
   duplicateCampaign,
   importCampaignsFromJson,
+  migrateCampaign,
 } from './campaignStorage.js';
 
 const CAMPAIGNS_KEY = 'tavern_saved_campaigns';
@@ -389,5 +390,28 @@ describe('older saves', () => {
     expect(res.success).toBe(true);
     const raw = JSON.parse(localStorage.getItem(CAMPAIGNS_KEY))[0].character;
     expect(raw.hands).toEqual({ main: 'espada', off: 'escudo' });
+  });
+});
+
+describe('conditions in saved campaigns', () => {
+  it('older campaigns load with no conditions, also the enemies of a fight in progress', () => {
+    const old = { id: 'c1', world, character: { ...character }, encounter: { enemies: [{ uid: 'goblin-1', name: 'Goblin' }] } };
+    const migrated = migrateCampaign(old);
+    expect(migrated.character.conditions).toEqual([]);
+    expect(migrated.encounter.enemies[0].conditions).toEqual([]);
+  });
+
+  it('keeps valid conditions and drops broken ones', () => {
+    const migrated = migrateCampaign({
+      id: 'c2', world,
+      character: { ...character, conditions: [{ id: 'agotamiento', level: 9, duration: { type: 'permanent' } }, { id: 'nope', duration: { type: 'permanent' } }] }
+    });
+    expect(migrated.character.conditions).toHaveLength(1);
+    expect(migrated.character.conditions[0].level).toBe(6);
+  });
+
+  it("the hero's conditions are saved with the campaign", () => {
+    const saved = saveCampaign({ world, character: { ...character, conditions: [{ key: 'k1', id: 'envenenado', duration: { type: 'rest', rest: 'long' } }] }, messages: [] });
+    expect(getCampaignById(saved.id).character.conditions.map(c => c.id)).toEqual(['envenenado']);
   });
 });
