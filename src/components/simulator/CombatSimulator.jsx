@@ -395,6 +395,7 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
           character={hero}
           world={replaying?.worldId ? { id: replaying.worldId } : null}
           initialGroups={groups}
+          allowElite
           startLabel="Usar estos enemigos"
           note="Simulacro: elige libremente, nada de esto afecta a tu campaña."
           onStart={g => { setGroups(g); setBuilderOpen(false); setBatch(b => ({ ...b, result: null })); }}

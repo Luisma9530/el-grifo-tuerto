@@ -16,12 +16,13 @@ const keyOf = g => `${g.monster.id}${g.elite ? ':elite' : ''}${g.name ? `:${g.na
 
 /**
  * Prepare a fight: a suggested encounter for the hero's level and world, or
- * creatures picked by hand from the bestiary. Any group can be made elite
- * (more HP, +1 to hit, more XP). Calls onStart([{ monster, count, elite?, name?, trait? }])
+ * creatures picked by hand from the bestiary. With `allowElite` (only in the
+ * combat simulator: in a campaign elites come from the story and Duncan) any
+ * group can be made elite (more HP, +1 to hit, more XP). Calls onStart([{ monster, count, elite?, name?, trait? }])
  * with the elite stat blocks already applied.
  * `initialGroups`: start from these enemies (the simulator's "Cambiar y repetir").
  */
-export default function EncounterBuilder({ character, world, onStart, onClose, initialGroups = null, startLabel = '¡A luchar!', note = null }) {
+export default function EncounterBuilder({ character, world, onStart, onClose, initialGroups = null, startLabel = '¡A luchar!', note = null, allowElite = false }) {
   useEscapeKey(true, onClose);
   const level = character.level || 1;
   const tags = WORLD_TAGS[world?.id] || null;
@@ -114,11 +115,13 @@ export default function EncounterBuilder({ character, world, onStart, onClose, i
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
+                      {allowElite && (
                       <button onClick={() => toggleElite(key)} aria-pressed={Boolean(elite)}
                         title="Élite: un jefe más duro (×1,5 PG y PX, +1 al ataque y a la CD)"
                         className={`h-7 px-2 rounded-lg border text-[10px] font-semibold flex items-center gap-1 ${elite ? 'bg-amber-500/20 border-amber-400 text-amber-200' : 'bg-stone-900 border-stone-700 text-stone-400'}`}>
                         <Crown className="w-3 h-3" /> Élite
                       </button>
+                      )}
                       <button onClick={() => changeCount(monster, -1, key)} className="w-7 h-7 rounded-lg bg-stone-900 border border-stone-700 text-stone-300 flex items-center justify-center" aria-label={`Quitar ${monster.name}`}>
                         <Minus className="w-3.5 h-3.5" />
                       </button>
