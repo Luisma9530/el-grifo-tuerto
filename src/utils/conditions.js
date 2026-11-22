@@ -448,6 +448,7 @@ export const abilityName = id => ABILITY_NAMES[id] || id;
  */
 export function describeDuration(condition, nameOf = uid => uid) {
   const d = condition.duration || {};
+  if (condition.id === 'agotamiento') return 'hasta que se recupere: cada descanso largo quita un nivel';
   switch (d.type) {
     case 'turns': {
       const moment = d.at === 'start' ? 'el inicio' : 'el final';
