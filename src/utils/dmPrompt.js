@@ -22,6 +22,11 @@ const MAX_LIMB_CHANGES = LIMB_IDS.length;
 export const CONDITION_REPLY_ACTIONS = { aplicar: 'add', quitar: 'remove' };
 export const CONDITION_REPLY_DURATIONS = { descansoCorto: { rest: 'short' }, descansoLargo: { rest: 'long' }, permanente: 'permanent' };
 const MAX_CONDITION_CHANGES = 4;
+/** Who a scene effect hits in a party: names (or ids) of members, or "todos". */
+export const ALL_TARGETS = 'todos';
+const MAX_TARGETS = 4;
+const TARGET_MAX = 40;
+const TARGETS_SCHEMA = description => ({ type: 'ARRAY', nullable: true, items: { type: 'STRING' }, description });
 const CONDITION_CAUSE_MAX = 60;
 
 // The caller already trims the chronicle to the messages not covered by the
@@ -44,6 +49,8 @@ export const DM_RESPONSE_SCHEMA = {
     usaTirada: { type: 'BOOLEAN', description: 'true si el resultado dependió de la tirada de d20 proporcionada.' },
     danio: { type: 'INTEGER', description: 'Puntos de golpe que pierde el personaje (0 si ninguno).' },
     curacion: { type: 'INTEGER', description: 'Puntos de golpe que recupera el personaje (0 si ninguno).' },
+    afectadosDanio: TARGETS_SCHEMA('Solo con grupo: quiénes pierden "danio" (nombres o "todos"). Vacío = quien actúa.'),
+    afectadosCuracion: TARGETS_SCHEMA('Solo con grupo: quiénes recuperan "curacion" (nombres o "todos"). Vacío = quien actúa.'),
     oro: { type: 'INTEGER', description: 'Monedas de oro ganadas (positivo) o gastadas/perdidas (negativo).' },
     experiencia: { type: 'INTEGER', description: 'Puntos de experiencia ganados por superar un reto (0 si ninguno).' },
     opciones: { type: 'ARRAY', items: { type: 'STRING' }, description: '3 o 4 sugerencias breves de acción.' },
@@ -55,7 +62,8 @@ export const DM_RESPONSE_SCHEMA = {
         type: 'OBJECT',
         properties: {
           extremidad: { type: 'STRING', enum: Object.keys(LIMB_REPLY_IDS) },
-          estado: { type: 'STRING', enum: Object.keys(LIMB_REPLY_STATUSES) }
+          estado: { type: 'STRING', enum: Object.keys(LIMB_REPLY_STATUSES) },
+          afectados: TARGETS_SCHEMA('Solo con grupo: a quién (nombres o "todos"). Vacío = quien actúa.')
         },
         required: ['extremidad', 'estado']
       }
@@ -71,7 +79,8 @@ export const DM_RESPONSE_SCHEMA = {
           accion: { type: 'STRING', enum: Object.keys(CONDITION_REPLY_ACTIONS) },
           duracion: { type: 'STRING', enum: Object.keys(CONDITION_REPLY_DURATIONS), nullable: true },
           niveles: { type: 'INTEGER', nullable: true, description: 'Solo para agotamiento: niveles que se ganan o se quitan (1 a 6).' },
-          causa: { type: 'STRING', nullable: true, description: 'Causa breve: "veneno de la ciénaga".' }
+          causa: { type: 'STRING', nullable: true, description: 'Causa breve: "veneno de la ciénaga".' },
+          afectados: TARGETS_SCHEMA('Solo con grupo: a quién (nombres o "todos"). Vacío = quien actúa.')
         },
         required: ['condicion', 'accion']
       }
@@ -346,7 +355,7 @@ Mantén la respuesta en español, entre 1 y 3 párrafos breves.`;
 Estás dirigiendo una partida de rol estilo D&D 5e en el mundo: "${world.name}" (${world.genre || 'fantasía'}).${location ? `\nUbicación actual: ${location}.` : ''}
 
 ${group ? `El jugador controla a un grupo de ${partySize} personajes. Actúa ahora: ${name}. Sus compañeros: ${companions}.
-Narra para todo el grupo, pero esta acción la hace ${name}: "danio", "curacion", "condiciones" y "extremidades" se aplican solo a ${name}; el oro es común del grupo.
+Narra para todo el grupo, pero esta acción la hace ${name}. Por defecto "danio", "curacion", "condiciones" y "extremidades" se aplican solo a ${name}; si la escena alcanza a otros (una trampa, una explosión, un derrumbe, un veneno en la comida, una bendición para todos), di a quién con "afectadosDanio" y "afectadosCuracion" (y "afectados" dentro de cada cambio de "condiciones" o "extremidades"): una lista de nombres del grupo o ["todos"]. Cada afectado recibe la cantidad completa de "danio" o "curacion". El oro es común del grupo.
 
 ` : ''}Personaje${group ? ' que actúa' : ' del jugador'}: ${name}, ${character.race || ''} ${character.class || ''}.
 - Puntos de golpe: ${character.hp}/${character.maxHp}. Armadura (CA): ${character.ac ?? '?'}. Dinero${group ? ' del grupo' : ''}: ${formatCoins(character.gold)} (po = oro, pp = plata, pc = cobre).
@@ -382,6 +391,24 @@ Instrucciones:
 ${format}`;
 }
 
+/**
+ * Validate who a scene effect hits: up to four short names or ids, or "todos".
+ * Null when the reply names nobody (the effect goes to whoever acts). The names
+ * are matched against the party by the game (see resolveTargets in party.js).
+ * @returns {string[] | null}
+ */
+export function cleanTargets(list) {
+  const raw = Array.isArray(list) ? list : typeof list === 'string' ? [list] : [];
+  const names = [...new Set(raw
+    .filter(t => typeof t === 'string')
+    .map(t => t.trim().replace(/\s+/g, ' ').slice(0, TARGET_MAX))
+    .filter(Boolean))];
+  if (!names.length) return null;
+  if (names.some(n => n.toLowerCase() === ALL_TARGETS)) return [ALL_TARGETS];
+  return names.slice(0, MAX_TARGETS);
+}
+const targetsKey = targets => (targets ? targets.map(t => t.toLowerCase()).sort().join('|') : '');
+
 function toInt(value, min, max) {
   const n = Math.round(Number(value));
   if (!Number.isFinite(n)) return 0;
@@ -390,8 +417,8 @@ function toInt(value, min, max) {
 
 /**
  * Validate the limb changes of a reply: known limbs and states only, one change
- * per limb (the last one wins), at most one per limb.
- * @returns {{limb, status}[]}
+ * per limb and set of targets (the last one wins).
+ * @returns {{limb, status, targets?}[]}  targets: who it hits (see cleanTargets); none = whoever acts
  */
 export function cleanLimbChanges(list) {
   if (!Array.isArray(list)) return [];
@@ -400,17 +427,19 @@ export function cleanLimbChanges(list) {
     if (!entry || typeof entry !== 'object') return;
     const limb = LIMB_REPLY_IDS[String(entry.extremidad || '').trim()];
     const status = LIMB_REPLY_STATUSES[String(entry.estado || '').trim().toLowerCase()];
-    if (limb && status) byLimb.set(limb, status);
+    const targets = cleanTargets(entry.afectados);
+    if (limb && status) byLimb.set(`${limb}#${targetsKey(targets)}`, { limb, status, ...(targets ? { targets } : {}) });
   });
-  return [...byLimb].map(([limb, status]) => ({ limb, status }));
+  return [...byLimb.values()];
 }
 
 /**
  * Validate the condition changes of a reply: known conditions Duncan may use
  * (see STORY_CONDITION_IDS), "aplicar" / "quitar", a known duration (default
  * until a long rest), Exhaustion levels 1-6 and a short cause. One change per
- * condition (the last one wins), at most MAX_CONDITION_CHANGES.
- * @returns {{ id, action: 'add' | 'remove', duration, level, cause }[]}
+ * condition and set of targets (the last one wins), at most MAX_CONDITION_CHANGES.
+ * @returns {{ id, action: 'add' | 'remove', duration, level, cause, targets? }[]}
+ *   targets: who it hits (see cleanTargets); none = whoever acts
  */
 export function cleanConditionChanges(list) {
   if (!Array.isArray(list)) return [];
@@ -424,8 +453,10 @@ export function cleanConditionChanges(list) {
     const levels = Math.round(Number(entry.niveles));
     const level = id === 'agotamiento' ? Math.min(EXHAUSTION_MAX, Math.max(1, Number.isFinite(levels) ? levels : 1)) : null;
     const cause = typeof entry.causa === 'string' ? entry.causa.trim().replace(/\s+/g, ' ').slice(0, CONDITION_CAUSE_MAX) : '';
-    byId.delete(id);
-    byId.set(id, { id, action, duration, level, cause });
+    const targets = cleanTargets(entry.afectados);
+    const key = `${id}#${targetsKey(targets)}`;
+    byId.delete(key);
+    byId.set(key, { id, action, duration, level, cause, ...(targets ? { targets } : {}) });
   });
   return [...byId.values()].slice(-MAX_CONDITION_CHANGES);
 }
@@ -471,6 +502,8 @@ export function parseDMReply(raw, character = {}) {
         suggestedActions: cleanActions(data.opciones),
         damageTaken: toInt(data.danio, 0, maxHp),
         healing: toInt(data.curacion, 0, maxHp),
+        damageTargets: cleanTargets(data.afectadosDanio),
+        healingTargets: cleanTargets(data.afectadosCuracion),
         goldEarned: toInt(data.oro, -gold, 500),
         xpEarned: toInt(data.experiencia, 0, 300),
         usedRoll: data.usaTirada === true,
@@ -501,6 +534,8 @@ export function parseDMReply(raw, character = {}) {
     suggestedActions: cleanActions(options),
     damageTaken: 0,
     healing: 0,
+    damageTargets: null,
+    healingTargets: null,
     goldEarned: 0,
     xpEarned: 0,
     summary: null,

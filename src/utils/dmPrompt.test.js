@@ -89,6 +89,8 @@ describe('parseDMReply', () => {
       suggestedActions: ['Huir', 'Luchar'],
       damageTaken: 3,
       healing: 0,
+      damageTargets: null,
+      healingTargets: null,
       goldEarned: -4,
       xpEarned: 0,
       usedRoll: true,

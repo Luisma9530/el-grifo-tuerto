@@ -227,6 +227,9 @@ export async function generateDMResponse({
               suggestedActions: parsed.suggestedActions,
               // After a finished fight: no damage, healing or XP from the narration (already resolved)
               damageTaken: combatResult ? 0 : parsed.damageTaken,
+              // In a party: who the damage and healing hit (whoever acts when missing)
+              damageTargets: combatResult ? null : parsed.damageTargets,
+              healingTargets: combatResult ? null : parsed.healingTargets,
               healing: combatResult ? 0 : parsed.healing,
               // After a fight the loot was given by the game; in a shop the game handles the gold
               goldEarned: combatResult || shop ? 0 : parsed.goldEarned,

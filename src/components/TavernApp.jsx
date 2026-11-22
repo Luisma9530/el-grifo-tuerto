@@ -19,14 +19,12 @@ import {
 } from '../utils/campaignStorage';
 import { tavernAudio } from '../utils/audio';
 import { animateRoll, is3DDiceEnabled } from '../dice3d/controller';
-import { applySceneOutcome, rescueKnockedOut } from '../utils/sceneOutcome';
 import {
   createEncounter, runEnemyTurns, playerAction, describeEncounterResult, injuriesIn, currentHeroUid
 } from '../utils/encounter';
-import { normalizeEquipment, applyLimbChanges, limbFact } from '../utils/equipment';
+import { normalizeEquipment, limbFact } from '../utils/equipment';
 import {
-  checkModifiers, applyConditionChanges, describeConditionChange, conditionFact,
-  reduceExhaustion, isIncapacitated, activeIds, conditionName, describeConditionsForPrompt
+  checkModifiers, describeConditionChange, conditionFact, isIncapacitated, activeIds, conditionName, describeConditionsForPrompt
 } from '../utils/conditions';
 import { keyMoments, narrateMoment, MAX_MOMENTS } from '../utils/combatNarration';
 import CombatView from './game/CombatView';
@@ -52,7 +50,9 @@ import {
   createParty, activeSheet, memberSheet, memberSheets, updateMember, setActiveMember, mergeHeroes,
   addMember, removeMember, transferItem, describeCompanions, findMemberByName, partyLevel, MAX_PARTY, members as membersOf
 } from '../utils/party';
-import { restParty, finishFight, storyXp, payPartyReward, longRestCost } from '../utils/partyActions';
+import {
+  restParty, finishFight, storyXp, payPartyReward, longRestCost, applySceneEffects, applySceneConditions, applySceneLimbs
+} from '../utils/partyActions';
 import { makeRecruitOffer, departingMember } from '../utils/recruit';
 
 // The bestiary (and its builder) is only needed when a fight is being prepared
@@ -371,40 +371,32 @@ export default function TavernApp({
         await animateRoll({ ...response.roll, label: isEnemySave ? 'Salvación del objetivo' : 'Tirada de acción' });
       }
 
-      // Apply the consequences of the scene to the member who acted (the gold is the party's)
+      // Apply the consequences of the scene: to the member who acted, or to the members
+      // Duncan names (a trap, an explosion...); the gold is the party's (see partyActions.js).
       // When the game already applied this action's healing and gold, the narrator can only add damage
       const damage = response.damageTaken || 0;
       const healing = effectsApplied ? 0 : response.healing || 0;
       const goldChange = effectsApplied ? 0 : response.goldEarned || 0;
-      const effects = { damage, healing, goldChange };
-      const outcome = applySceneOutcome(sheet, effects);
-      if (damage || healing || goldChange) {
-        // Recomputed from the latest state, in case the sheet changed while Duncan was thinking
-        updateMemberState(actorId, prev => {
-          const next = applySceneOutcome(prev, effects);
-          return { ...prev, hp: next.hp, gold: next.gold };
-        });
-      }
+      const scene = applySceneEffects(partyRef.current, actorId, {
+        damage, healing, goldChange, damageTargets: response.damageTargets, healingTargets: response.healingTargets
+      });
+      if (damage || healing || goldChange) setParty(scene.party);
+      const groupHit = scene.hit.length > 1 || (scene.hit[0] && scene.hit[0] !== sheet.name);
+      const groupHealed = scene.healed.length > 1 || (scene.healed[0] && scene.healed[0] !== sheet.name);
 
       // Limbs lost, disabled or healed in the story (validated by parseDMReply)
-      const limbs = fightGroups.length ? { applied: [] } : applyLimbChanges(sheet, response.limbChanges || []);
+      const limbs = fightGroups.length ? { applied: [] } : applySceneLimbs(partyRef.current, actorId, response.limbChanges || []);
       if (limbs.applied.length) {
-        updateMemberState(actorId, prev => applyLimbChanges(prev, response.limbChanges).character);
-        limbs.applied.forEach(change => recordEvent(limbFact(sheet.name, change)));
+        setParty(limbs.party);
+        limbs.applied.forEach(({ name, change }) => recordEvent(limbFact(name, change)));
       }
 
       // Conditions applied or removed by the story (validated by parseDMReply)
-      const conditionResult = fightGroups.length ? { applied: [], collapsed: false } : applyConditionChanges(sheet, response.conditionChanges || []);
+      const conditionResult = fightGroups.length ? { applied: [], collapsed: [] } : applySceneConditions(partyRef.current, actorId, response.conditionChanges || []);
       if (conditionResult.applied.length) {
-        updateMemberState(actorId, prev => {
-          const next = applyConditionChanges(prev, response.conditionChanges).character;
-          // Exhaustion 6: the hero collapses and Duncan picks them up (level 5 left)
-          if (!conditionResult.collapsed) return next;
-          const rescue = rescueKnockedOut(next);
-          return { ...reduceExhaustion(next, 1).creature, hp: Math.min(next.hp, rescue.hp), gold: rescue.gold };
-        });
-        conditionResult.applied.forEach(change => {
-          const fact = conditionFact(sheet.name, change);
+        setParty(conditionResult.party);
+        conditionResult.applied.forEach(({ name, change }) => {
+          const fact = conditionFact(name, change);
           if (fact) recordEvent(fact);
         });
       }
@@ -440,28 +432,33 @@ export default function TavernApp({
         }
       ]);
 
-      limbs.applied.forEach(change => {
+      if (groupHit) pushSystemMessage(`🩸 ${scene.hit.join(', ')} ${scene.hit.length > 1 ? 'pierden' : 'pierde'} ${damage} PG${scene.hit.length > 1 ? ' cada uno' : ''}.`);
+      if (groupHealed) pushSystemMessage(`💚 ${scene.healed.join(', ')} ${scene.healed.length > 1 ? 'recuperan' : 'recupera'} ${healing} PG${scene.healed.length > 1 ? ' cada uno' : ''}.`);
+
+      limbs.applied.forEach(({ name, change }) => {
         const icon = change.status === 'ok' ? '🩹' : '🦴';
         const dropped = change.dropped.length ? ` ${change.dropped.join(' y ')} va${change.dropped.length > 1 ? 'n' : ''} a la mochila.` : '';
         const effect = change.status === 'ok' ? ''
           : /Arm$/.test(change.limb) ? ' Esa mano ya no puede sostener nada.' : ' Huir de un combate será más difícil.';
-        pushSystemMessage(`${icon} ${limbFact(sheet.name, change)}.${effect}${dropped}`);
+        pushSystemMessage(`${icon} ${limbFact(name, change)}.${effect}${dropped}`);
       });
 
-      conditionResult.applied.forEach(change => pushSystemMessage(describeConditionChange(sheet.name, change)));
+      conditionResult.applied.forEach(({ name, change }) => pushSystemMessage(describeConditionChange(name, change)));
       questResult.applied.forEach(change => pushSystemMessage(describeQuestChange(change)));
-      if (conditionResult.collapsed) {
-        recordEvent(`${sheet.name} se desplomó de agotamiento y Duncan lo recogió`);
-        pushSystemMessage(`💀 ${sheet.name} llega al sexto nivel de agotamiento y se desploma. Maese Duncan lo recoge y lo mete en un catre: sigue con agotamiento de nivel 5 y la mitad del oro del grupo se va en cuidados.`);
-      }
+      conditionResult.collapsed.forEach(name => {
+        recordEvent(`${name} se desplomó de agotamiento y Duncan lo recogió`);
+        pushSystemMessage(`💀 ${name} llega al sexto nivel de agotamiento y se desploma. Maese Duncan lo recoge y lo mete en un catre: sigue con agotamiento de nivel 5.`);
+      });
+      if (conditionResult.goldLost > 0) pushSystemMessage(`🪙 Los cuidados de Duncan cuestan ${conditionResult.goldLost} monedas de oro de la bolsa.`);
 
       ready.forEach(name => pushSystemMessage(levelReadyLine(name)));
 
-      // Dropping to 0 HP: Duncan patches the hero up... at a price
-      if (outcome.knockedOut) {
-        recordEvent(`${sheet.name} cayó inconsciente y Duncan lo curó`);
-        pushSystemMessage(`💀 ${sheet.name} cae inconsciente. Maese Duncan lo arrastra junto a la chimenea y lo remienda: despierta con ${outcome.hp} HP${outcome.goldLost > 0 ? ` y el grupo tiene ${outcome.goldLost} monedas de oro menos por los cuidados` : ''}.`);
-      }
+      // Dropping to 0 HP: Duncan patches the hero up... at a price (paid once from the purse)
+      scene.knockedOut.forEach(k => {
+        recordEvent(`${k.name} cayó inconsciente y Duncan lo curó`);
+        pushSystemMessage(`💀 ${k.name} cae inconsciente. Maese Duncan lo arrastra junto a la chimenea y lo remienda: despierta con ${k.hp} HP.`);
+      });
+      if (scene.goldLost > 0) pushSystemMessage(`🪙 Los cuidados de Duncan cuestan ${scene.goldLost} monedas de oro de la bolsa.`);
 
       // A companion offers to join: the game builds the sheet, the player decides
       if (response.recruit && !fightGroups.length) {

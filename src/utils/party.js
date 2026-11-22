@@ -159,6 +159,21 @@ export function findMemberByName(party, name) {
 }
 
 /**
+ * Who a scene effect hits: the names or ids in `targets` (as validated by
+ * cleanTargets in dmPrompt.js), "todos" for everyone, or whoever acts
+ * (`actorId`) when the list is missing or names nobody of the party.
+ * @returns {string[]} member ids
+ */
+export function resolveTargets(party, targets, actorId) {
+  const list = members(party);
+  const fallback = list.some(m => m.id === actorId) ? [actorId] : list.slice(0, 1).map(m => m.id);
+  if (!Array.isArray(targets) || !targets.length) return fallback;
+  if (targets.some(t => String(t).trim().toLowerCase() === 'todos')) return list.map(m => m.id);
+  const ids = [...new Set(targets.map(t => (memberById(party, t) || findMemberByName(party, t))?.id).filter(Boolean))];
+  return ids.length ? ids : fallback;
+}
+
+/**
  * Give an item from one member to another (outside combat). What the giver held
  * or wore is taken off first. Potions stack in the receiver's backpack.
  * @returns {{ ok: true, party, item } | { ok: false, error }}
