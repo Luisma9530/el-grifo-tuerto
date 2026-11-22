@@ -93,8 +93,10 @@ function EnemyCard({ enemy, selected, onSelect, isTurn, nameOf }) {
 /**
  * The combat screen (it replaces the chronicle while a fight is on).
  * onAction(action) — see playerAction in encounter.js; onFinish() closes a finished fight.
+ * finishLabel: text of that button; endActions: more buttons for a finished fight
+ * (e.g. "Revivir en el simulador"); banner: a line above the fight (the simulator's notice).
  */
-export default function CombatView({ encounter, character, onAction, onFinish, busy }) {
+export default function CombatView({ encounter, character, onAction, onFinish, busy, finishLabel = 'Volver a la crónica', endActions = null, banner = null }) {
   const living = activeEnemies(encounter);
   const [targetUid, setTargetUid] = useState(living[0]?.uid || null);
   const [raging, setRaging] = useState(false);
@@ -127,6 +129,7 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
 
   return (
     <div className="h-full flex flex-col bg-[radial-gradient(ellipse_at_top,_#1d1018_0%,_#0b0a0e_100%)]">
+      {banner}
       {/* Header: round and initiative */}
       <div className="px-4 py-2.5 border-b border-red-950/60 bg-[#140d14] flex items-center gap-3 overflow-x-auto">
         <span className="font-cinzel font-bold text-red-200 text-sm shrink-0 flex items-center gap-1.5">
@@ -202,14 +205,17 @@ export default function CombatView({ encounter, character, onAction, onFinish, b
       {/* Actions */}
       <div className="border-t border-red-950/60 bg-[#110d14] p-3">
         {over ? (
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm text-amber-100 flex items-center gap-2">
               {encounter.status === 'victory' ? <Flag className="w-4 h-4 text-emerald-400" /> : <Skull className="w-4 h-4 text-red-400" />}
               {encounter.status === 'victory' ? `¡Victoria! +${encounter.xp} PX` : encounter.status === 'fled' ? 'Has escapado del combate.' : 'Has caído en combate.'}
             </p>
-            <button onClick={onFinish} className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 text-sm font-cinzel font-bold">
-              Volver a la crónica
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {endActions}
+              <button onClick={onFinish} className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 text-sm font-cinzel font-bold">
+                {finishLabel}
+              </button>
+            </div>
           </div>
         ) : (
           <>

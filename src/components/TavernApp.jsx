@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
-import { Volume2, VolumeX, Users, Settings, ArrowLeft, Dice5, Compass, User, Sparkles, BookOpen, Download, Check, AlertTriangle } from 'lucide-react';
+import { Volume2, VolumeX, Users, Settings, ArrowLeft, Dice5, Compass, User, Sparkles, BookOpen, Download, Check, AlertTriangle, FlaskConical, RotateCcw } from 'lucide-react';
 import PartyPanel from './game/PartyPanel';
 import StoryStream from './game/StoryStream';
 import WorldMapPanel from './game/WorldMapPanel';
@@ -27,6 +27,7 @@ import {
 } from '../utils/conditions';
 import { keyMoments, narrateMoment, MAX_MOMENTS } from '../utils/combatNarration';
 import CombatView from './game/CombatView';
+import { makeSnapshot, addSnapshot, setSnapshotResult, normalizeSnapshots } from '../utils/combatSnapshots';
 import { addXp, canLevelUp, describeLevelUp } from '../utils/leveling';
 import LevelUpModal from './game/LevelUpModal';
 import {
@@ -54,7 +55,8 @@ export default function TavernApp({
   onOpenInvite,
   onOpenSettings,
   onOpenGeminiConnect,
-  onOpenCampaigns
+  onOpenCampaigns,
+  onOpenSimulator = () => {}
 }) {
   // Campaign ID & metadata
   const [currentCampaignId, setCurrentCampaignId] = useState(() => {
@@ -136,6 +138,8 @@ export default function TavernApp({
   // Combat encounter in progress (null outside combat); saved with the campaign
   const [encounter, setEncounter] = useState(() => storedCampaign()?.encounter || null);
   const [isEncounterBuilderOpen, setIsEncounterBuilderOpen] = useState(false);
+  // How each recent fight started (the last MAX_SNAPSHOTS), to replay it in the simulator
+  const [combatSnapshots, setCombatSnapshots] = useState(() => normalizeSnapshots(storedCampaign()?.combatSnapshots));
 
   // Shops visited (their stock is kept) and the one open now; saved with the campaign
   const [shops, setShops] = useState(() => normalizeShops(storedCampaign()?.shops));
@@ -192,6 +196,7 @@ export default function TavernApp({
       setSummaryCoverage(activeCampaign.summaryCoverage || 0);
       setEvents(activeCampaign.events || []);
       setEncounter(activeCampaign.encounter || null);
+      setCombatSnapshots(normalizeSnapshots(activeCampaign.combatSnapshots));
       setShops(normalizeShops(activeCampaign.shops));
       setActiveShopKey(null);
       if (activeCampaign.suggestedActions?.length > 0) {
@@ -235,14 +240,15 @@ export default function TavernApp({
       summaryCoverage,
       events,
       encounter,
-      shops
+      shops,
+      combatSnapshots
     });
     if (saved) {
       setSaveStatus('saved');
     } else {
       setSaveStatus(isQuotaError(getLastSaveError()) ? 'quota' : 'error');
     }
-  }, [messages, character, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter, shops]);
+  }, [messages, character, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter, shops, combatSnapshots]);
 
   const toggleSound = () => {
     const newState = tavernAudio.toggleTavernAmbience();
@@ -438,12 +444,19 @@ export default function TavernApp({
 
   // `sheet`: the hero as it is now (Duncan may start a fight right after changing it)
   const startEncounter = (groups, sheet = character, { byDuncan = false } = {}) => {
-    let next = { ...createEncounter(groups, sheet, combatDie), byDuncan, narrated: 0 };
+    // How the fight starts, kept so it can be fought again in the simulator
+    const snapshot = makeSnapshot({ character: sheet, groups, world, place: currentNode(world)?.name || '', byDuncan });
+    let next = { ...createEncounter(groups, sheet, combatDie), byDuncan, narrated: 0, snapshotId: snapshot.id };
     let hero = sheet;
     // Enemies that won initiative act before the hero
     const logStart = next.log.length;
     ({ encounter: next, character: hero } = runEnemyTurns(next, hero, combatDie));
     recordInjuries(next.log.slice(logStart), sheet.name);
+    const finished = next;
+    setCombatSnapshots(prev => {
+      const list = addSnapshot(prev, snapshot);
+      return finished.status === 'active' ? list : setSnapshotResult(list, snapshot.id, finished);
+    });
     const names = groups.map(g => {
       const label = g.name ? `${g.name} (${g.monster.name}${g.elite ? ', élite' : ''})` : g.monster.name;
       return g.count > 1 ? `${g.count} × ${label}` : label;
@@ -487,6 +500,9 @@ export default function TavernApp({
       return;
     }
     recordInjuries(result.encounter.log.slice(encounter.log.length), character.name);
+    if (result.encounter.status !== 'active' && encounter.snapshotId) {
+      setCombatSnapshots(prev => setSnapshotResult(prev, encounter.snapshotId, result.encounter));
+    }
     setCombatBusy(true);
     try {
       for (const roll of result.animations) {
@@ -889,6 +905,16 @@ export default function TavernApp({
             <span className="truncate max-w-[120px] sm:max-w-[170px]">{campaignTitle}</span>
           </button>
 
+          {/* Combat simulator: practice fights and replay recent ones (never changes the campaign) */}
+          <button
+            onClick={() => onOpenSimulator({ campaignId: currentCampaignId })}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#121a22] hover:bg-stone-800 border border-sky-900/50 text-sky-200 text-xs font-bold transition-all"
+            title="Simulador de combates: prueba combates o revive los recientes sin afectar a tu campaña"
+          >
+            <FlaskConical className="w-3.5 h-3.5 text-sky-300" />
+            <span className="hidden md:inline">Simulador</span>
+          </button>
+
           {/* Auto-save status badge */}
           {saveStatus === 'saved' ? (
             <div 
@@ -1037,6 +1063,15 @@ export default function TavernApp({
               onAction={handleCombatAction}
               onFinish={handleFinishEncounter}
               busy={combatBusy}
+              endActions={encounter.snapshotId && combatSnapshots.some(s => s.id === encounter.snapshotId) ? (
+                <button
+                  onClick={() => onOpenSimulator({ snapshot: combatSnapshots.find(s => s.id === encounter.snapshotId), campaignId: currentCampaignId })}
+                  className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 ${encounter.status === 'defeat' ? 'bg-sky-700 hover:bg-sky-600 border-sky-500 text-white' : 'border-sky-800 text-sky-200 hover:bg-sky-950/50'}`}
+                  title="Repite este combate desde el principio en el simulador: no afecta a tu campaña"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Revivir en el simulador
+                </button>
+              ) : null}
             />
           ) : (
             <StoryStream

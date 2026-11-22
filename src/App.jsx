@@ -28,6 +28,8 @@ import {
 
 // Only needed when starting a new campaign: kept out of the initial bundle
 const CharacterWizard = lazy(() => import('./components/wizard/CharacterWizard'));
+// The combat simulator is loaded only when opened
+const CombatSimulator = lazy(() => import('./components/simulator/CombatSimulator'));
 
 export default function App() {
   const [currentView, setCurrentView] = useState('landing'); // 'landing' | 'app'
@@ -51,6 +53,8 @@ export default function App() {
   const [worldSavesTarget, setWorldSavesTarget] = useState(null); // world whose save slots are shown
   // New campaign waiting for its hero: { world, title } while the character wizard is open
   const [pendingCampaign, setPendingCampaign] = useState(null);
+  // Combat simulator open: { snapshot?, campaignId? } (it never changes a campaign)
+  const [simulator, setSimulator] = useState(null);
 
   const refreshCampaignsCount = () => {
     setCampaignsCount(getAllCampaigns().length);
@@ -134,6 +138,7 @@ export default function App() {
             onOpenWorldForge={() => setIsWorldForgeOpen(true)}
             onOpenGeminiConnect={() => setIsGeminiConnectOpen(true)}
             onOpenCampaigns={() => setIsCampaignsOpen(true)}
+            onOpenSimulator={() => setSimulator({})}
             campaignsCount={campaignsCount}
             keysCount={geminiKeys.length}
           />
@@ -146,6 +151,7 @@ export default function App() {
                 el?.scrollIntoView({ behavior: 'smooth' });
               }}
               onOpenCampaigns={() => setIsCampaignsOpen(true)}
+              onOpenSimulator={() => setSimulator({})}
               campaignsCount={campaignsCount}
             />
 
@@ -184,7 +190,18 @@ export default function App() {
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenGeminiConnect={() => setIsGeminiConnectOpen(true)}
           onOpenCampaigns={() => setIsCampaignsOpen(true)}
+          onOpenSimulator={options => setSimulator(options || {})}
         />
+      )}
+
+      {simulator && (
+        <Suspense fallback={null}>
+          <CombatSimulator
+            initialSnapshot={simulator.snapshot || null}
+            campaignId={simulator.campaignId || null}
+            onClose={() => setSimulator(null)}
+          />
+        </Suspense>
       )}
 
       {/* 3D dice stage (above everything, only visible while rolling) */}
