@@ -109,7 +109,9 @@ export default function Navbar({
             </button>
           )}
 
+          {/* On a phone the menu goes last, at the edge, so it opens inside the screen */}
           <MenuButton
+            className="order-last sm:order-none"
             title="Más opciones"
             icon={<Menu className="w-4 h-4" />}
             label={<span className="hidden sm:inline">Más</span>}
