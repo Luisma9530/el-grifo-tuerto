@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { Volume2, VolumeX, Users, Settings, ArrowLeft, Download, AlertTriangle, FlaskConical, RotateCcw, BookOpen, Wifi, MoreHorizontal, ScrollText, Shield, Map as MapIcon, Swords } from 'lucide-react';
 import MenuButton from './MenuButton';
 import PartyPanel from './game/PartyPanel';
@@ -29,10 +29,8 @@ import {
 } from '../utils/conditions';
 import { keyMoments, narrateMoment, MAX_MOMENTS, openingLine } from '../utils/combatNarration';
 import { detectOpeningStrike, openingReady } from '../utils/surprise';
-import CombatView from './game/CombatView';
 import { makeSnapshot, addSnapshot, setSnapshotResult, normalizeSnapshots } from '../utils/combatSnapshots';
 import { canLevelUp, describeLevelUp, levelUpPlan } from '../utils/leveling';
-import LevelUpModal from './game/LevelUpModal';
 import {
   historyForPrompt, needsSummary, coverageAfterSummary, addEvent, eventsForPrompt
 } from '../utils/campaignMemory';
@@ -43,7 +41,6 @@ import {
 } from '../utils/shops';
 import { drinkPotion, healingDice } from '../utils/items';
 import { generateLoot, describeLoot } from '../utils/loot';
-import ShopModal from './game/ShopModal';
 import {
   normalizeQuests, applyQuestChanges, abandonQuest, describeQuestChange, questFact, unseenQuestCount
 } from '../utils/quests';
@@ -67,12 +64,18 @@ import { stillValid } from '../online/protocol';
 import { applyOwnChange } from '../online/ownChanges';
 import { buildPlayerHero } from '../online/newHero';
 import { sheetIntents, labelFor, ABILITY_NAMES } from '../online/actions';
-import HostRoomDrawer from './online/HostRoomDrawer';
+import { CombatView, LevelUpModal, ShopModal, HostRoomDrawer, preloadGameParts } from './game/lazyParts';
+import OpenedOnce from './OpenedOnce';
+import { whenIdle } from '../utils/lazyWithPreload';
 import OnlineToast from './online/OnlineToast';
 
 // The bestiary (and its builder) is only needed when a fight is being prepared
 // The bestiary is big: loaded the first time Duncan may start a fight
-const loadBestiary = () => import('../utils/bestiary');
+const loadBestiary = () => {
+  // A fight may start: the combat view will be needed right after
+  CombatView.preload();
+  return import('../utils/bestiary');
+};
 
 const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const levelReadyLine = name => `✨ ¡${name} tiene experiencia suficiente para subir de nivel! Selecciónalo y pulsa «Subir de nivel» en su ficha.`;
@@ -200,6 +203,10 @@ export default function TavernApp({
     }, 2000);
     return () => clearTimeout(timer);
   }, []);
+
+  // The combat view, the shop, leveling up, the sheet's tabs...: loaded apart
+  // from the game screen so it opens sooner, then fetched while nothing happens
+  useEffect(() => whenIdle(preloadGameParts), []);
 
   // Ensure campaign is initialized and stored
   useEffect(() => {
@@ -1421,23 +1428,25 @@ export default function TavernApp({
         {/* Center Column: Story Stream (Flexible width) */}
         <div className={`flex-1 min-w-0 flex-col h-full overflow-hidden ${mobileTab === 'story' ? 'flex' : 'hidden lg:flex'}`}>
           {encounter ? (
-            <CombatView
-              encounter={encounter}
-              heroes={heroes}
-              onAction={act.combat}
-              onFinish={handleFinishEncounter}
-              busy={combatBusy}
-              waitingFor={turnPlayer}
-              endActions={encounter.snapshotId && combatSnapshots.some(s => s.id === encounter.snapshotId) ? (
-                <button
-                  onClick={() => onOpenSimulator({ snapshot: combatSnapshots.find(s => s.id === encounter.snapshotId), campaignId: currentCampaignId })}
-                  className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 ${encounter.status === 'defeat' ? 'bg-sky-700 hover:bg-sky-600 border-sky-500 text-white' : 'border-sky-800 text-sky-200 hover:bg-sky-950/50'}`}
-                  title="Repite este combate desde el principio en el simulador: no afecta a tu campaña"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" /> Revivir en el simulador
-                </button>
-              ) : null}
-            />
+            <Suspense fallback={null}>
+              <CombatView
+                encounter={encounter}
+                heroes={heroes}
+                onAction={act.combat}
+                onFinish={handleFinishEncounter}
+                busy={combatBusy}
+                waitingFor={turnPlayer}
+                endActions={encounter.snapshotId && combatSnapshots.some(s => s.id === encounter.snapshotId) ? (
+                  <button
+                    onClick={() => onOpenSimulator({ snapshot: combatSnapshots.find(s => s.id === encounter.snapshotId), campaignId: currentCampaignId })}
+                    className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 ${encounter.status === 'defeat' ? 'bg-sky-700 hover:bg-sky-600 border-sky-500 text-white' : 'border-sky-800 text-sky-200 hover:bg-sky-950/50'}`}
+                    title="Repite este combate desde el principio en el simulador: no afecta a tu campaña"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> Revivir en el simulador
+                  </button>
+                ) : null}
+              />
+            </Suspense>
           ) : (
             <StoryStream
               messages={messages}
@@ -1484,36 +1493,42 @@ export default function TavernApp({
 
 
       {activeShop && !encounter && (
-        <ShopModal
-          shop={activeShop}
-          character={character}
-          onBuy={handleBuy}
-          onSell={handleSell}
-          onClose={() => setActiveShopKey(null)}
-        />
+        <Suspense fallback={null}>
+          <ShopModal
+            shop={activeShop}
+            character={character}
+            onBuy={handleBuy}
+            onSell={handleSell}
+            onClose={() => setActiveShopKey(null)}
+          />
+        </Suspense>
       )}
 
       {isLevelUpOpen && canLevelUp(character) && (
-        <LevelUpModal
-          character={character}
-          onConfirm={handleLevelUpConfirmed}
-          onClose={() => setIsLevelUpOpen(false)}
-        />
+        <Suspense fallback={null}>
+          <LevelUpModal
+            character={character}
+            onConfirm={handleLevelUpConfirmed}
+            onClose={() => setIsLevelUpOpen(false)}
+          />
+        </Suspense>
       )}
 
-      <HostRoomDrawer
-        isOpen={isRoomOpen}
-        onClose={() => setIsRoomOpen(false)}
-        kind={onlineKind}
-        online={online}
-        defaultName={storedPlayerName()}
-        onOpenRoom={openRoom}
-        me={room?.hostId}
-        characters={heroes}
-        link={room ? roomLink(room.code, onlineKind) : ''}
-        onIntent={submit}
-        hostOps={hostOps}
-      />
+      <OpenedOnce when={isRoomOpen}>
+        <HostRoomDrawer
+          isOpen={isRoomOpen}
+          onClose={() => setIsRoomOpen(false)}
+          kind={onlineKind}
+          online={online}
+          defaultName={storedPlayerName()}
+          onOpenRoom={openRoom}
+          me={room?.hostId}
+          characters={heroes}
+          link={room ? roomLink(room.code, onlineKind) : ''}
+          onIntent={submit}
+          hostOps={hostOps}
+        />
+      </OpenedOnce>
       <OnlineToast text={onlineNotice} onClose={() => setOnlineNotice(null)} />
 
       {/* Phone: the sections in a bar at the bottom */}

@@ -50,7 +50,7 @@ describe('StoryStream', () => {
     expect(container.textContent).toContain('Molino');
   });
 
-  it('the 🎲 button offers checks with the sheet and the dice tray', () => {
+  it('the 🎲 button offers checks with the sheet and the dice tray', async () => {
     const onQuickCheck = vi.fn();
     render({ onQuickCheck, onDiceRoll: () => {} });
     click(button('Tiradas'));
@@ -59,6 +59,8 @@ describe('StoryStream', () => {
 
     click(button('Tiradas'));
     click(button('Bandeja de dados'));
+    // The tray is loaded on demand: wait for it
+    await act(async () => { await import('./DiceRollerTray'); });
     expect(container.querySelector('[role="dialog"][aria-label="Bandeja de dados"]')).not.toBeNull();
     click(button('Cerrar la bandeja'));
     expect(container.querySelector('[role="dialog"]')).toBeNull();

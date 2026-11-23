@@ -10,7 +10,7 @@ import { getSpell, spellSummary } from '../../utils/spellcasting';
 import { abilityModifier, formatModifier } from '../../utils/characterBuilder';
 import { ABILITIES, MAX_ABILITY_SCORE } from '../../data/srd';
 import { animateRoll } from '../../dice3d/controller';
-import { rollDie } from '../../utils/gameEngine';
+import { rollDie } from '../../utils/dice';
 
 function Section({ title, children }) {
   return (

@@ -1,14 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import { Heart, Shield, Coins, Backpack, BedDouble, Sparkles, Wand2, UserMinus, MoreVertical, ChevronDown, ChevronUp } from 'lucide-react';
-import { getModifier, getModifierNumber } from '../../utils/gameEngine';
+import { getModifier, getModifierNumber } from '../../utils/dice';
 import { skillRows, proficiencyBonus, formatModifier } from '../../utils/characterBuilder';
 import { TAVERN_MENU } from '../../data/gameData';
 import { tavernAudio } from '../../utils/audio';
-import SpellsTab, { RestButtons } from './SpellsTab';
+import RestButtons from './RestButtons';
 import MenuButton from '../MenuButton';
 import AttacksSummary from './AttacksSummary';
 import ConditionBadges from './ConditionBadges';
-import EquipmentPanel from './EquipmentPanel';
+import { SpellsTab, EquipmentPanel } from './lazyParts';
 import { normalizeEquipment, HANDS, isWorn } from '../../utils/equipment';
 import { formatCoins, healingDice, inventoryWeight, formatKg } from '../../utils/items';
 
@@ -421,17 +421,21 @@ export default function PartyPanel({
 
         {/* SPELLS TAB */}
         {activeTab === 'spells' && hasMagic && (
-          <SpellsTab character={character} onCastSpell={onCastSpell} onRest={onRest} busy={busy} partyNames={party.map(m => m.name)} restCost={longRestCost} partySize={party.length} />
+          <Suspense fallback={null}>
+            <SpellsTab character={character} onCastSpell={onCastSpell} onRest={onRest} busy={busy} partyNames={party.map(m => m.name)} restCost={longRestCost} partySize={party.length} />
+          </Suspense>
         )}
 
         {/* INVENTORY TAB */}
         {activeTab === 'inventory' && (
           <div className="space-y-2.5">
-            <EquipmentPanel
-              character={character}
-              onChange={onUpdateCharacter}
-              locked={inCombat ? 'En combate, cambia de arma desde la vista de combate: gasta tu acción.' : null}
-            />
+            <Suspense fallback={null}>
+              <EquipmentPanel
+                character={character}
+                onChange={onUpdateCharacter}
+                locked={inCombat ? 'En combate, cambia de arma desde la vista de combate: gasta tu acción.' : null}
+              />
+            </Suspense>
 
             <div className="flex items-baseline justify-between gap-2 pt-1">
               <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider">

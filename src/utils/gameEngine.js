@@ -7,117 +7,14 @@ import { narrateCombatEnd, startLocalFight, isAggressive, shopForAction, narrate
 import { describeQuestsForPrompt } from './quests';
 import { localQuestScene, bestiaryForHunts } from './localQuests';
 import { localRecruitScene } from './localRecruit';
+import { rollDie } from './dice';
+import { getStoredGeminiKeys } from './geminiKeys';
 import { readCombatStart, localSurprise, localAmbush, isWildExploration } from './surprise';
 
-// Helper to calculate D&D stat modifier from score (e.g. 16 -> +3, 10 -> 0, 8 -> -1)
-export function getModifier(score) {
-  const mod = Math.floor((score - 10) / 2);
-  return mod >= 0 ? `+${mod}` : `${mod}`;
-}
-
-export function getModifierNumber(score) {
-  return Math.floor((score - 10) / 2);
-}
-
-// Roll any polyhedral die (d4, d6, d8, d10, d12, d20, d100)
-// Pass { silent: true } when the roll will be shown with animateRoll(), which
-// plays its own sounds in sync with the 3D dice.
-export function rollDie(sides = 20, { silent = false } = {}) {
-  const val = Math.floor(Math.random() * sides) + 1;
-  if (!silent) tavernAudio.playDiceRoll();
-  return val;
-}
-
-// Roll a d20 check with any modifier (ability, or skill with proficiency) against a DC
-// `disadvantage`: roll two d20 and keep the lower one (e.g. armor without training, poisoned)
-// `advantage`: keep the higher one (both at once cancel out)
-export function rollCheck({ modifier = 0, statName = 'Tirada', dc = 12, silent = false, disadvantage = false, advantage = false } = {}) {
-  const first = rollDie(20, { silent });
-  const twoDice = Boolean(disadvantage) !== Boolean(advantage);
-  const second = twoDice ? rollDie(20, { silent: true }) : first;
-  const rawRoll = !twoDice ? first : disadvantage ? Math.min(first, second) : Math.max(first, second);
-  const total = rawRoll + modifier;
-
-  const isNat20 = rawRoll === 20;
-  const isNat1 = rawRoll === 1;
-  const success = isNat20 ? true : isNat1 ? false : total >= dc;
-
-  if (!silent) {
-    if (isNat20) {
-      tavernAudio.playCritSuccess();
-    } else if (isNat1) {
-      tavernAudio.playCritFail();
-    }
-  }
-
-  return {
-    rawRoll,
-    modifier,
-    total,
-    dc,
-    statName,
-    success,
-    isNat20,
-    isNat1
-  };
-}
-
-// Roll a check with a character's ability score
-export function rollCheckWithStat(statValue, statName = 'Tirada', dc = 12, { silent = false } = {}) {
-  return rollCheck({ modifier: getModifierNumber(statValue), statName, dc, silent });
-}
-
-// Storage and Key Pooling helpers for BYOK (Bring Your Own Key) Multi-Player setup
-export function getStoredGeminiKeys() {
-  try {
-    const raw = localStorage.getItem('tavern_gemini_keys');
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed
-          .map(item => (typeof item === 'string' ? { id: item, label: 'Clave', key: item } : item))
-          .filter(item => item && item.key && item.key.trim().length > 10);
-      }
-    }
-    const single = localStorage.getItem('tavern_gemini_key');
-    if (single && single.trim().length > 10) {
-      return [{ id: 'default', label: 'Mi Clave Principal', key: single.trim() }];
-    }
-  } catch (e) {
-    console.error('Error al recuperar claves de Gemini:', e);
-  }
-  return [];
-}
-
-export function saveStoredGeminiKeys(keyList) {
-  try {
-    localStorage.setItem('tavern_gemini_keys', JSON.stringify(keyList));
-    if (keyList.length > 0) {
-      localStorage.setItem('tavern_gemini_key', keyList[0].key);
-    } else {
-      localStorage.removeItem('tavern_gemini_key');
-    }
-  } catch (e) {
-    console.error('Error al guardar claves de Gemini:', e);
-  }
-}
-
-// Live connection test against Google Gemini API
-export async function testGeminiKey(key) {
-  const result = await requestGemini(key.trim(), {
-    prompt: 'Di en una sola frase breve y con acento de tabernero: "¡Por las barbas de mi abuelo, conexión verificada en la taberna!"'
-  });
-  if (result.ok) return { success: true, reply: result.text.trim() || '¡Conexión verificada con éxito!' };
-
-  // An overloaded service says nothing about the key: don't reject a good key for that
-  if (result.reason === 'overloaded' || result.reason === 'network') {
-    return {
-      success: false,
-      error: 'Google Gemini está saturado o no responde en este momento. La clave puede ser correcta: espera un minuto y vuelve a intentarlo.'
-    };
-  }
-  return { success: false, error: result.error };
-}
+// Dice, modifiers and the stored Gemini keys live in their own small modules
+// (re-exported here so every existing import keeps working)
+export { getModifier, getModifierNumber, rollDie, rollCheck, rollCheckWithStat } from './dice';
+export { getStoredGeminiKeys, saveStoredGeminiKeys, testGeminiKey } from './geminiKeys';
 
 // Ask Gemini for Duncan's reply. Requests structured JSON (narration + damage, gold,
 // whether the d20 was used); if the model rejects that request format, retries

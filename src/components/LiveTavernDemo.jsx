@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Send, Dice5, Sparkles, RefreshCw, Volume2, ShieldAlert } from 'lucide-react';
-import { rollDie } from '../utils/gameEngine';
+import { rollDie } from '../utils/dice';
 import { animateRoll } from '../dice3d/controller';
 import RichText from './RichText';
 import { tavernAudio } from '../utils/audio';

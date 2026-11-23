@@ -1,12 +1,12 @@
-import React, { useMemo, useState, lazy, Suspense } from 'react';
+import React, { useEffect, useMemo, useState, lazy, Suspense } from 'react';
 import { ArrowLeft, Wifi, WifiOff, Loader2, ScrollText, Swords, Shield, Users, Map as MapIcon } from 'lucide-react';
 import PartyPanel from '../game/PartyPanel';
 import StoryStream from '../game/StoryStream';
-import CombatView from '../game/CombatView';
 import WorldMapPanel from '../game/WorldMapPanel';
 import { MobileTabBar, SideColumn } from '../game/GameLayout';
 import RoomPanel from './RoomPanel';
-import LevelUpModal from '../game/LevelUpModal';
+import { CombatView, LevelUpModal, preloadGameParts } from '../game/lazyParts';
+import { whenIdle } from '../../utils/lazyWithPreload';
 import OnlineToast from './OnlineToast';
 import { useGuestRoom } from '../../online/useOnlineRoom';
 import { roomLink } from '../../online/transport';
@@ -31,6 +31,8 @@ const HOST_ONLY = 'Esto lo decide el anfitrión (descansos, tiendas, viajes, com
  */
 export default function GuestTable({ code, name, kind, onLeave }) {
   const room = useGuestRoom({ code, name, kind });
+  // The combat view, leveling up, the sheet's tabs...: fetched while nothing happens
+  useEffect(() => whenIdle(preloadGameParts), []);
   const { view, playerId } = room;
   const [selectedId, setSelectedId] = useState(null);
   const [mobileTab, setMobileTab] = useState('story');
@@ -176,15 +178,17 @@ export default function GuestTable({ code, name, kind, onLeave }) {
             </div>
           )}
           {encounter ? (
-            <CombatView
-              encounter={encounter}
-              heroes={heroes}
-              onAction={action => send({ type: 'combat', characterId: turnUid, action })}
-              onFinish={() => {}}
-              canFinish={false}
-              busy={Boolean(meta.combatBusy)}
-              waitingFor={turnPlayer}
-            />
+            <Suspense fallback={null}>
+              <CombatView
+                encounter={encounter}
+                heroes={heroes}
+                onAction={action => send({ type: 'combat', characterId: turnUid, action })}
+                onFinish={() => {}}
+                canFinish={false}
+                busy={Boolean(meta.combatBusy)}
+                waitingFor={turnPlayer}
+              />
+            </Suspense>
           ) : (
             <StoryStream
               messages={view.chronicle || []}
@@ -270,16 +274,18 @@ export default function GuestTable({ code, name, kind, onLeave }) {
       )}
 
       {levelingHero && (
-        <LevelUpModal
-          key={levelingHero.id}
-          character={levelingHero}
-          hostRolls
-          onSubmitChoices={choices => {
-            send({ type: 'levelUp', characterId: levelingHero.id, choices });
-            setLevelUpId(null);
-          }}
-          onClose={() => setLevelUpId(null)}
-        />
+        <Suspense fallback={null}>
+          <LevelUpModal
+            key={levelingHero.id}
+            character={levelingHero}
+            hostRolls
+            onSubmitChoices={choices => {
+              send({ type: 'levelUp', characterId: levelingHero.id, choices });
+              setLevelUpId(null);
+            }}
+            onClose={() => setLevelUpId(null)}
+          />
+        </Suspense>
       )}
 
       <OnlineToast text={notice} onClose={closeNotice} />

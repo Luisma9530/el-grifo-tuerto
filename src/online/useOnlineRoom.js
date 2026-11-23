@@ -8,10 +8,10 @@ import { connectTransport } from './transport';
 import { createHostSession, createGuestSession } from './session';
 import { createRoom, restoreRoom, roomToSave, newRoomCode, normalizeCode, cleanName } from './room';
 import { createIdentity, randomId } from './security';
+import { storedPlayerName } from './playerName';
 
 const HOST_KEY = campaignId => `grifo_online_host:${campaignId}`;
 const IDENTITY_KEY = (code, name) => `grifo_online_identity:${normalizeCode(code)}:${cleanName(name).toLocaleLowerCase('es')}`;
-const NAME_KEY = 'grifo_online_name';
 
 const read = key => {
   try {
@@ -27,13 +27,8 @@ const write = (key, value) => {
   } catch { /* storage full: the room still works, it just won't be remembered */ }
 };
 
-/** The name last used to play online in this browser. */
-export const storedPlayerName = () => {
-  try { return localStorage.getItem(NAME_KEY) || ''; } catch { return ''; }
-};
-export const storePlayerName = name => {
-  try { localStorage.setItem(NAME_KEY, cleanName(name)); } catch { /* ignore */ }
-};
+// The name last used to play online (its own small module, re-exported here)
+export { storedPlayerName, storePlayerName } from './playerName';
 
 /** Whether this campaign was being played online when the page was left (to reopen it). */
 export const wasOnline = campaignId => Boolean(campaignId && read(HOST_KEY(campaignId))?.active);

@@ -11,7 +11,7 @@
 // - A simple rate limit per player keeps a flood from reaching the game (and the
 //   realtime service's message quota).
 
-import { getStoredGeminiKeys } from '../utils/gameEngine';
+import { getStoredGeminiKeys } from '../utils/geminiKeys';
 
 const ALGO = { name: 'ECDSA', namedCurve: 'P-256' };
 const SIGN = { name: 'ECDSA', hash: 'SHA-256' };

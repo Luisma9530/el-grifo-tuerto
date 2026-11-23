@@ -1,4 +1,4 @@
-import React, { useState, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import Navbar from './components/Navbar';
 import Hero from './components/Hero';
 import LiveTavernDemo from './components/LiveTavernDemo';
@@ -6,38 +6,43 @@ import Features from './components/Features';
 import WorldsShowcase from './components/WorldsShowcase';
 import Faq from './components/Faq';
 import Footer from './components/Footer';
-import TavernApp from './components/TavernApp';
-import InviteModal from './components/InviteModal';
-import WorldForgeModal from './components/WorldForgeModal';
-import SettingsModal from './components/SettingsModal';
-import GeminiConnectModal from './components/GeminiConnectModal';
-import CampaignsModal from './components/CampaignsModal';
-import WorldSavesModal from './components/WorldSavesModal';
 import BackupReminder from './components/BackupReminder';
 import DiceOverlay from './components/DiceOverlay';
-import JoinRoomModal from './components/online/JoinRoomModal';
+import OpenedOnce from './components/OpenedOnce';
+import LoadingScreen from './components/LoadingScreen';
 import { onlineConfig } from './online/transport';
 import { normalizeCode } from './online/room';
-import { storedPlayerName, storePlayerName } from './online/useOnlineRoom';
+import { storedPlayerName, storePlayerName } from './online/playerName';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from './data/gameData';
-import { getStoredGeminiKeys } from './utils/gameEngine';
-import { createParty } from './utils/party';
-import { 
-  getAllCampaigns, 
-  getActiveCampaignId, 
-  getCampaignById, 
-  createNewCampaign,
-  deleteCampaign,
+import { getStoredGeminiKeys } from './utils/geminiKeys';
+import { lazyWithPreload, whenIdle } from './utils/lazyWithPreload';
+import {
+  readSavedCampaigns,
+  readSavedCampaign,
+  getActiveCampaignId,
   setActiveCampaignId
-} from './utils/campaignStorage';
+} from './utils/campaignIndex';
 
+// Everything below is loaded on demand, so the landing page opens fast (above
+// all on a phone). The game screen is preloaded when the player is about to
+// open it; each window is loaded the first time it is opened.
+const GameScreen = lazyWithPreload(() => import('./components/GameScreen'));
+const InviteModal = lazy(() => import('./components/InviteModal'));
+const WorldForgeModal = lazy(() => import('./components/WorldForgeModal'));
+const SettingsModal = lazy(() => import('./components/SettingsModal'));
+const GeminiConnectModal = lazy(() => import('./components/GeminiConnectModal'));
+const CampaignsModal = lazy(() => import('./components/CampaignsModal'));
+const WorldSavesModal = lazy(() => import('./components/WorldSavesModal'));
+const JoinRoomModal = lazy(() => import('./components/online/JoinRoomModal'));
 // Only needed when starting a new campaign: kept out of the initial bundle
 const CharacterWizard = lazy(() => import('./components/wizard/CharacterWizard'));
 const PartySetup = lazy(() => import('./components/wizard/PartySetup'));
 // The combat simulator is loaded only when opened
 const CombatSimulator = lazy(() => import('./components/simulator/CombatSimulator'));
 // A player's table in someone else's online room
-const GuestTable = lazy(() => import('./components/online/GuestTable'));
+const GuestTable = lazyWithPreload(() => import('./components/online/GuestTable'));
+// Starting a campaign needs the party and the saving rules (part of the game screen)
+const loadCampaignTools = () => Promise.all([import('./utils/party'), import('./utils/campaignStorage')]);
 
 // A shared link: ?sala=CODE opens the "join" window with the code filled in
 const linkedRoom = () => {
@@ -55,11 +60,9 @@ export default function App() {
   const [geminiKeys, setGeminiKeys] = useState(() => getStoredGeminiKeys());
   
   // Persistent Campaign State
-  const [activeCampaign, setActiveCampaign] = useState(() => {
-    const activeId = getActiveCampaignId();
-    return activeId ? getCampaignById(activeId) : null;
-  });
-  const [campaignsCount, setCampaignsCount] = useState(() => getAllCampaigns().length);
+  // Read raw here (see campaignIndex.js): the game screen brings it up to date
+  const [activeCampaign, setActiveCampaign] = useState(() => readSavedCampaign(getActiveCampaignId()));
+  const [campaignsCount, setCampaignsCount] = useState(() => readSavedCampaigns().length);
 
   // Modals state
   const [isInviteOpen, setIsInviteOpen] = useState(false);
@@ -79,7 +82,7 @@ export default function App() {
   const [guestRoom, setGuestRoom] = useState(null); // { code, name }
 
   const refreshCampaignsCount = () => {
-    setCampaignsCount(getAllCampaigns().length);
+    setCampaignsCount(readSavedCampaigns().length);
   };
 
   // Choosing a world opens its save slots instead of starting right away
@@ -104,8 +107,21 @@ export default function App() {
   };
 
   // The party is ready: the campaign starts
-  const handlePartyReady = (list) => {
+  const startingRef = useRef(false);
+  const handlePartyReady = async (list) => {
+    if (startingRef.current) return;
+    startingRef.current = true;
     const { world, title } = pendingCampaign;
+    let tools;
+    try {
+      tools = await loadCampaignTools();
+    } catch {
+      startingRef.current = false;
+      window.alert('No se pudo cargar la partida. Comprueba la conexión e inténtalo de nuevo.');
+      return;
+    }
+    startingRef.current = false;
+    const [{ createParty }, { createNewCampaign }] = tools;
     const party = createParty(list);
     const character = list[0];
     const names = list.map(m => m.name);
@@ -137,7 +153,7 @@ export default function App() {
   // "Play" resumes the last campaign; without one, the player picks a world first
   const handleStartGame = () => {
     const activeId = getActiveCampaignId();
-    const camp = activeId ? getCampaignById(activeId) : null;
+    const camp = readSavedCampaign(activeId);
     if (camp) {
       handleSelectCampaign(camp);
       return;
@@ -146,21 +162,45 @@ export default function App() {
     setTimeout(() => document.getElementById('worlds')?.scrollIntoView({ behavior: 'smooth' }), 50);
   };
 
-  const handleClearProgress = () => {
+  const handleClearProgress = async () => {
     // "Reiniciar Progreso" resets the current chronicle: drop the active campaign
     // (other saved campaigns in the Grimorio are kept).
     // Gemini API keys are intentionally kept.
     const activeId = getActiveCampaignId() || activeCampaign?.id;
-    if (activeId) deleteCampaign(activeId);
+    if (activeId) {
+      const { deleteCampaign } = await import('./utils/campaignStorage');
+      deleteCampaign(activeId);
+    }
     setActiveCampaignId(null);
     window.location.reload();
   };
 
   // The campaign «Jugar» resumes (read on each render of the landing page: it is cheap and always current)
-  const resumable = currentView === 'landing' ? (() => {
-    const id = getActiveCampaignId();
-    return id ? getCampaignById(id) : null;
-  })() : null;
+  const resumable = currentView === 'landing' ? readSavedCampaign(getActiveCampaignId()) : null;
+  const hasResumable = Boolean(resumable);
+
+  // With a campaign to resume, «Jugar» opens the game screen almost surely:
+  // download it while the player reads the landing page
+  useEffect(() => {
+    if (!hasResumable) return undefined;
+    return whenIdle(() => GameScreen.preload());
+  }, [hasResumable]);
+
+  // Creating a party ends in the game screen: get it ready meanwhile
+  const isCreatingParty = Boolean(pendingCampaign);
+  useEffect(() => {
+    if (!isCreatingParty) return undefined;
+    return whenIdle(() => {
+      GameScreen.preload();
+      loadCampaignTools().catch(() => {});
+    });
+  }, [isCreatingParty]);
+
+  // A shared room link opens the player's table next
+  useEffect(() => {
+    if (!isJoinOpen) return undefined;
+    return whenIdle(() => GuestTable.preload());
+  }, [isJoinOpen]);
 
   return (
     <div className="min-h-screen bg-[#0b090e] text-[#e8ded2] flex flex-col font-sans">
@@ -211,7 +251,7 @@ export default function App() {
           <BackupReminder refreshKey={`${campaignsCount}-${currentView}`} />
         </>
       ) : currentView === 'guest' && guestRoom ? (
-        <Suspense fallback={null}>
+        <Suspense fallback={<LoadingScreen text="Entrando en la sala…" />}>
           <GuestTable
             code={guestRoom.code}
             name={guestRoom.name}
@@ -223,20 +263,22 @@ export default function App() {
           />
         </Suspense>
       ) : (
-        <TavernApp
-          activeCampaign={activeCampaign}
-          activeWorld={activeWorld}
-          activeCharacter={activeCharacter}
-          onBackToLanding={() => {
-            refreshCampaignsCount();
-            setCurrentView('landing');
-          }}
-          onOpenInvite={() => setIsInviteOpen(true)}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          onOpenGeminiConnect={() => setIsGeminiConnectOpen(true)}
-          onOpenCampaigns={() => setIsCampaignsOpen(true)}
-          onOpenSimulator={options => setSimulator(options || {})}
-        />
+        <Suspense fallback={<LoadingScreen />}>
+          <GameScreen
+            activeCampaign={activeCampaign}
+            activeWorld={activeWorld}
+            activeCharacter={activeCharacter}
+            onBackToLanding={() => {
+              refreshCampaignsCount();
+              setCurrentView('landing');
+            }}
+            onOpenInvite={() => setIsInviteOpen(true)}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+            onOpenGeminiConnect={() => setIsGeminiConnectOpen(true)}
+            onOpenCampaigns={() => setIsCampaignsOpen(true)}
+            onOpenSimulator={options => setSimulator(options || {})}
+          />
+        </Suspense>
       )}
 
       {simulator && (
@@ -253,60 +295,70 @@ export default function App() {
       <DiceOverlay />
 
       {/* Global Modals */}
-      <WorldSavesModal
-        isOpen={!!worldSavesTarget}
-        world={worldSavesTarget}
-        onClose={() => {
-          setWorldSavesTarget(null);
-          refreshCampaignsCount();
-        }}
-        onLoadCampaign={(campaign) => {
-          setWorldSavesTarget(null);
-          handleSelectCampaign(campaign);
-        }}
-        onCreateNew={() => handleStartNewInWorld(worldSavesTarget)}
-      />
+      <OpenedOnce when={Boolean(worldSavesTarget)}>
+        <WorldSavesModal
+          isOpen={!!worldSavesTarget}
+          world={worldSavesTarget}
+          onClose={() => {
+            setWorldSavesTarget(null);
+            refreshCampaignsCount();
+          }}
+          onLoadCampaign={(campaign) => {
+            setWorldSavesTarget(null);
+            handleSelectCampaign(campaign);
+          }}
+          onCreateNew={() => handleStartNewInWorld(worldSavesTarget)}
+        />
+      </OpenedOnce>
 
-      <CampaignsModal
-        isOpen={isCampaignsOpen}
-        onClose={() => {
-          setIsCampaignsOpen(false);
-          refreshCampaignsCount();
-        }}
-        activeCampaignId={activeCampaign?.id}
-        onSelectCampaign={handleSelectCampaign}
-        onStartNewCampaign={handleStartNewInWorld}
-      />
+      <OpenedOnce when={isCampaignsOpen}>
+        <CampaignsModal
+          isOpen={isCampaignsOpen}
+          onClose={() => {
+            setIsCampaignsOpen(false);
+            refreshCampaignsCount();
+          }}
+          activeCampaignId={activeCampaign?.id}
+          onSelectCampaign={handleSelectCampaign}
+          onStartNewCampaign={handleStartNewInWorld}
+        />
+      </OpenedOnce>
 
-      <InviteModal
-        isOpen={isInviteOpen}
-        onClose={() => setIsInviteOpen(false)}
-        onOpenCampaigns={() => setIsCampaignsOpen(true)}
-      />
+      <OpenedOnce when={isInviteOpen}>
+        <InviteModal
+          isOpen={isInviteOpen}
+          onClose={() => setIsInviteOpen(false)}
+          onOpenCampaigns={() => setIsCampaignsOpen(true)}
+        />
+      </OpenedOnce>
 
-      <JoinRoomModal
-        key={joinCode}
-        isOpen={isJoinOpen}
-        kind={onlineKind}
-        initialCode={joinCode}
-        initialName={storedPlayerName()}
-        onClose={() => {
-          setIsJoinOpen(false);
-          setJoinCode('');
-        }}
-        onJoin={({ code, name }) => {
-          storePlayerName(name);
-          setIsJoinOpen(false);
-          setGuestRoom({ code, name });
-          setCurrentView('guest');
-        }}
-      />
+      <OpenedOnce when={isJoinOpen}>
+        <JoinRoomModal
+          key={joinCode}
+          isOpen={isJoinOpen}
+          kind={onlineKind}
+          initialCode={joinCode}
+          initialName={storedPlayerName()}
+          onClose={() => {
+            setIsJoinOpen(false);
+            setJoinCode('');
+          }}
+          onJoin={({ code, name }) => {
+            storePlayerName(name);
+            setIsJoinOpen(false);
+            setGuestRoom({ code, name });
+            setCurrentView('guest');
+          }}
+        />
+      </OpenedOnce>
 
-      <WorldForgeModal
-        isOpen={isWorldForgeOpen}
-        onClose={() => setIsWorldForgeOpen(false)}
-        onCreateWorld={handleCreateCustomWorld}
-      />
+      <OpenedOnce when={isWorldForgeOpen}>
+        <WorldForgeModal
+          isOpen={isWorldForgeOpen}
+          onClose={() => setIsWorldForgeOpen(false)}
+          onCreateWorld={handleCreateCustomWorld}
+        />
+      </OpenedOnce>
 
       {pendingCampaign && (
         <Suspense fallback={null}>
@@ -330,25 +382,29 @@ export default function App() {
         </Suspense>
       )}
 
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        onClearData={handleClearProgress}
-        onOpenGeminiConnect={() => {
-          setIsSettingsOpen(false);
-          setIsGeminiConnectOpen(true);
-        }}
-        onOpenCampaigns={() => {
-          setIsSettingsOpen(false);
-          setIsCampaignsOpen(true);
-        }}
-      />
+      <OpenedOnce when={isSettingsOpen}>
+        <SettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          onClearData={handleClearProgress}
+          onOpenGeminiConnect={() => {
+            setIsSettingsOpen(false);
+            setIsGeminiConnectOpen(true);
+          }}
+          onOpenCampaigns={() => {
+            setIsSettingsOpen(false);
+            setIsCampaignsOpen(true);
+          }}
+        />
+      </OpenedOnce>
 
-      <GeminiConnectModal
-        isOpen={isGeminiConnectOpen}
-        onClose={() => setIsGeminiConnectOpen(false)}
-        onKeysUpdated={(keys) => setGeminiKeys(keys)}
-      />
+      <OpenedOnce when={isGeminiConnectOpen}>
+        <GeminiConnectModal
+          isOpen={isGeminiConnectOpen}
+          onClose={() => setIsGeminiConnectOpen(false)}
+          onKeysUpdated={(keys) => setGeminiKeys(keys)}
+        />
+      </OpenedOnce>
 
     </div>
   );
