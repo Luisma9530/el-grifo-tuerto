@@ -271,8 +271,9 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
           </div>
         ) : (
           <>
-            <div className="flex items-center justify-between gap-2 mb-2">
-              <div className="flex gap-1 text-xs">
+            {/* On a phone the turn line goes below the tabs, on its own full-width line */}
+            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 mb-2">
+              <div className="flex flex-wrap gap-1 text-xs">
                 {ACTION_TABS.filter(t => (t.id !== 'spells' || spells.length > 0) && (!opening || t.id === 'attacks' || t.id === 'spells')).map(t => {
                   const TabIcon = t.icon;
                   return (
@@ -283,7 +284,7 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
                   );
                 })}
               </div>
-              <span className={`text-[11px] font-mono ${playerTurn ? 'text-amber-300' : 'text-stone-500'}`}>
+              <span className={`basis-full sm:basis-auto sm:shrink-0 max-w-full sm:ml-auto sm:text-right text-[11px] font-mono ${playerTurn ? 'text-amber-300' : 'text-stone-500'}`}>
                 {playerTurn
                   ? `${group ? `Turno de ${character.name}` : 'Tu turno'} · objetivo: ${living.find(e => e.uid === targetUid)?.name || '—'}${bonusUsed ? ' · acción adicional usada' : ''}`
                   : waitingFor && isPlayerTurn(encounter) ? `Turno de ${character.name} · lo juega ${waitingFor}` : 'Los enemigos actúan…'}

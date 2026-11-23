@@ -1,8 +1,8 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, Suspense } from 'react';
 import RichText from '../RichText';
 import { Send, Dice5, Sparkles, ShieldAlert, Eye, MessageCircle, Search, Footprints, Brain } from 'lucide-react';
 import MenuButton from '../MenuButton';
-import DiceRollerTray from './DiceRollerTray';
+import { DiceRollerTray } from './lazyParts';
 import { currentNode } from '../../utils/shops';
 
 /** Checks offered by the 🎲 button next to «Actuar» (rolled with the acting member's sheet). */
@@ -244,7 +244,9 @@ export default function StoryStream({
       <form onSubmit={handleSubmit} className="relative p-3 sm:p-4 bg-[#110e17] border-t border-amber-950/60">
         {trayOpen && onDiceRoll && (
           <div className="absolute bottom-full right-3 mb-2 z-40">
-            <DiceRollerTray onSendRollToChat={onDiceRoll} onClose={() => setTrayOpen(false)} />
+            <Suspense fallback={null}>
+              <DiceRollerTray onSendRollToChat={onDiceRoll} onClose={() => setTrayOpen(false)} />
+            </Suspense>
           </div>
         )}
         {inputNotice && (

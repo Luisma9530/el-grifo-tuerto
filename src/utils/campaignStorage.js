@@ -9,8 +9,10 @@ import { normalizeConditions } from './conditions';
 import { normalizeSnapshots } from './combatSnapshots';
 import { normalizeQuests } from './quests';
 
-const CAMPAIGNS_STORAGE_KEY = 'tavern_saved_campaigns';
-const ACTIVE_CAMPAIGN_ID_KEY = 'tavern_active_campaign_id';
+import { CAMPAIGNS_STORAGE_KEY, getActiveCampaignId, setActiveCampaignId } from './campaignIndex';
+
+// The active campaign id lives in campaignIndex.js (light, for the landing page)
+export { getActiveCampaignId, setActiveCampaignId };
 
 let lastSaveError = null;
 
@@ -92,32 +94,6 @@ export function getAllCampaigns() {
   } catch (error) {
     console.error('Error al recuperar campañas guardadas:', error);
     return [];
-  }
-}
-
-/**
- * Get active campaign ID
- */
-export function getActiveCampaignId() {
-  try {
-    return localStorage.getItem(ACTIVE_CAMPAIGN_ID_KEY) || null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Set active campaign ID
- */
-export function setActiveCampaignId(id) {
-  try {
-    if (id) {
-      localStorage.setItem(ACTIVE_CAMPAIGN_ID_KEY, id);
-    } else {
-      localStorage.removeItem(ACTIVE_CAMPAIGN_ID_KEY);
-    }
-  } catch (error) {
-    console.error('Error al guardar activeCampaignId:', error);
   }
 }
 

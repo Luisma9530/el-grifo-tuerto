@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Dice5, Sparkles, Skull, X } from 'lucide-react';
-import { rollDie } from '../../utils/gameEngine';
+import { rollDie } from '../../utils/dice';
 import { animateRoll } from '../../dice3d/controller';
 
 const DICE_TYPES = [

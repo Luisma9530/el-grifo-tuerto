@@ -13,7 +13,7 @@ import { buildCharacter, randomDraft } from '../../utils/characterBuilder';
 import { canAdvance } from '../../utils/leveling';
 import { getMonster, eliteVersion, encounterXp, difficultyOf } from '../../utils/bestiary';
 import { playerAction } from '../../utils/encounter';
-import { rollDie } from '../../utils/gameEngine';
+import { rollDie } from '../../utils/dice';
 import { animateRoll } from '../../dice3d/controller';
 import { recentFights, groupsFromData, describeGroups, RESULT_LABELS, MAX_SNAPSHOTS, snapshotHeroes } from '../../utils/combatSnapshots';
 import {

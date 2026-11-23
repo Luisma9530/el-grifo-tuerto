@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Download, X, ShieldAlert } from 'lucide-react';
-import { getAllCampaigns, exportAllCampaignsAsJson } from '../utils/campaignStorage';
+import { readSavedCampaigns } from '../utils/campaignIndex';
 import {
   shouldShowBackupReminder,
   getExportTimes,
@@ -18,7 +18,8 @@ export default function BackupReminder({ refreshKey }) {
 
   useEffect(() => {
     setState(shouldShowBackupReminder({
-      campaigns: getAllCampaigns(),
+      // Raw is enough here (ids, dates and messages): it keeps the game engine off the landing page
+      campaigns: readSavedCampaigns(),
       exports: getExportTimes(),
       dismissedAt: getReminderDismissedAt()
     }));
@@ -28,7 +29,8 @@ export default function BackupReminder({ refreshKey }) {
 
   const count = state.pending.length;
 
-  const handleExport = () => {
+  const handleExport = async () => {
+    const { exportAllCampaignsAsJson } = await import('../utils/campaignStorage');
     exportAllCampaignsAsJson();
     setState({ show: false, pending: [] });
   };

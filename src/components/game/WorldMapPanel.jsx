@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import { Store, Map as MapIcon, Flag, ScrollText } from 'lucide-react';
-import QuestJournal from './QuestJournal';
+import { QuestJournal } from './lazyParts';
 import { currentNode, shopsAt, SHOP_TYPES } from '../../utils/shops';
 import { unseenQuestCount } from '../../utils/quests';
 
@@ -207,7 +207,9 @@ export default function WorldMapPanel({
 
         {tab === 'quests' && (<>
         {/* Quest journal: opened and closed by the story; the player can only abandon one */}
-        <QuestJournal quests={quests} onAbandon={onAbandonQuest} onSeen={onQuestSeen} />
+        <Suspense fallback={null}>
+          <QuestJournal quests={quests} onAbandon={onAbandonQuest} onSeen={onQuestSeen} />
+        </Suspense>
 
         </>)}
 
