@@ -205,10 +205,7 @@ export default function App() {
             <Faq />
           </main>
 
-          <Footer
-            onEnterTavern={handleStartGame}
-            onOpenInvite={() => setIsInviteOpen(true)}
-          />
+          <Footer onEnterTavern={handleStartGame} />
 
           {/* Only on the landing page, so it never interrupts a game */}
           <BackupReminder refreshKey={`${campaignsCount}-${currentView}`} />
