@@ -258,8 +258,9 @@ export function addOpening(encounter, party, opening) {
 // hero) is equal or higher than the check notices it and is not surprised.
 //
 // THE OPENING STRIKE: the attack the player wrote to start the fight ("le clavo
-// la daga al tabernero") is played by the game before round 1, as an extra
-// action of that hero outside the initiative (they keep their normal turn): a
+// la daga al tabernero") is played by the game before the initiative, and it is
+// that hero's turn of round 1 (their slot of round 1 is skipped; from round 2 on they
+// act in their normal order; giving it up keeps the turn): a
 // weapon attack or an offensive spell (attack roll, saving throw or automatic
 // hit) against one enemy. Against a surprised enemy the attack roll has
 // Advantage ("objetivo desprevenido"). Its damage, conditions and concentration
@@ -1407,6 +1408,12 @@ function enemyTurn(encounter, heroes, uid, rollDie) {
   return finishTurn(next, hs, uid, rollDie);
 }
 
+/** The hero played the opening strike and their slot of round 1 comes now: that turn is already spent. */
+const spentOnOpening = (encounter, uid) => {
+  const o = encounter.opening;
+  return encounter.round === 1 && Boolean(o?.done) && o.heroUid === uid && !o.turnSpent && Boolean(o.result) && !o.result.skipped;
+};
+
 /** Let the turns go on until a hero who can act has the turn, or the fight ends. */
 function runTurns(encounter, heroes, rollDie) {
   let next = encounter;
@@ -1418,7 +1425,10 @@ function runTurns(encounter, heroes, rollDie) {
     if (slot?.kind === 'player') {
       const uid = slot.uid || PLAYER;
       const hero = heroOf(hs, uid);
-      if (hero) {
+      if (hero && spentOnOpening(next, uid)) {
+        // The opening strike was this hero's turn of round 1: from round 2 on, the normal order
+        next = pushLog({ ...next, opening: { ...next.opening, turnSpent: true } }, 'info', `${hero.name} ya actuó en esta ronda con su golpe de apertura.`);
+      } else if (hero) {
         ({ encounter: next, heroes: hs } = beginPlayerTurn(next, hs, uid, rollDie));
         next = checkEnd(next, hs);
         if (next.status !== 'active') break;

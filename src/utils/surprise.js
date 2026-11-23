@@ -114,8 +114,15 @@ const STEALTH = /(sigil|a escondidas|por la espalda|por detras|sin que (me|nos|l
 const DECEPTION = /(mientras (le |les )?(habl|charl|sonri|distra|convers|brind|estrech)|finj|engan|disimul|con una sonrisa|le distraigo|aprovech\w* que (no|se) )/;
 const EXPLORE = /\b(explor|adentr|camin|viaj|avanz|recorr|atravies|cruz|seguimos|sigo el|me interno|nos internamos|me meto en|batir el|rastre)/;
 
-/** In a party the ambush is against the group; this share of exploring actions in the wild meets one. */
-export const AMBUSH_CHANCE = 0.15;
+/**
+ * This share of exploring actions in the wild meets an ambush (against the whole
+ * party), never two in a row: the campaign remembers whether the last exploration
+ * of the local engine ended in one (see `exploration` in generateDMResponse).
+ */
+export const AMBUSH_CHANCE = 0.08;
+
+/** An exploring action outside a settlement (where the local engine may meet an ambush). */
+export const isWildExploration = (actionText, here = null) => !here?.settlement && EXPLORE.test(fold(actionText));
 
 /** The hidden side's check from the player's words (Stealth or Deception), or null. */
 export function checkFromAction(actionText) {
@@ -153,9 +160,10 @@ export function localSurprise({ actionText = '', history = [], aggressive = fals
  * @param {{ actionText, here, rng }} context  here: the current map place (a settlement is safe)
  * @returns {null | { side: 'heroes', who: 'all', reason, check: { skill: 'stealth' } }}
  */
-export function localAmbush({ actionText = '', here = null, rng = Math.random } = {}) {
-  if (here?.settlement || !EXPLORE.test(fold(actionText))) return null;
-  if (rng() >= AMBUSH_CHANCE) return null;
+export function localAmbush({ actionText = '', here = null, rng = Math.random, lastWasAmbush = false } = {}) {
+  if (!isWildExploration(actionText, here)) return null;
+  // Never two in a row: at least one quiet exploration between two ambushes
+  if (lastWasAmbush || rng() >= AMBUSH_CHANCE) return null;
   return { side: 'heroes', who: 'all', reason: 'los esperaban escondidos', check: { skill: 'stealth' } };
 }
 

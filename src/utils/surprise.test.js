@@ -211,11 +211,31 @@ describe('the opening strike', () => {
     expect(ogreNow.unaware).toBeUndefined();
     expect(res.encounter.opening).toMatchObject({ done: true, result: { targetUid: 'ogre-1', damage: 59 - ogreNow.hp, surprised: true } });
     expect(log).toMatch(/Golpe de apertura de Brega .*: \d+ de daño; Ogro empieza el combate herido/);
-    // Then the initiative: Brega (7) goes first in round 1 and keeps the turn
-    expect(res.encounter.round).toBe(1);
+    // The strike was Brega's turn of round 1: his slot (7) is skipped, the ogre (1) acts,
+    // and from round 2 on Brega acts in his normal order
+    const log2 = res.encounter.log.map(e => e.text);
+    const skipped = log2.findIndex(t => t === 'Brega ya actuó en esta ronda con su golpe de apertura.');
+    expect(skipped).toBeGreaterThan(-1);
+    expect(log2.findIndex(t => t.startsWith('Ogro ataca'))).toBeGreaterThan(skipped);
+    expect(res.encounter.round).toBe(2);
     expect(currentHeroUid(res.encounter)).toBe('a');
     expect(res.encounter.actionUsed).toBe(false);
+    expect(res.encounter.opening.turnSpent).toBe(true);
     expect(res.animations[0].label).toContain('ataque');
+    // Round 2: Brega acts and the turn goes on normally (no second skip)
+    const r2 = playerAction(res.encounter, res.heroes, { type: 'dodge' }, dice(1, 1, 1));
+    expect(r2.encounter.log.filter(e => e.text.includes('ya actuó en esta ronda'))).toHaveLength(1);
+    expect(r2.encounter.round).toBe(3);
+  });
+
+  it('a hero who gives the strike up keeps the turn of round 1', () => {
+    const hero = fighter('Brega', 'a');
+    let enc = createEncounter([{ monster: ogre }], [hero], dice(1, 20));
+    enc = addOpening(enc, [hero], { heroUid: 'a' });
+    const res = playerAction(enc, [hero], { type: 'endTurn' }, dice(1));
+    expect(res.encounter.round).toBe(1);
+    expect(currentHeroUid(res.encounter)).toBe('a');
+    expect(res.encounter.log.some(e => e.text.includes('ya actuó en esta ronda'))).toBe(false);
   });
 
   it('a target that is not surprised: no Advantage', () => {
@@ -384,6 +404,9 @@ describe('the local engine', () => {
 
   it('exploring the wild may meet an ambush; a settlement is safe', () => {
     const wild = { name: 'Bosque', settlement: null };
+    expect(AMBUSH_CHANCE).toBe(0.08);
+    // Never two in a row
+    expect(localAmbush({ actionText: 'Me adentro en el bosque', here: wild, rng: () => 0, lastWasAmbush: true })).toBeNull();
     expect(localAmbush({ actionText: 'Me adentro en el bosque', here: wild, rng: () => AMBUSH_CHANCE / 2 }))
       .toEqual({ side: 'heroes', who: 'all', reason: 'los esperaban escondidos', check: { skill: 'stealth' } });
     expect(localAmbush({ actionText: 'Me adentro en el bosque', here: wild, rng: () => 0.99 })).toBeNull();

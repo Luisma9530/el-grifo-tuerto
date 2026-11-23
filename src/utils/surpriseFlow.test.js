@@ -70,6 +70,22 @@ describe('the local engine starts the fight', () => {
     expect(res.text).toContain('Ni lo oíste venir');
   });
 
+  it('never two ambushes in a row: the engine reports each exploration so the campaign remembers', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.01);
+    const wild = { name: 'Bosque', settlement: null };
+    const first = await generateDMResponse({ playerAction: 'Me adentro en el bosque', character, world, bestiary, here: wild });
+    expect(first.exploration).toEqual({ ambushed: true });
+    // Right after an ambush: a quiet exploration, even with the lowest roll
+    const second = await generateDMResponse({ playerAction: 'Sigo el sendero del bosque', character, world, bestiary, here: wild, lastWasAmbush: true });
+    expect(second.combat).toBeNull();
+    expect(second.exploration).toEqual({ ambushed: false });
+    // ...and then ambushes are possible again
+    const third = await generateDMResponse({ playerAction: 'Avanzo entre los árboles', character, world, bestiary, here: wild, lastWasAmbush: false });
+    expect(third.exploration).toEqual({ ambushed: true });
+    // Other actions leave the memory alone
+    expect((await generateDMResponse({ playerAction: 'Pido una cerveza', character, world, bestiary, here: wild })).exploration).toBeNull();
+  });
+
   it('exploring in a town is safe', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.01);
     const res = await generateDMResponse({ playerAction: 'Me adentro en el mercado', character, world, bestiary, here: { name: 'Villa', settlement: 'town' } });

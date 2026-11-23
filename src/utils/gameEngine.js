@@ -7,7 +7,7 @@ import { narrateCombatEnd, startLocalFight, isAggressive, shopForAction, narrate
 import { describeQuestsForPrompt } from './quests';
 import { localQuestScene, bestiaryForHunts } from './localQuests';
 import { localRecruitScene } from './localRecruit';
-import { readCombatStart, localSurprise, localAmbush } from './surprise';
+import { readCombatStart, localSurprise, localAmbush, isWildExploration } from './surprise';
 
 // Helper to calculate D&D stat modifier from score (e.g. 16 -> +3, 10 -> 0, 8 -> -1)
 export function getModifier(score) {
@@ -172,7 +172,8 @@ export async function generateDMResponse({
   spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
   summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null,
   allowShop = false, shopsHere = '', shopTypesHere = [], loot = null, quests = [], here = null,
-  companions = '', partySize = 1, partyNames = [], allowRecruit = false, allowDeparture = false
+  companions = '', partySize = 1, partyNames = [], allowRecruit = false, allowDeparture = false,
+  lastWasAmbush = false
 }) {
   // Rests, finished fights and spells without an attack or a saving throw involve no d20 at all
   const needsNoRoll = Boolean(rest) || Boolean(weaponAttack) || Boolean(combatResult)
@@ -306,7 +307,7 @@ export async function generateDMResponse({
     ({ text, suggestedActions, combat } = startLocalFight(bestiaryForHunts(bestiary, quests), { character, world, rng: Math.random, surprise }));
     combat = { ...combat, surprise, heroAttacks: true, targetId: null };
     spellXp = 0;
-  } else if (bestiary && !playerRoll && !rest && !spellCast && !weaponAttack && (ambush = localAmbush({ actionText: playerAction, here, rng: Math.random }))) {
+  } else if (bestiary && !playerRoll && !rest && !spellCast && !weaponAttack && (ambush = localAmbush({ actionText: playerAction, here, rng: Math.random, lastWasAmbush }))) {
     // Exploring the wild: an ambush (the ambushers' Stealth against each hero's passive Perception)
     ({ text, suggestedActions, combat } = startLocalFight(bestiaryForHunts(bestiary, quests), { character, world, rng: Math.random, ambush: true }));
     combat = { ...combat, surprise: ambush, heroAttacks: false, targetId: null };
@@ -545,6 +546,11 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     questChanges,
     recruit,
     departure: null,
+    // An exploration of the wild by the local engine: whether it met an ambush (the campaign
+    // keeps it so two ambushes never come in a row); null for any other action
+    exploration: bestiary && !playerRoll && !combatResult && !isAggressive(actionLower) && isWildExploration(playerAction, here)
+      ? { ambushed: Boolean(ambush) }
+      : null,
     // Set when Gemini keys exist but the AI could not answer this turn
     notice: aiFailure ? AI_FAILURE_NOTICES[aiFailure] || AI_FAILURE_NOTICES.overloaded : null,
     // Only when Duncan's own roll is mentioned in the narration

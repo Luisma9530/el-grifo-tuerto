@@ -169,6 +169,8 @@ export default function TavernApp({
 
   // A companion who offered to join (by the story), waiting for the player's answer
   const [pendingRecruit, setPendingRecruit] = useState(() => storedCampaign()?.pendingRecruit || null);
+  // The last exploration of the wild by the local engine ended in an ambush: the next one is quiet
+  const [lastAmbush, setLastAmbush] = useState(() => Boolean(storedCampaign()?.lastAmbush));
 
   // Quest journal (see quests.js): opened and closed by the story, saved with the campaign.
   // The ref holds the latest list for handlers that wait on Duncan.
@@ -228,6 +230,7 @@ export default function TavernApp({
       setShops(normalizeShops(camp.shops));
       setQuests(normalizeQuests(camp.quests));
       setPendingRecruit(camp.pendingRecruit || null);
+      setLastAmbush(Boolean(camp.lastAmbush));
       setActiveShopKey(null);
       if (camp.suggestedActions?.length > 0) {
         setSuggestedActions(camp.suggestedActions);
@@ -263,14 +266,15 @@ export default function TavernApp({
       shops,
       combatSnapshots,
       quests,
-      pendingRecruit
+      pendingRecruit,
+      lastAmbush
     });
     if (saved) {
       setSaveStatus('saved');
     } else {
       setSaveStatus(isQuotaError(getLastSaveError()) ? 'quota' : 'error');
     }
-  }, [messages, party, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter, shops, combatSnapshots, quests, pendingRecruit]);
+  }, [messages, party, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter, shops, combatSnapshots, quests, pendingRecruit, lastAmbush]);
 
   const toggleSound = () => {
     tavernAudio.toggleTavernAmbience();
@@ -351,7 +355,8 @@ export default function TavernApp({
         partySize: size,
         partyNames: membersOf(partyNow).map(m => m.name),
         allowRecruit: mayStartFight && size < MAX_PARTY && !pendingRecruit,
-        allowDeparture: !combatResult && !encounter && size > 1
+        allowDeparture: !combatResult && !encounter && size > 1,
+        lastWasAmbush: lastAmbush
       });
       // A fight starts: the game resolves it, so nothing from this reply touches the sheet
       const fightGroups = response.combat && bestiaryModule
@@ -498,6 +503,7 @@ export default function TavernApp({
         }
       }
 
+      if (response.exploration) setLastAmbush(response.exploration.ambushed);
       if (response.suggestedActions) {
         setSuggestedActions(response.suggestedActions);
       }

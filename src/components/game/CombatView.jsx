@@ -294,7 +294,7 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
               <div className="mb-2 p-2 rounded-lg bg-yellow-950/30 border border-yellow-700/50 flex items-center justify-between gap-2">
                 <p className="text-[11px] text-yellow-100">
                   <Zap className="w-3.5 h-3.5 inline -mt-0.5 mr-1 text-yellow-300" />
-                  {`${character.name} ataca antes de la iniciativa (sin gastar su turno).`}
+                  {`${character.name} ataca antes de la iniciativa: es su turno de la ronda 1.`}
                   {waitPick ? ' Elige a qué enemigo atacas: pulsa su carta.' : ''}
                   {opening.needs?.means ? ' Elige con qué atacas: lo marcado encaja con lo que escribiste.' : ''}
                   {living.some(e => e.surprised) ? ' Contra un enemigo sorprendido tiene ventaja.' : ''}
