@@ -208,14 +208,6 @@ export const TAVERN_MENU = [
   { id: 'pipe', name: 'Tabaco de Pipa de Maese Duncan', cost: 4, icon: '🌿', effect: 'Baja el estrés del grupo y otorga inspiración de Duncan' }
 ];
 
-// Only facts that are true for this app (no accounts, no servers, no fees)
-export const TAVERN_STATS = [
-  { value: String(PRESET_WORLDS.length), label: 'Mundos Listos para Jugar' },
-  { value: '7', label: 'Dados Poliédricos en 3D' },
-  { value: '0 €', label: 'Gratis y Sin Registro' },
-  { value: '0 seg', label: 'Tiempo de Espera para Empezar' }
-];
-
 export const FAQS = [
   {
     q: '¿Es realmente gratis? ¿Hay que registrarse?',
@@ -235,7 +227,7 @@ export const FAQS = [
   },
   {
     q: '¿Cómo se resuelven los ataques?',
-    a: 'Desde tu ficha: eliges un arma equipada (o un golpe sin armas) y el juego tira el ataque contra la armadura del objetivo y el daño, con tus modificadores, Ataque Adicional, Ataque Furtivo o Furia si los tienes. Maese Duncan solo narra el resultado. En la mochila puedes equipar y desequipar armas.'
+    a: 'En la vista de combate: eliges un arma equipada (o un golpe sin armas) y el juego tira el ataque contra la armadura del objetivo y el daño, con tus modificadores, Ataque Adicional, Ataque Furtivo o Furia si los tienes. Maese Duncan solo narra el resultado. En la mochila puedes equipar y desequipar armas.'
   },
   {
     q: '¿Cómo funciona la magia?',
