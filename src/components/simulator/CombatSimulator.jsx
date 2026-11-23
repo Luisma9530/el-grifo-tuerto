@@ -17,7 +17,8 @@ import { rollDie } from '../../utils/gameEngine';
 import { animateRoll } from '../../dice3d/controller';
 import { recentFights, groupsFromData, describeGroups, RESULT_LABELS, MAX_SNAPSHOTS, snapshotHeroes } from '../../utils/combatSnapshots';
 import {
-  simulatorHero, simulatorParty, quickHero, levelHeroTo, setPotions, potionCount, startSimulation, fightSummary, simulateMany, MAX_SIM_PARTY
+  simulatorHero, simulatorParty, quickHero, levelHeroTo, setPotions, potionCount, startSimulation, fightSummary, simulateMany, MAX_SIM_PARTY,
+  SIM_SURPRISE
 } from '../../utils/simulator';
 import { normalizeParty, memberSheets } from '../../utils/party';
 
@@ -92,6 +93,8 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
   const setBase = next => setMembers(list => list.map((m, i) => (i === Math.min(selected, list.length - 1) ? { ...m, base: next } : m)));
   const [groups, setGroups] = useState(initial?.groups || []);
   const [replaying, setReplaying] = useState(initial?.snapshot || null);
+  // Who is surprised when the fight starts (a replayed fight keeps its own)
+  const [surprise, setSurprise] = useState(initial?.snapshot?.surprise || 'none');
   const [builderOpen, setBuilderOpen] = useState(false);
   const [quick, setQuick] = useState({ classId: CLASSES[0].id, level: 3 });
   const [fight, setFight] = useState(null); // { encounter, heroes, start }
@@ -131,6 +134,7 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
     setSelected(0);
     setGroups(g);
     setReplaying(snapshot);
+    setSurprise(snapshot.surprise || 'none');
     reset();
   };
 
@@ -181,7 +185,7 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
   const begin = () => {
     if (!heroes.length || !groups.length) return;
     const start = simulatorParty(heroes);
-    const { encounter, heroes: fighting } = startSimulation(start, groups, combatDie);
+    const { encounter, heroes: fighting } = startSimulation(start, groups, combatDie, { surprise });
     setFight({ encounter, heroes: fighting, start });
     setPhase('fight');
   };
@@ -206,7 +210,7 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
 
   const runBatch = () => {
     if (!heroes.length || !groups.length) return;
-    setBatch(b => ({ ...b, result: simulateMany(heroes, groups, b.runs, { healBelow: b.healBelow / 100 }) }));
+    setBatch(b => ({ ...b, result: simulateMany(heroes, groups, b.runs, { healBelow: b.healBelow / 100, surprise }) }));
   };
 
   const summary = fight && phase === 'summary' ? fightSummary(fight.encounter, fight.start, fight.heroes) : null;
@@ -389,6 +393,17 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
                     <Swords className="w-3.5 h-3.5" /> {groups.length ? 'Cambiar enemigos' : 'Elegir enemigos'}
                   </button>
                 </div>
+                <label className="mt-2 flex flex-wrap items-center gap-2 text-xs text-stone-300">
+                  <span>Sorpresa al empezar:</span>
+                  <select value={surprise} onChange={e => { setSurprise(e.target.value); reset(); }}
+                    className="bg-[#0f0c14] border border-stone-700 rounded-lg px-2 py-1 text-stone-100">
+                    {SIM_SURPRISE.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                  </select>
+                  <span className="text-[10px] text-stone-500">
+                    {surprise === 'enemies' ? `Los enemigos tiran la iniciativa con desventaja y ${heroes[0]?.name || 'el primer héroe'} ataca antes, con ventaja.`
+                      : surprise === 'heroes' ? 'El grupo tira la iniciativa con desventaja.' : ''}
+                  </span>
+                </label>
               </section>
 
               {/* Optional: many fights with a simple AI */}

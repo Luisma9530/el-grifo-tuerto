@@ -21,13 +21,14 @@ import {
 import { tavernAudio } from '../utils/audio';
 import { animateRoll, is3DDiceEnabled } from '../dice3d/controller';
 import {
-  createEncounter, runEnemyTurns, playerAction, describeEncounterResult, injuriesIn, currentHeroUid
+  createEncounter, runEnemyTurns, playerAction, describeEncounterResult, injuriesIn, currentHeroUid, addOpening, openingPending, describeSurprise
 } from '../utils/encounter';
 import { normalizeEquipment, limbFact } from '../utils/equipment';
 import {
   checkModifiers, describeConditionChange, conditionFact, isIncapacitated, activeIds, conditionName, describeConditionsForPrompt
 } from '../utils/conditions';
-import { keyMoments, narrateMoment, MAX_MOMENTS } from '../utils/combatNarration';
+import { keyMoments, narrateMoment, MAX_MOMENTS, openingLine } from '../utils/combatNarration';
+import { detectOpeningStrike, openingReady } from '../utils/surprise';
 import CombatView from './game/CombatView';
 import { makeSnapshot, addSnapshot, setSnapshotResult, normalizeSnapshots } from '../utils/combatSnapshots';
 import { canLevelUp, describeLevelUp, levelUpPlan } from '../utils/leveling';
@@ -501,7 +502,7 @@ export default function TavernApp({
         setSuggestedActions(response.suggestedActions);
       }
 
-      if (fightGroups.length) startEncounter(fightGroups, { byDuncan: true });
+      if (fightGroups.length) startEncounter(fightGroups, { byDuncan: true, start: response.combat, actionText, actorId });
       else if (response.shop && SHOP_TYPES[response.shop]) handleOpenShop(response.shop, { byDuncan: true });
     } catch (err) {
       console.error(err);
@@ -559,14 +560,22 @@ export default function TavernApp({
   // ---------------------------------------------------------------- combat encounters
   const combatDie = sides => rollDie(sides, { silent: true });
 
-  const startEncounter = (groups, { byDuncan = false } = {}) => {
+  // `start`: how the fight starts (see readCombatStart in surprise.js): `surprise` (who is
+  // caught off guard) and `heroAttacks` (the action of `actorId` was an attack: the opening strike)
+  const startEncounter = (groups, { byDuncan = false, start = null, actionText = '', actorId = null } = {}) => {
     const heroes = memberSheets(partyRef.current);
+    const surprise = start?.surprise || null;
     // How the fight starts (the whole party), kept so it can be fought again in the simulator
-    const snapshot = makeSnapshot({ party: heroes, groups, world, place: currentNode(world)?.name || '', byDuncan });
-    let next = { ...createEncounter(groups, heroes, combatDie), byDuncan, narrated: 0, snapshotId: snapshot.id };
-    // Enemies that won initiative act before the heroes
+    const snapshot = makeSnapshot({ party: heroes, groups, world, place: currentNode(world)?.name || '', byDuncan, surprise: surprise?.side || null });
+    let next = { ...createEncounter(groups, heroes, combatDie, { surprise }), byDuncan, narrated: 0, snapshotId: snapshot.id };
+    // The attack the player wrote is played before the initiative (asked in the combat view when unclear)
+    const attacker = start?.heroAttacks ? heroes.find(h => h.id === actorId) : null;
+    const opening = attacker ? detectOpeningStrike(actionText, attacker, next.enemies, { targetId: start.targetId }) : null;
+    if (opening) next = addOpening(next, heroes, opening);
     const logStart = next.log.length;
-    const after = runEnemyTurns(next, heroes, combatDie);
+    let after = { encounter: next, heroes };
+    // Enemies that won initiative act before the heroes (after the opening strike, if there is one)
+    if (!openingPending(next)) after = runEnemyTurns(next, heroes, combatDie);
     next = after.encounter;
     recordInjuries(next.log.slice(logStart));
     const finished = next;
@@ -574,6 +583,12 @@ export default function TavernApp({
       const list = addSnapshot(prev, snapshot);
       return finished.status === 'active' ? list : setSnapshotResult(list, snapshot.id, finished);
     });
+    next.log.filter(e => e.kind === 'surprise').forEach(e => pushSystemMessage(e.text));
+    // Who surprised whom is a fact of the campaign (with the opening strike, once it is played)
+    if (!openingPending(next)) {
+      const fact = describeSurprise(next, heroes);
+      if (fact) recordEvent(fact.replace(/\.$/, ''));
+    }
     const names = groups.map(g => {
       const label = g.name ? `${g.name} (${g.monster.name}${g.elite ? ', élite' : ''})` : g.monster.name;
       return g.count > 1 ? `${g.count} × ${label}` : label;
@@ -588,6 +603,28 @@ export default function TavernApp({
       return turn ? setActiveMember(merged, turn) : merged;
     });
     setMobileTab('story');
+    // Everything about the opening strike is clear: the game rolls it now
+    if (openingPending(next) && openingReady(next.opening)) playCombatAction(next, next.opening.suggest);
+  };
+
+  // The opening strike was just played: the chronicle and the campaign memory say
+  // what happened, and Duncan narrates it from the result (never his own numbers)
+  const afterOpening = (before, after, heroes) => {
+    if (!openingPending(before) || openingPending(after)) return after;
+    const fact = describeSurprise(after, heroes);
+    if (fact) recordEvent(fact.replace(/\.$/, ''));
+    const result = after.opening?.result;
+    const line = after.log.slice(before.log.length).filter(e => e.kind === 'opening').map(e => e.text).pop();
+    if (line && !result?.skipped) pushSystemMessage(line);
+    if (!result || result.skipped) return after;
+    const hero = heroes.find(h => h.id === after.opening.heroUid) || heroes[0];
+    const key = getStoredGeminiKeys()[0]?.key;
+    const local = { round: after.round, kind: 'duncan', text: `🗣️ ${openingLine(result, hero)}` };
+    if (!key) return { ...after, log: [...after.log, local] };
+    narrateMoment(key, { moments: [{ kind: 'opening', text: line }], encounter: after, character: hero, world }).then(text => {
+      setEncounter(prev => (prev ? { ...prev, log: [...prev.log, text ? { round: prev.round, kind: 'duncan', text: `🗣️ ${text}` } : local] } : prev));
+    });
+    return after;
   };
 
   // Key moments (a leader falls, an enemy surrenders or flees): Duncan adds a line,
@@ -612,6 +649,11 @@ export default function TavernApp({
   // The action of the hero whose turn it is
   const handleCombatAction = async (action) => {
     if (!encounter || combatBusy) return;
+    await playCombatAction(encounter, action);
+  };
+
+  // Play an action on this encounter (the one in state, or one just started)
+  const playCombatAction = async (encounter, action) => {
     const heroes = memberSheets(partyRef.current);
     const result = playerAction(encounter, heroes, action, combatDie);
     if (!result.ok) {
@@ -628,7 +670,7 @@ export default function TavernApp({
         await animateRoll(roll);
       }
     } finally {
-      setEncounter(narrateKeyMoments(encounter, result.encounter, result.character));
+      setEncounter(narrateKeyMoments(encounter, afterOpening(encounter, result.encounter, result.heroes), result.character));
       setParty(p => {
         const merged = mergeHeroes(p, result.heroes);
         const turn = currentHeroUid(result.encounter);
