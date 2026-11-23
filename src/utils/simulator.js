@@ -15,6 +15,7 @@ import {
   createEncounter, runEnemyTurns, playerAction, activeEnemies, isPlayerTurn, escapableCondition, currentHeroUid, PLAYER, addOpening, openingPending
 } from './encounter';
 import { attackOptions } from './combat';
+import { detectOpeningStrike } from './surprise';
 import { spellRows, slotTable, parseDice, cantripDiceMultiplier, getSpell } from './spellcasting';
 import { normalizeEquipment } from './equipment';
 import { normalizeConditions, createCondition, addCondition, removeConditions, conditionsOf, conditionName, EXHAUSTION_MAX } from './conditions';
@@ -159,8 +160,9 @@ export const SIM_SURPRISE = [
 export function startSimulation(party, groups, rollDie, { surprise = 'none' } = {}) {
   const heroes = Array.isArray(party) ? simulatorParty(party) : simulatorHero(party);
   const side = ['enemies', 'heroes'].includes(surprise) ? surprise : null;
-  let encounter = { ...createEncounter(groups, heroes, rollDie, { surprise: side ? { side, reason: 'simulacro' } : null }), simulation: true };
-  if (side === 'enemies') encounter = addOpening(encounter, heroes, { heroUid: heroes[0]?.id || PLAYER });
+  let encounter = { ...createEncounter(groups, heroes, rollDie, { surprise: side ? { side } : null }), simulation: true };
+  // The first hero opens; the weapon in hand and a lone target come preselected
+  if (side === 'enemies') encounter = addOpening(encounter, heroes, detectOpeningStrike('', heroes[0], encounter.enemies) || { heroUid: heroes[0]?.id || PLAYER });
   if (openingPending(encounter)) return { encounter, heroes, character: heroes[0] };
   return runEnemyTurns(encounter, heroes, rollDie);
 }

@@ -200,7 +200,7 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
           {encounter.order.map((slot, index) => {
             const enemy = slot.kind === 'enemy' ? encounter.enemies.find(e => e.uid === slot.uid) : null;
             if (enemy && enemy.status !== 'active') return null;
-            const current = index === encounter.turn && !over;
+            const current = index === encounter.turn && !over && !opening;
             return (
               <span key={slot.uid || 'player'}
                 className={`px-2 py-0.5 rounded border whitespace-nowrap ${
@@ -222,7 +222,7 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
               key={enemy.uid}
               enemy={enemy}
               selected={enemy.uid === targetUid}
-              isTurn={currentTurn?.uid === enemy.uid && !over}
+              isTurn={currentTurn?.uid === enemy.uid && !over && !opening}
               onSelect={() => setTargetUid(enemy.uid)}
               nameOf={nameOf}
               surprised={surprisedNow(enemy.uid)}

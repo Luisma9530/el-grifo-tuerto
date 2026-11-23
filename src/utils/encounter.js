@@ -364,7 +364,7 @@ function openingAction(encounter, party, action, rollDie) {
     next = { ...next, enemies: next.enemies.map(e => { const { unaware: _u, ...rest } = e; return rest; }) };
     const after = next.enemies.find(e => e.uid === target.uid);
     const damage = Math.max(0, target.hp - Math.max(0, after.hp));
-    const used = spell?.name || attackOptions(hero).find(o => o.id === action.optionId)?.itemName || 'su arma';
+    const used = spell?.name || attackOptions(hero).find(o => o.id === action.optionId)?.name || 'su arma';
     result = {
       targetUid: target.uid, target: target.name, with: used, damage, hp: Math.max(0, after.hp), maxHp: after.maxHp,
       status: after.status, surprised: Boolean(target.surprised)
