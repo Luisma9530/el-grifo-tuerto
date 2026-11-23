@@ -1,6 +1,18 @@
 import React, { useState, useRef, useEffect } from 'react';
 import RichText from '../RichText';
-import { Send, Dice5, Sparkles, Sword, Eye, MessageCircle, Flame, ShieldAlert } from 'lucide-react';
+import { Send, Dice5, Sparkles, ShieldAlert, Eye, MessageCircle, Search, Footprints, Brain } from 'lucide-react';
+import MenuButton from '../MenuButton';
+import DiceRollerTray from './DiceRollerTray';
+import { currentNode } from '../../utils/shops';
+
+/** Checks offered by the 🎲 button next to «Actuar» (rolled with the acting member's sheet). */
+const QUICK_CHECKS = [
+  { id: 'perception', label: 'Percepción', icon: Eye, tone: 'text-blue-400' },
+  { id: 'insight', label: 'Perspicacia', icon: Brain, tone: 'text-sky-300' },
+  { id: 'investigation', label: 'Investigación', icon: Search, tone: 'text-amber-300' },
+  { id: 'persuasion', label: 'Persuasión', icon: MessageCircle, tone: 'text-purple-400' },
+  { id: 'stealth', label: 'Sigilo', icon: Footprints, tone: 'text-stone-300' }
+];
 
 export default function StoryStream({
   messages,
@@ -14,8 +26,9 @@ export default function StoryStream({
   world,
   onSendAction,
   onOpenGeminiConnect,
-  onQuickAttack,
   onQuickCheck,
+  // Free dice rolls (the tray opens from the 🎲 button); without it the tray is not offered
+  onDiceRoll = null,
   keysCount = 0,
   // Online: who this screen may act with (default: everyone), whether the box is
   // locked (default: while Duncan writes) and a line above it (whose turn, etc.)
@@ -26,6 +39,8 @@ export default function StoryStream({
   const canPick = actors || party;
   const locked = inputLocked ?? isGenerating;
   const [inputText, setInputText] = useState('');
+  const [trayOpen, setTrayOpen] = useState(false);
+  const place = currentNode(world)?.name || world.initialLocation;
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -51,49 +66,32 @@ export default function StoryStream({
   return (
     <div className="h-full flex flex-col bg-[#0d0b12] text-stone-200 overflow-hidden relative">
       
-      {/* Top Bar for Mobile / Header */}
-      <div className="px-3 sm:px-4 py-2.5 bg-[#14101c] border-b border-amber-950/50 flex flex-wrap items-center justify-between gap-2 text-xs">
-        <div className="flex items-center gap-2">
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-          <span className="font-cinzel font-bold text-amber-200">
-            {world.name}
-          </span>
-          <span className="text-stone-400 hidden sm:inline">• {world.initialLocation}</span>
+      {/* Where the party is, and the AI that narrates (the only place it shows during the game, with Ajustes) */}
+      <div className="px-3 sm:px-4 py-2 bg-[#14101c] border-b border-amber-950/50 flex items-center justify-between gap-2 text-xs">
+        <div className="flex items-baseline gap-1.5 min-w-0">
+          <span className="font-cinzel font-bold text-amber-200 truncate min-w-[5rem]">{world.name}</span>
+          {place && <span className="text-stone-400 truncate min-w-0 shrink-[3]">· {place}</span>}
         </div>
 
-        {/* AI Engine Status & Multi-player Pool Indicator */}
-        <div className="flex items-center gap-2">
+        <button
+          onClick={onOpenGeminiConnect}
+          className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-mono transition-all ${
+            keysCount > 0
+              ? 'bg-emerald-950/80 border-emerald-700/60 text-emerald-300 hover:border-emerald-500'
+              : 'bg-amber-950/40 border-amber-800/40 text-amber-300 hover:border-amber-600'
+          }`}
+          title={keysCount > 0 ? 'Gestionar las claves de Gemini de la party' : 'Conectar tu cuenta gratuita de Gemini'}
+        >
+          <span className={`w-2 h-2 rounded-full ${keysCount > 0 ? 'bg-emerald-400' : 'bg-amber-400'}`} />
           {keysCount > 0 ? (
-            <button
-              onClick={onOpenGeminiConnect}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/80 border border-emerald-700/60 text-emerald-300 text-[11px] font-mono hover:bg-emerald-900/60 hover:border-emerald-500 transition-all shadow"
-              title="Configurar claves de la party y ver cuota combinada"
-            >
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="font-bold">Gemini Activo</span>
-              <span className="text-[10px] bg-emerald-900/90 text-emerald-200 px-1.5 py-0.2 rounded-full border border-emerald-600/50">
-                {keysCount} {keysCount === 1 ? 'clave' : 'claves en Party'}
-              </span>
-            </button>
+            <span className="font-bold">Gemini<span className="hidden sm:inline"> activo</span></span>
           ) : (
-            <button
-              onClick={onOpenGeminiConnect}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-950/40 border border-amber-800/40 text-stone-300 text-[11px] font-mono hover:bg-amber-950/70 hover:border-amber-600 transition-all shadow group"
-              title="Haz clic para conectar tu cuenta gratuita de Gemini"
-            >
-              <span className="text-amber-400">⚙️ Motor Local</span>
-              <span className="text-amber-400 font-bold group-hover:underline flex items-center gap-1">
-                <Sparkles className="w-3 h-3 text-amber-400" />
-                <span>Conectar IA Gratis</span>
-              </span>
-            </button>
+            <>
+              <span className="hidden sm:inline">Motor local ·</span>
+              <span className="font-bold flex items-center gap-1"><Sparkles className="w-3 h-3" />Conectar IA</span>
+            </>
           )}
-
-          <div className="text-[11px] font-mono text-stone-400 hidden md:flex items-center gap-1.5 pl-2 border-l border-stone-800">
-            <span>DM:</span>
-            <span className="text-amber-400 font-bold">Maese Duncan</span>
-          </div>
-        </div>
+        </button>
       </div>
 
       {/* Main Narrative Feed */}
@@ -243,7 +241,12 @@ export default function StoryStream({
       )}
 
       {/* Input Action Form */}
-      <form onSubmit={handleSubmit} className="p-3 sm:p-4 bg-[#110e17] border-t border-amber-950/60">
+      <form onSubmit={handleSubmit} className="relative p-3 sm:p-4 bg-[#110e17] border-t border-amber-950/60">
+        {trayOpen && onDiceRoll && (
+          <div className="absolute bottom-full right-3 mb-2 z-40">
+            <DiceRollerTray onSendRollToChat={onDiceRoll} onClose={() => setTrayOpen(false)} />
+          </div>
+        )}
         {inputNotice && (
           <p className="mb-2 text-[11px] text-sky-200 bg-sky-950/30 border border-sky-900/50 rounded-lg px-2.5 py-1.5" role="status">{inputNotice}</p>
         )}
@@ -256,7 +259,7 @@ export default function StoryStream({
                 value={character.id}
                 disabled={locked}
                 onChange={e => onSelectMember(e.target.value)}
-                className="bg-transparent focus:outline-none max-w-[7rem] sm:max-w-[10rem] truncate"
+                className="bg-transparent focus:outline-none max-w-[5.5rem] sm:max-w-[10rem] truncate"
                 aria-label="Personaje que actúa"
               >
                 {canPick.map(m => (
@@ -271,59 +274,40 @@ export default function StoryStream({
             disabled={locked}
             onChange={(e) => setInputText(e.target.value)}
             placeholder={party.length > 1 ? `¿Qué hace ${character.name}?` : "¿Qué hace tu personaje? (Ej: 'Desenvaino y exijo ver al cabecilla', 'Me acerco sigiloso por la sombra')..."}
-            className="flex-1 min-w-0 bg-[#1a1523] border border-amber-900/40 focus:border-amber-500 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder-stone-500 focus:outline-none transition-colors"
+            className="flex-1 min-w-0 bg-[#1a1523] border border-amber-900/40 focus:border-amber-500 rounded-xl px-3 sm:px-4 py-3 text-sm text-stone-100 placeholder-stone-500 focus:outline-none transition-colors"
+          />
+          <MenuButton
+            className="shrink-0"
+            placement="up"
+            disabled={locked && !onDiceRoll}
+            title="Tiradas: habilidades con la ficha y bandeja de dados"
+            icon={<Dice5 className="w-4 h-4" />}
+            buttonClassName="px-3 py-3 rounded-xl bg-[#1a1523] border border-amber-900/40 hover:border-amber-500 text-amber-300 disabled:opacity-40 transition-colors"
+            items={[
+              ...QUICK_CHECKS.map(({ id, label, icon, tone }) => ({
+                label: `Tirada de ${label}`,
+                icon: React.createElement(icon, { className: `w-4 h-4 ${tone}` }),
+                hidden: locked || !onQuickCheck,
+                onClick: () => onQuickCheck(id)
+              })),
+              ...(onDiceRoll ? ['divider', {
+                label: trayOpen ? 'Cerrar la bandeja de dados' : 'Bandeja de dados',
+                hint: 'Tiradas libres (d4 a d100) a la crónica',
+                icon: <Dice5 className="w-4 h-4 text-amber-400" />,
+                onClick: () => setTrayOpen(o => !o)
+              }] : [])
+            ]}
           />
           <button
             type="submit"
             disabled={!inputText.trim() || locked}
-            className="px-5 py-3 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 hover:brightness-110 disabled:opacity-40 text-stone-950 font-cinzel font-bold text-sm shadow-md transition-all flex items-center gap-1.5 shrink-0"
+            className="px-4 sm:px-5 py-3 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 hover:brightness-110 disabled:opacity-40 text-stone-950 font-cinzel font-bold text-sm shadow-md transition-all flex items-center gap-1.5 shrink-0"
           >
             <Send className="w-4 h-4" />
             <span className="hidden sm:inline">Actuar</span>
           </button>
         </div>
 
-        {/* Quick shortcut tags */}
-        <div className="flex items-center gap-4 mt-2 px-1 text-[11px] text-stone-400">
-          <button
-            type="button"
-            onClick={() => !locked && onQuickAttack?.()}
-            disabled={locked}
-            title="Ataca con tu primera arma equipada (lo resuelve el juego)"
-            className="hover:text-amber-300 flex items-center gap-1 transition-colors disabled:opacity-40"
-          >
-            <Sword className="w-3 h-3 text-red-400" />
-            <span>Atacar</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => !locked && onQuickCheck?.('perception')}
-            disabled={locked}
-            title="Tirada de Percepción con tu ficha (lo resuelve el juego)"
-            className="hover:text-amber-300 flex items-center gap-1 transition-colors disabled:opacity-40"
-          >
-            <Eye className="w-3 h-3 text-blue-400" />
-            <span>Percepción</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => !locked && onQuickCheck?.('persuasion')}
-            disabled={locked}
-            title="Tirada de Persuasión con tu ficha (lo resuelve el juego)"
-            className="hover:text-amber-300 flex items-center gap-1 transition-colors disabled:opacity-40"
-          >
-            <MessageCircle className="w-3 h-3 text-purple-400" />
-            <span>Persuadir</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => handleChipClick('Pedirle a Maese Duncan una pinta de cerveza y escuchar los rumores')}
-            className="hover:text-amber-300 flex items-center gap-1 transition-colors"
-          >
-            <Flame className="w-3 h-3 text-amber-400" />
-            <span>Ronda en la Barra</span>
-          </button>
-        </div>
       </form>
 
     </div>

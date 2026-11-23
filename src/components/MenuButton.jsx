@@ -4,9 +4,10 @@ import { useEscapeKey } from '../hooks/useEscapeKey';
 /**
  * A button that opens a small menu of actions (the «⋯ / Más» menus).
  * `items`: { label, icon?, onClick, hint?, tone?, hidden?, className? }[]; a `'divider'` string draws a line.
+ * `placement: 'up'` opens it above the button (for bars at the bottom of the screen).
  * Closes when an item is chosen, on Escape or when clicking outside.
  */
-export default function MenuButton({ label, icon, items, className = '', buttonClassName = '', title, align = 'right', badge = null }) {
+export default function MenuButton({ label, icon, items, className = '', buttonClassName = '', title, align = 'right', placement = 'down', badge = null, disabled = false }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
   const menuId = useId();
@@ -28,10 +29,12 @@ export default function MenuButton({ label, icon, items, className = '', buttonC
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
+        disabled={disabled}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         title={title}
+        aria-label={title}
         className={`relative ${buttonClassName}`}
       >
         {icon}
@@ -42,7 +45,7 @@ export default function MenuButton({ label, icon, items, className = '', buttonC
         <div
           id={menuId}
           role="menu"
-          className={`absolute top-full mt-2 ${align === 'right' ? 'right-0' : 'left-0'} z-50 w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-amber-900/50 bg-[#1a1523] p-1.5 shadow-2xl shadow-black/60`}
+          className={`absolute ${placement === 'up' ? 'bottom-full mb-2' : 'top-full mt-2'} ${align === 'right' ? 'right-0' : 'left-0'} z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-amber-900/50 bg-[#1a1523] p-1.5 shadow-2xl shadow-black/60`}
         >
           {visible.map((item, index) => item === 'divider' ? (
             <div key={`d${index}`} role="separator" className="my-1 border-t border-amber-950/60" />
