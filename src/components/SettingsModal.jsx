@@ -10,6 +10,7 @@ export default function SettingsModal({ isOpen, onClose, onClearData, onOpenGemi
   const [saved, setSaved] = useState(false);
   const [dice3D, setDice3D] = useState(() => is3DDiceEnabled());
   const [sfxOn, setSfxOn] = useState(() => !tavernAudio.muted);
+  const [ambienceOn, setAmbienceOn] = useState(() => Boolean(tavernAudio.isAmbiencePlaying));
 
   useEffect(() => {
     const stored = localStorage.getItem('tavern_gemini_key') || '';
@@ -140,7 +141,24 @@ export default function SettingsModal({ isOpen, onClose, onClearData, onOpenGemi
             />
           </label>
           <p className="text-xs text-stone-400 leading-relaxed mt-2">
-            Dados, fanfarrias de crítico y jarras. El ambiente de taberna se controla con su propio botón.
+            Dados, fanfarrias de crítico y jarras.
+          </p>
+
+          <label className="flex items-center justify-between gap-3 cursor-pointer mt-4 pt-4 border-t border-stone-800">
+            <span className="flex items-center gap-2">
+              <Volume2 className="w-4 h-4 text-amber-400" />
+              <span className="font-cinzel text-sm font-bold text-stone-100">Audio de taberna</span>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={ambienceOn}
+              onChange={(e) => setAmbienceOn(tavernAudio.toggleTavernAmbience(e.target.checked))}
+              className="w-4 h-4 accent-amber-500 cursor-pointer"
+            />
+          </label>
+          <p className="text-xs text-stone-400 leading-relaxed mt-2">
+            Fuego y murmullo de la taberna de fondo. También está en el menú «⋯» de la partida.
           </p>
         </div>
 

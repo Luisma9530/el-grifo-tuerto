@@ -20,11 +20,13 @@ export default function Navbar({
   keysCount = 0,
   canResume = false
 }) {
-  const [isAudioActive, setIsAudioActive] = useState(() => Boolean(tavernAudio.isAmbiencePlaying));
+  // The ambience can also be switched in Ajustes: read it from the player, this only re-renders
+  const [, setAudioTick] = useState(0);
+  const isAudioActive = Boolean(tavernAudio.isAmbiencePlaying);
 
   const toggleSound = () => {
-    const newState = tavernAudio.toggleTavernAmbience();
-    setIsAudioActive(newState);
+    tavernAudio.toggleTavernAmbience();
+    setAudioTick(t => t + 1);
   };
 
   const countBadge = campaignsCount > 0 && (
@@ -42,7 +44,8 @@ export default function Navbar({
     { label: 'Compartir El Grifo', icon: <Users className="w-4 h-4 text-amber-500" />, onClick: onOpenInvite },
     'divider',
     {
-      label: keysCount > 0 ? `IA: Gemini (${keysCount} ${keysCount === 1 ? 'clave' : 'claves'})` : 'IA: motor local · Conectar Gemini',
+      label: keysCount > 0 ? `IA: Gemini (${keysCount} ${keysCount === 1 ? 'clave' : 'claves'})` : 'IA: conectar Gemini gratis',
+      hint: keysCount > 0 ? 'Gestionar las claves' : 'Ahora narra el motor local',
       icon: <Sparkles className={`w-4 h-4 ${keysCount > 0 ? 'text-emerald-400' : 'text-amber-400'}`} />,
       onClick: onOpenGeminiConnect
     },

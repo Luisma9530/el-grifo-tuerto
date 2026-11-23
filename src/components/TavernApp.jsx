@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Volume2, VolumeX, Users, Settings, ArrowLeft, Download, Check, AlertTriangle, FlaskConical, RotateCcw, BookOpen, Sparkles, Wifi } from 'lucide-react';
+import { Volume2, VolumeX, Users, Settings, ArrowLeft, Download, AlertTriangle, FlaskConical, RotateCcw, BookOpen, Wifi, MoreHorizontal, ScrollText, Shield, Map as MapIcon, Swords } from 'lucide-react';
+import MenuButton from './MenuButton';
 import PartyPanel from './game/PartyPanel';
 import StoryStream from './game/StoryStream';
 import WorldMapPanel from './game/WorldMapPanel';
-import DiceRollerTray from './game/DiceRollerTray';
+import { MobileTabBar, SideColumn } from './game/GameLayout';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from '../data/gameData';
 import { generateDMResponse, rollCheck, rollDie, getStoredGeminiKeys, getModifierNumber } from '../utils/gameEngine';
 import { castSpell, describeCast } from '../utils/spellcasting';
@@ -34,10 +35,10 @@ import LevelUpModal from './game/LevelUpModal';
 import {
   historyForPrompt, needsSummary, coverageAfterSummary, addEvent, eventsForPrompt
 } from '../utils/campaignMemory';
-import { resolveAttack, describeAttack, attackOptions } from '../utils/combat';
+import { resolveAttack, describeAttack } from '../utils/combat';
 import { skillModifier, getSkill } from '../utils/characterBuilder';
 import {
-  openShop, shopKey, currentNode, shopsAt, buyItem, sellItem, describeTrade, describeShopsForPrompt, normalizeShops, SHOP_TYPES
+  openShop, shopKey, currentNode, isAtTavern, shopsAt, buyItem, sellItem, describeTrade, describeShopsForPrompt, normalizeShops, SHOP_TYPES
 } from '../utils/shops';
 import { drinkPotion, healingDice } from '../utils/items';
 import { generateLoot, describeLoot } from '../utils/loot';
@@ -64,7 +65,7 @@ import {
 import { stillValid } from '../online/protocol';
 import { applyOwnChange } from '../online/ownChanges';
 import { buildPlayerHero } from '../online/newHero';
-import { sheetIntents, labelFor, quickAttackOption, ABILITY_NAMES } from '../online/actions';
+import { sheetIntents, labelFor, ABILITY_NAMES } from '../online/actions';
 import HostRoomDrawer from './online/HostRoomDrawer';
 import OnlineToast from './online/OnlineToast';
 
@@ -123,7 +124,9 @@ export default function TavernApp({
   const character = activeSheet(party);
   const setCharacter = update => updateMemberState(character.id, update);
 
-  const [isAudioActive, setIsAudioActive] = useState(false);
+  // The ambience can also be switched in Ajustes: read it from the player, this only re-renders
+  const [, setAudioTick] = useState(0);
+  const isAudioActive = Boolean(tavernAudio.isAmbiencePlaying);
   const [mobileTab, setMobileTab] = useState('story'); // 'story' | 'party' | 'map'
   const [isGenerating, setIsGenerating] = useState(false);
   const [geminiKeys, setGeminiKeys] = useState(() => getStoredGeminiKeys());
@@ -269,8 +272,8 @@ export default function TavernApp({
   }, [messages, party, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter, shops, combatSnapshots, quests, pendingRecruit]);
 
   const toggleSound = () => {
-    const newState = tavernAudio.toggleTavernAmbience();
-    setIsAudioActive(newState);
+    tavernAudio.toggleTavernAmbience();
+    setAudioTick(t => t + 1);
   };
 
   const pushSystemMessage = (text) => {
@@ -739,18 +742,7 @@ export default function TavernApp({
     }
   };
 
-  // Shortcut under the chronicle: attack with the first weapon in hand
-  const handleQuickAttack = () => {
-    const options = attackOptions(character);
-    const option = options.find(o => o.weapon) || options[0];
-    if (!option) {
-      pushSystemMessage(`⚔️ ${character.name} no tiene nada con lo que atacar: equipa un arma o deja una mano libre (pestaña «Equipo» de su ficha).`);
-      return;
-    }
-    handleAttack({ optionId: option.id });
-  };
-
-  // Shortcut under the chronicle: a skill check with the acting member's sheet
+  // The 🎲 button next to «Actuar»: a skill check with the acting member's sheet
   const handleQuickCheck = (skillId) => {
     const skill = getSkill(skillId);
     if (skill) handleRollCheck({ label: skill.name, modifier: skillModifier(character, skillId), ability: skill.ability, skillId });
@@ -1234,12 +1226,6 @@ export default function TavernApp({
     send: text => submit(mine.text(text)),
     check: args => submit(mine.check(args)),
     quickCheck: skillId => submit(mine.check({ skillId })),
-    attack: args => submit(mine.attack(args)),
-    quickAttack: () => {
-      const option = quickAttackOption(character);
-      if (!option) return handleQuickAttack();
-      return submit(mine.attack({ optionId: option.id }));
-    },
     spell: (spellId, target) => submit(mine.spell(spellId, target)),
     item: item => submit(mine.item(item)),
     combat: action => submit({ type: 'combat', characterId: turnUid, action })
@@ -1247,8 +1233,6 @@ export default function TavernApp({
     send: handleSendAction,
     check: handleRollCheck,
     quickCheck: handleQuickCheck,
-    attack: handleAttack,
-    quickAttack: handleQuickAttack,
     spell: handleCastSpell,
     item: handleUseItem,
     combat: handleCombatAction
@@ -1289,199 +1273,82 @@ export default function TavernApp({
   return (
     <div className="h-screen flex flex-col bg-[#0b090e] overflow-hidden">
       
-      {/* Top Application Bar */}
-      <header className="h-14 bg-[#120f18] border-b border-amber-950/60 px-4 flex items-center justify-between shrink-0 z-30">
-        
-        {/* Left: Back & Campaign Grimorio Switcher */}
-        <div className="flex items-center gap-2.5">
-          <button
-            onClick={onBackToLanding}
-            className="flex items-center gap-1 text-xs text-stone-400 hover:text-amber-300 transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span className="hidden sm:inline">Portal</span>
-          </button>
+      {/* Top Application Bar: where you are and the online room; the rest lives in the «⋯» menu */}
+      <header className="h-14 bg-[#120f18] border-b border-amber-950/60 px-2 sm:px-4 flex items-center gap-2 shrink-0 z-30">
+        <button
+          onClick={onBackToLanding}
+          className="shrink-0 flex items-center gap-1 p-1.5 text-xs text-stone-400 hover:text-amber-300 transition-colors"
+          title="Volver a la portada"
+          aria-label="Volver a la portada"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span className="hidden md:inline">Portal</span>
+        </button>
 
-          <div className="h-4 w-px bg-stone-800 hidden sm:block" />
+        {/* The campaign's title opens the Grimorio */}
+        <button
+          onClick={onOpenCampaigns}
+          className="min-w-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#1a1523] hover:bg-stone-800 border border-amber-900/50 text-amber-200 hover:text-amber-300 text-xs font-cinzel font-bold transition-all shadow-sm"
+          title="Abrir el Grimorio de campañas guardadas"
+        >
+          <BookOpen className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+          <span className="truncate max-w-[40vw] sm:max-w-[260px]">{campaignTitle}</span>
+        </button>
 
-          {/* Grimorio Button */}
-          <button
-            onClick={onOpenCampaigns}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#1a1523] hover:bg-stone-800 border border-amber-900/50 text-amber-200 hover:text-amber-300 text-xs font-cinzel font-bold transition-all shadow-sm"
-            title="Abrir Grimorio de Campañas guardadas"
-          >
-            <BookOpen className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden sm:inline">Grimorio:</span>
-            <span className="truncate max-w-[120px] sm:max-w-[170px]">{campaignTitle}</span>
-          </button>
-
-          {/* Combat simulator: practice fights and replay recent ones (never changes the campaign) */}
-          <button
-            onClick={() => onOpenSimulator({ campaignId: currentCampaignId })}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#121a22] hover:bg-stone-800 border border-sky-900/50 text-sky-200 text-xs font-bold transition-all"
-            title="Simulador de combates: prueba combates o revive los recientes sin afectar a tu campaña"
-          >
-            <FlaskConical className="w-3.5 h-3.5 text-sky-300" />
-            <span className="hidden md:inline">Simulador</span>
-          </button>
-
-          {/* Auto-save status badge */}
-          {saveStatus === 'saved' ? (
-            <div 
-              className="hidden lg:flex items-center gap-1 text-[11px] font-mono text-emerald-400/90 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/40"
-              title="Tu progreso se guarda automáticamente en el almacenamiento local de tu navegador"
-            >
-              <Check className="w-3 h-3 text-emerald-400" />
-              <span>Guardado</span>
-            </div>
-          ) : (
-            <button
-              onClick={() => exportCampaignAsJson(currentCampaignId)}
-              className="flex items-center gap-1 text-[11px] font-mono text-red-300 bg-red-950/50 px-2 py-0.5 rounded border border-red-800/60 animate-pulse"
-              title={saveStatus === 'quota'
-                ? 'El almacenamiento del navegador está lleno: el progreso NO se está guardando. Exporta la campaña y borra partidas antiguas en el Grimorio.'
-                : 'No se pudo guardar el progreso en el navegador. Exporta la campaña para no perderla.'}
-            >
-              <AlertTriangle className="w-3 h-3 text-red-400" />
-              <span>{saveStatus === 'quota' ? 'Almacenamiento lleno' : 'Error al guardar'}</span>
-            </button>
-          )}
-        </div>
-
-        {/* Center: the party (the one who acts is highlighted) */}
-        <div className="hidden md:flex items-center gap-2 min-w-0 text-xs text-stone-300">
-          {heroes.length > 1 ? (
-            <>
-              <span className="flex -space-x-1">
-                {heroes.map(h => (
-                  <span key={h.id} title={`${h.name} · ${h.hp}/${h.maxHp} PG`}
-                    className={`w-7 h-7 rounded-full border flex items-center justify-center text-sm bg-[#1a1523] ${h.id === character.id ? 'border-amber-400 z-10' : 'border-stone-700 opacity-80'} ${h.hp <= 0 ? 'grayscale' : ''}`}>
-                    {h.avatar || '🛡️'}
-                  </span>
-                ))}
-              </span>
-              <span className="text-stone-500 hidden lg:inline">Actúa:</span>
-              <span className="font-cinzel font-bold text-stone-100 truncate max-w-[160px]">{character.name}</span>
-            </>
-          ) : (
-            <>
-              <span className="text-base leading-none">{character.avatar || '🛡️'}</span>
-              <span className="font-cinzel font-bold text-stone-100 truncate max-w-[180px]">{character.name}</span>
-              <span className="text-stone-500 truncate hidden lg:inline">{character.race} · {character.class}</span>
-            </>
-          )}
-        </div>
-
-        {/* Right Utility Buttons */}
-        <div className="flex items-center gap-2">
-          {/* Quick Export Active Campaign Button */}
+        {/* Saving only shows up when it fails: then it is the way out (export) */}
+        {saveStatus !== 'saved' && (
           <button
             onClick={() => exportCampaignAsJson(currentCampaignId)}
-            className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-800 text-stone-400 hover:text-emerald-400 transition-colors"
-            title="Exportar esta campaña actual como archivo .json"
+            className="shrink-0 flex items-center gap-1 text-[11px] font-mono text-red-300 bg-red-950/50 px-2 py-1 rounded border border-red-800/60 animate-pulse"
+            title={saveStatus === 'quota'
+              ? 'El almacenamiento del navegador está lleno: el progreso NO se está guardando. Exporta la campaña y borra partidas antiguas en el Grimorio.'
+              : 'No se pudo guardar el progreso en el navegador. Exporta la campaña para no perderla.'}
           >
-            <Download className="w-4 h-4" />
+            <AlertTriangle className="w-3 h-3 text-red-400" />
+            <span className="hidden sm:inline">{saveStatus === 'quota' ? 'Almacenamiento lleno' : 'Error al guardar'}</span>
           </button>
+        )}
 
-          {/* Gemini IA Connect / Party Key Pool Button */}
-          <button
-            onClick={onOpenGeminiConnect}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all shadow-sm ${
-              geminiKeys.length > 0
-                ? 'bg-emerald-950/70 hover:bg-emerald-900/70 border-emerald-600/60 text-emerald-300'
-                : 'bg-amber-600/20 hover:bg-amber-600/30 border-amber-500/40 text-amber-300'
-            }`}
-            title="Conectar o gestionar claves de Gemini de la Party"
-          >
-            <Sparkles className={`w-3.5 h-3.5 ${geminiKeys.length > 0 ? 'text-emerald-400' : 'text-amber-400'}`} />
-            <span className="hidden sm:inline">
-              {geminiKeys.length > 0 ? `Gemini (${geminiKeys.length})` : 'Conectar IA Gratis'}
-            </span>
-          </button>
+        <div className="flex-1" />
 
-          {/* Audio toggle */}
-          <button
-            onClick={toggleSound}
-            className={`p-1.5 rounded-lg border text-xs transition-colors ${
-              isAudioActive
-                ? 'bg-amber-600/20 border-amber-500/60 text-amber-300'
-                : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-stone-200'
-            }`}
-            title="Activar o desactivar sonido ambiente de taberna"
-          >
-            {isAudioActive ? <Volume2 className="w-4 h-4 text-amber-400" /> : <VolumeX className="w-4 h-4" />}
-          </button>
+        {/* Online room */}
+        <button
+          onClick={() => setIsRoomOpen(true)}
+          className={`shrink-0 relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
+            room ? 'bg-sky-950/70 border-sky-600/60 text-sky-200' : 'bg-stone-900 border-stone-800 text-stone-300 hover:text-sky-300'
+          }`}
+          title={room ? `Sala online ${room.code}` : 'Jugar online con tus amigos'}
+        >
+          <Wifi className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">{room ? `Sala ${room.code}` : 'Online'}</span>
+          {unreadChat > 0 && <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-amber-500 text-stone-950 text-[9px] font-bold flex items-center justify-center">{unreadChat}</span>}
+        </button>
 
-          {/* Online room */}
-          <button
-            onClick={() => setIsRoomOpen(true)}
-            className={`relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
-              room ? 'bg-sky-950/70 border-sky-600/60 text-sky-200' : 'bg-stone-900 border-stone-800 text-stone-300 hover:text-sky-300'
-            }`}
-            title={room ? `Sala online ${room.code}` : 'Jugar online con tus amigos'}
-          >
-            <Wifi className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">{room ? `Sala ${room.code}` : 'Online'}</span>
-            {unreadChat > 0 && <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-amber-500 text-stone-950 text-[9px] font-bold flex items-center justify-center">{unreadChat}</span>}
-          </button>
-
-          {/* Share button */}
-          <button
-            onClick={onOpenInvite}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-stone-900 hover:bg-stone-850 border border-stone-800 text-stone-300 hover:text-amber-300 text-xs font-semibold transition-all"
-          >
-            <Users className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Compartir</span>
-          </button>
-
-          {/* Settings button */}
-          <button
-            onClick={onOpenSettings}
-            className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-800 text-stone-400 hover:text-stone-200 transition-colors"
-            title="Ajustes de IA y Campaña"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
-        </div>
-
+        <MenuButton
+          className="shrink-0"
+          title="Más opciones"
+          icon={<MoreHorizontal className="w-4 h-4" />}
+          buttonClassName="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-stone-100 transition-colors"
+          items={[
+            { label: 'Simulador de combates', icon: <FlaskConical className="w-4 h-4 text-sky-300" />, hint: 'Prueba o revive combates sin tocar la campaña', onClick: () => onOpenSimulator({ campaignId: currentCampaignId }) },
+            { label: 'Exportar esta campaña (.json)', icon: <Download className="w-4 h-4 text-emerald-400" />, onClick: () => exportCampaignAsJson(currentCampaignId) },
+            { label: 'Compartir El Grifo', icon: <Users className="w-4 h-4 text-amber-500" />, onClick: onOpenInvite },
+            {
+              label: isAudioActive ? 'Silenciar el ambiente de taberna' : 'Audio de taberna',
+              icon: isAudioActive ? <Volume2 className="w-4 h-4 text-amber-400" /> : <VolumeX className="w-4 h-4 text-stone-400" />,
+              onClick: toggleSound
+            },
+            'divider',
+            { label: 'Ajustes', hint: 'IA, dados 3D, sonido y partida', icon: <Settings className="w-4 h-4 text-stone-300" />, onClick: onOpenSettings }
+          ]}
+        />
       </header>
-
-      {/* Mobile Tab switcher (visible only on small screens) */}
-      <div className="lg:hidden flex border-b border-amber-950/60 bg-[#14101c] text-xs font-semibold">
-        <button
-          onClick={() => setMobileTab('story')}
-          className={`flex-1 py-2 text-center border-b-2 ${
-            mobileTab === 'story' ? 'border-amber-500 text-amber-300 bg-amber-500/10' : 'border-transparent text-stone-400'
-          }`}
-        >
-          Crónica / DM
-        </button>
-        <button
-          onClick={() => setMobileTab('party')}
-          className={`flex-1 py-2 text-center border-b-2 ${
-            mobileTab === 'party' ? 'border-amber-500 text-amber-300 bg-amber-500/10' : 'border-transparent text-stone-400'
-          }`}
-        >
-          {heroes.length > 1 ? `Grupo (${heroes.length})` : `Ficha (${character.hp} HP)`}
-        </button>
-        <button
-          onClick={() => setMobileTab('map')}
-          className={`flex-1 py-2 text-center border-b-2 ${
-            mobileTab === 'map' ? 'border-amber-500 text-amber-300 bg-amber-500/10' : 'border-transparent text-stone-400'
-          }`}
-        >
-          Mapa & Misiones
-          {unseenQuestCount(quests) > 0 && (
-            <span className="ml-1 inline-block w-2 h-2 rounded-full bg-amber-400 align-middle" aria-label="Novedades en el diario de misiones" />
-          )}
-        </button>
-      </div>
 
       {/* Main 3-Column Desktop Layout / Tabbed Mobile View */}
       <div className="flex-1 flex overflow-hidden relative">
         
         {/* Left Column: Party & Sheet (300px on desktop) */}
-        <div className={`w-full lg:w-72 xl:w-80 2xl:w-88 shrink-0 ${mobileTab === 'party' ? 'block' : 'hidden lg:block'}`}>
+        <div className={`w-full ${encounter ? 'lg:w-60 xl:w-64' : 'lg:w-72 xl:w-80 2xl:w-88'} shrink-0 ${mobileTab === 'party' ? 'block' : 'hidden lg:block'}`}>
           <PartyPanel
             character={character}
             party={heroes}
@@ -1496,10 +1363,10 @@ export default function TavernApp({
             onCastSpell={act.spell}
             onRest={handleRest}
             onLevelUp={() => (notMine() ? null : setIsLevelUpOpen(true))}
-            onAttack={act.attack}
             onUseItem={act.item}
             busy={isGenerating}
             inCombat={inCombat}
+            atTavern={isAtTavern(world)}
           />
         </div>
 
@@ -1537,7 +1404,7 @@ export default function TavernApp({
               onSendAction={act.send}
               onOpenGeminiConnect={onOpenGeminiConnect}
               keysCount={geminiKeys.length}
-              onQuickAttack={act.quickAttack}
+              onDiceRoll={handleDiceRollToChat}
               onQuickCheck={act.quickCheck}
               actors={hostActors}
               inputLocked={room ? hostActors.length === 0 : null}
@@ -1547,7 +1414,12 @@ export default function TavernApp({
         </div>
 
         {/* Right Column: World Map & Factions (300px on desktop) */}
-        <div className={`w-full lg:w-72 xl:w-80 2xl:w-88 shrink-0 ${mobileTab === 'map' ? 'block' : 'hidden lg:block'}`}>
+        <SideColumn
+          collapsed={Boolean(encounter)}
+          mobileVisible={mobileTab === 'map'}
+          railIcons={[MapIcon, ScrollText]}
+          badge={unseenQuestCount(quests)}
+        >
           <WorldMapPanel
             world={world}
             onTravelToNode={handleTravelToNode}
@@ -1556,14 +1428,12 @@ export default function TavernApp({
             quests={quests}
             onAbandonQuest={handleAbandonQuest}
             onQuestSeen={handleQuestSeen}
-            onOpenShop={handleOpenShop}
-            shopsLocked={encounter ? 'No hay tiempo para compras en mitad de un combate.' : null}
+            onOpenShop={encounter ? null : handleOpenShop}
           />
-        </div>
+        </SideColumn>
 
       </div>
 
-      {/* Floating 3D Dice Roller Tray */}
 
       {activeShop && !encounter && (
         <ShopModal
@@ -1598,8 +1468,17 @@ export default function TavernApp({
       />
       <OnlineToast text={onlineNotice} onClose={() => setOnlineNotice(null)} />
 
-      {/* Hidden during a fight: the combat rolls its own dice (and the button would cover its controls) */}
-      {!encounter && <DiceRollerTray onSendRollToChat={handleDiceRollToChat} />}
+      {/* Phone: the sections in a bar at the bottom */}
+      <MobileTabBar
+        active={mobileTab}
+        onChange={setMobileTab}
+        tabs={[
+          { id: 'story', label: encounter ? 'Combate' : 'Crónica', icon: encounter ? Swords : ScrollText },
+          { id: 'party', label: heroes.length > 1 ? `Grupo (${heroes.length})` : `Ficha · ${character.hp} PG`, icon: Shield },
+          { id: 'map', label: 'Mapa', icon: MapIcon, badge: unseenQuestCount(quests) }
+        ]}
+      />
+
 
     </div>
   );

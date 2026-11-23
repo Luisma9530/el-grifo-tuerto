@@ -1,51 +1,68 @@
-import React from 'react';
-import { Compass, Store } from 'lucide-react';
+import React, { useState } from 'react';
+import { Store, Map as MapIcon, Flag, ScrollText } from 'lucide-react';
 import QuestJournal from './QuestJournal';
-import { currentNode, shopsAt, settlementOf, SETTLEMENTS, SHOP_TYPES } from '../../utils/shops';
+import { currentNode, shopsAt, SHOP_TYPES } from '../../utils/shops';
+import { unseenQuestCount } from '../../utils/quests';
 
 /**
  * `onOpenShop(type)`: open a shop of the current location.
  * `shopsLocked`: why the shops can't be opened now (a fight...), or null.
+ * Three tabs: the map (with the shops of the place), the quests and the campaign diary.
  */
 export default function WorldMapPanel({
   world, onTravelToNode, summary = '', events = [], onOpenShop, shopsLocked = null,
   quests = [], onAbandonQuest = () => {}, onQuestSeen = () => {}
 }) {
+  const [tab, setTab] = useState('map'); // 'map' | 'quests' | 'diary'
   const here = currentNode(world);
-  const settlement = settlementOf(here, world);
   const shops = shopsAt(here, world);
+  const news = unseenQuestCount(quests);
+  const tabs = [
+    { id: 'map', label: 'Mapa', icon: MapIcon },
+    { id: 'quests', label: 'Misiones', icon: Flag, badge: news },
+    { id: 'diary', label: 'Diario', icon: ScrollText }
+  ];
   return (
     <div className="h-full flex flex-col bg-[#120f18] border-l border-amber-950/60 overflow-hidden text-stone-200">
       
-      {/* World Map Header */}
-      <div className="p-4 bg-gradient-to-b from-[#1c1626] to-[#120f18] border-b border-amber-950/50">
-        <div className="flex items-center gap-2 mb-1">
-          <Compass className="w-4 h-4 text-amber-500" />
-          <h3 className="font-cinzel font-bold text-stone-100 text-sm">
-            Mapa de {world.name}
-          </h3>
-        </div>
-        <p className="text-xs text-stone-400 font-mono">
-          UBICACIÓN: <span className="text-amber-300 font-semibold">{world.mapNodes?.find(n => n.status === 'current')?.name || world.initialLocation}</span>
-        </p>
+      {/* Tabs: map, quests (with news), diary */}
+      <div className="flex border-b border-amber-950/60 text-xs font-medium bg-[#16121e] shrink-0" role="tablist">
+        {tabs.map(({ id, label, icon, badge }) => {
+          const TabIcon = icon;
+          return (
+          <button
+            key={id}
+            role="tab"
+            aria-selected={tab === id}
+            onClick={() => setTab(id)}
+            className={`flex-1 py-2.5 flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
+              tab === id ? 'border-amber-500 text-amber-300 bg-amber-500/10 font-semibold' : 'border-transparent text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            <TabIcon className="w-3.5 h-3.5" />
+            <span>{label}</span>
+            {badge > 0 && <span className="min-w-4 h-4 px-1 rounded-full bg-amber-500 text-stone-950 text-[9px] font-bold flex items-center justify-center" aria-label={`${badge} novedades`}>{badge}</span>}
+          </button>
+          );
+        })}
       </div>
 
-      <div className="flex-1 p-4 overflow-y-auto space-y-6">
-
-        {/* Shops of the current settlement */}
+      <div className="flex-1 p-4 overflow-y-auto space-y-5">
+        {tab === 'map' && (<>
+        {/* Shops of the place (only where there are some) */}
         {shops.length > 0 && onOpenShop && (
-          <div className="p-3 rounded-xl bg-[#17131f] border border-amber-900/30">
-            <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider flex items-center gap-1.5 mb-2">
-              <Store className="w-3.5 h-3.5" /> Tiendas · {SETTLEMENTS[settlement].name}
-            </span>
-            <div className="flex flex-wrap gap-1.5">
+          <div className="p-2.5 rounded-xl bg-[#17131f] border border-amber-900/30">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] text-stone-400 flex items-center gap-1 mr-0.5">
+                <Store className="w-3.5 h-3.5" /> Aquí:
+              </span>
               {shops.map(type => (
                 <button
                   key={type}
                   onClick={() => onOpenShop(type)}
                   disabled={Boolean(shopsLocked)}
                   title={shopsLocked || `Entrar en ${SHOP_TYPES[type].name.toLowerCase()}`}
-                  className="px-2.5 py-1.5 rounded-lg bg-[#1f1829] hover:bg-amber-950/50 border border-amber-800/50 text-amber-200 text-[11px] font-semibold disabled:opacity-40 transition-colors"
+                  className="px-2 py-1 rounded-lg bg-[#1f1829] hover:bg-amber-950/50 border border-amber-800/50 text-amber-200 text-[11px] font-semibold disabled:opacity-40 transition-colors"
                 >
                   {SHOP_TYPES[type].icon} {SHOP_TYPES[type].name}
                 </button>
@@ -54,28 +71,6 @@ export default function WorldMapPanel({
             {shopsLocked && <p className="mt-1.5 text-[10px] text-amber-300/80">{shopsLocked}</p>}
           </div>
         )}
-
-        {/* Campaign diary: Duncan's summary + facts recorded by the game */}
-        <div className="p-3 rounded-xl bg-[#17131f] border border-amber-900/30">
-          <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block mb-1.5">Diario de campaña</span>
-          {summary ? (
-            <p className="text-xs text-stone-300 leading-relaxed whitespace-pre-line">{summary}</p>
-          ) : (
-            <p className="text-[11px] text-stone-500 italic">
-              Con la IA conectada, Maese Duncan irá resumiendo aquí lo importante de la partida.
-            </p>
-          )}
-          {events.length > 0 && (
-            <ul className="mt-2 pt-2 border-t border-stone-800 space-y-0.5">
-              {events.slice(-6).reverse().map((event, index) => (
-                <li key={`${index}-${event}`} className="text-[11px] text-stone-400">· {event}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {/* Quest journal: opened and closed by the story; the player can only abandon one */}
-        <QuestJournal quests={quests} onAbandon={onAbandonQuest} onSeen={onQuestSeen} />
 
         {/* Dynamic Parchment Visual Map */}
         <div className="relative w-full h-52 rounded-2xl bg-[#181320] border-2 border-amber-900/40 p-3 overflow-hidden shadow-inner flex items-center justify-center">
@@ -144,10 +139,10 @@ export default function WorldMapPanel({
         </div>
 
         {/* Current Location & Explored Nodes list */}
-        <div>
-          <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block mb-2">
-            Puntos de Interés Registrados:
-          </span>
+        <details>
+          <summary className="cursor-pointer select-none text-[11px] font-mono uppercase text-stone-400 tracking-wider mb-2 hover:text-amber-300">
+            Lugares conocidos ({world.mapNodes.filter(n => n.status !== 'locked').length})
+          </summary>
           <div className="space-y-2">
             {world.mapNodes.map((node) => (
               <div
@@ -178,13 +173,13 @@ export default function WorldMapPanel({
               </div>
             ))}
           </div>
-        </div>
+        </details>
 
         {/* Faction Reputations */}
-        <div>
-          <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block mb-2">
-            Reputación con Facciones:
-          </span>
+        <details>
+          <summary className="cursor-pointer select-none text-[11px] font-mono uppercase text-stone-400 tracking-wider mb-2 hover:text-amber-300">
+            Reputación con facciones
+          </summary>
           <div className="space-y-2">
             {world.factions.map((fac, idx) => (
               <div key={idx} className="p-2.5 rounded-xl bg-[#17131f] border border-stone-800">
@@ -206,7 +201,37 @@ export default function WorldMapPanel({
               </div>
             ))}
           </div>
+        </details>
+
+        </>)}
+
+        {tab === 'quests' && (<>
+        {/* Quest journal: opened and closed by the story; the player can only abandon one */}
+        <QuestJournal quests={quests} onAbandon={onAbandonQuest} onSeen={onQuestSeen} />
+
+        </>)}
+
+        {tab === 'diary' && (<>
+        {/* Campaign diary: Duncan's summary + facts recorded by the game */}
+        <div className="p-3 rounded-xl bg-[#17131f] border border-amber-900/30">
+          <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block mb-1.5">Diario de campaña</span>
+          {summary ? (
+            <p className="text-xs text-stone-300 leading-relaxed whitespace-pre-line">{summary}</p>
+          ) : (
+            <p className="text-[11px] text-stone-500 italic">
+              Con la IA conectada, Maese Duncan irá resumiendo aquí lo importante de la partida.
+            </p>
+          )}
+          {events.length > 0 && (
+            <ul className="mt-2 pt-2 border-t border-stone-800 space-y-0.5">
+              {events.slice(-6).reverse().map((event, index) => (
+                <li key={`${index}-${event}`} className="text-[11px] text-stone-400">· {event}</li>
+              ))}
+            </ul>
+          )}
         </div>
+
+        </>)}
 
       </div>
     </div>
