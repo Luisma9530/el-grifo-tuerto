@@ -7,6 +7,7 @@ import { narrateCombatEnd, startLocalFight, isAggressive, shopForAction, narrate
 import { describeQuestsForPrompt } from './quests';
 import { localQuestScene, bestiaryForHunts } from './localQuests';
 import { localRecruitScene } from './localRecruit';
+import { readCombatStart, localSurprise, localAmbush } from './surprise';
 
 // Helper to calculate D&D stat modifier from score (e.g. 16 -> +3, 10 -> 0, 8 -> -1)
 export function getModifier(score) {
@@ -235,7 +236,10 @@ export async function generateDMResponse({
               goldEarned: combatResult || shop ? 0 : parsed.goldEarned,
               xpEarned: rest || combatResult ? 0 : parsed.xpEarned,
               summary: parsed.summary,
-              combat: bestiary ? parsed.combat : null,
+              // Surprise and the hero's opening attack, validated (see surprise.js)
+              combat: bestiary && parsed.combat
+                ? readCombatStart(parsed.combat, { aggressive: isAggressive(playerAction.toLowerCase()), partyNames, actorId: character.id || null })
+                : null,
               shop,
               // A finished fight is narrated as it happened: no new wounds from the narration
               limbChanges: combatResult ? [] : parsed.limbChanges || [],
@@ -291,12 +295,21 @@ export async function generateDMResponse({
   let questScene = null;
   let recruit = null;
   let recruitScene = null;
+  let ambush = null;
   if (combatResult) {
     ({ text, suggestedActions, goldEarned } = narrateCombatEnd(combatResult, { character, rng: Math.random, loot }));
     spellXp = 0;
   } else if (bestiary && !playerRoll && isAggressive(actionLower)) {
-    // A fight starts: the game resolves it with creatures of the bestiary
-    ({ text, suggestedActions, combat } = startLocalFight(bestiaryForHunts(bestiary, quests), { character, world, rng: Math.random }));
+    // A fight starts: the game resolves it with creatures of the bestiary. The
+    // hero's attack is the opening strike; in a quiet scene nobody expected it
+    const surprise = localSurprise({ actionText: playerAction, history, aggressive: true, actorId: character.id || null });
+    ({ text, suggestedActions, combat } = startLocalFight(bestiaryForHunts(bestiary, quests), { character, world, rng: Math.random, surprise }));
+    combat = { ...combat, surprise, heroAttacks: true, targetId: null };
+    spellXp = 0;
+  } else if (bestiary && !playerRoll && !rest && !spellCast && !weaponAttack && (ambush = localAmbush({ actionText: playerAction, here, rng: Math.random }))) {
+    // Exploring the wild: an ambush (the ambushers' Stealth against each hero's passive Perception)
+    ({ text, suggestedActions, combat } = startLocalFight(bestiaryForHunts(bestiary, quests), { character, world, rng: Math.random, ambush: true }));
+    combat = { ...combat, surprise: ambush, heroAttacks: false, targetId: null };
     spellXp = 0;
   } else if (rest) {
     ({ text, suggestedActions } = narrateRest(rest, character));

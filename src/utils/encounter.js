@@ -30,8 +30,8 @@
 // it is charmed by them), it keeps the hero it attacked before, otherwise it
 // picks one at random among the conscious heroes it can attack.
 
-import { resolveAttack } from './combat';
-import { castSpell, parseDice } from './spellcasting';
+import { resolveAttack, attackOptions } from './combat';
+import { castSpell, parseDice, spellRows } from './spellcasting';
 import { drinkPotion, healingDice } from './items';
 import { setHands, describeHands, fleeDC, setLimbStatus, normalizeEquipment, limbWithArticle, limbStatusLabel, LIMB_IDS } from './equipment';
 import { skillModifier } from './characterBuilder';
@@ -126,10 +126,20 @@ const playerInitiativeBonus = character => mod(character.stats?.des)
  * @param {{monster: object, count?: number, name?: string}[]} groups  creatures (from the bestiary)
  * @param {object | object[]} party  the hero, or the heroes (each with its own `id`)
  * @param {(sides: number) => number} rollDie
+ * @param {{ surprise?: object, opening?: object }} [options]
+ *   surprise: who doesn't see the fight coming (see "Surprise and the opening strike" below):
+ *     { side: 'enemies' | 'heroes', who?: 'all' | string[], reason?, check? }
+ *     who: monster ids, enemy uids or names (side 'enemies'); hero ids or names (side 'heroes')
+ *     check: { skill: 'stealth' | 'deception', heroUid } (the party hides or lies) or
+ *            { skill: 'stealth' } (the enemies lie in wait): the game rolls it against
+ *            the passive Perception of each creature of the other side
+ *   opening: { heroUid, suggest?, needs? } the hero who started the fight with an
+ *     attack: that attack is played before the initiative (see openingAction)
  * @returns the encounter state (a hero's turn, or the enemies act first:
- *          call `runEnemyTurns` right after to let them act until a hero's turn)
+ *          call `runEnemyTurns` right after to let them act until a hero's turn;
+ *          with a pending opening strike it is that hero's move)
  */
-export function createEncounter(groups, party, rollDie) {
+export function createEncounter(groups, party, rollDie, { surprise = null, opening = null } = {}) {
   const heroes = asList(party);
   const enemies = [];
   groups.forEach(({ monster, count = 1, name, trait, elite }) => {
@@ -158,14 +168,24 @@ export function createEncounter(groups, party, rollDie) {
         moraleChecked: false,
         targetUid: null, // the hero it goes for (see the enemy targets rule above)
         recharge: Object.fromEntries((monster.actions || []).filter(a => a.recharge).map(a => [a.id, true])),
-        initiative: rollDie(20) + (monster.initiative ?? mod(monster.stats?.des))
+        initiative: monster.initiative ?? mod(monster.stats?.des) // + the d20, below
       });
     }
   });
 
-  // Initiative is a Dexterity check: poisoned, invisible, incapacitated, exhausted...
+  // Surprise: who is caught off guard (after the hidden side's check, if any).
+  // A surprised creature rolls its initiative with Disadvantage (2024 rules).
+  const caught = surprisedUids(surprise, enemies, heroes, rollDie);
+  enemies.forEach(e => {
+    const surprised = caught.uids.includes(e.uid);
+    e.initiative += surprised ? rollD20(rollDie, { disadvantage: ['sorprendido'] }).raw : rollDie(20);
+    if (surprised) e.surprised = true;
+  });
+
+  // Initiative is a Dexterity check: poisoned, invisible, incapacitated, exhausted... and surprised
   const heroSlots = heroes.map((hero, index) => {
     const initiativeMods = checkModifiers(hero, { ability: 'des', initiative: true });
+    if (caught.uids.includes(heroUid(hero))) initiativeMods.disadvantage.push('sorprendido');
     const initiative = rollD20(rollDie, initiativeMods).raw + playerInitiativeBonus(hero) - initiativeMods.penalty;
     return { kind: 'player', uid: heroUid(hero), initiative, index };
   });
@@ -177,7 +197,7 @@ export function createEncounter(groups, party, rollDie) {
     .map(slot => { const copy = { ...slot }; delete copy.index; return copy; });
   const nameOfSlot = o => (o.kind === 'player' ? heroes.find(h => heroUid(h) === o.uid)?.name : enemies.find(e => e.uid === o.uid)?.name);
 
-  return {
+  const encounter = {
     round: 1,
     turn: 0,
     order,
@@ -188,8 +208,197 @@ export function createEncounter(groups, party, rollDie) {
     concentrations: {},  // heroUid -> { spellId, name, token } while that hero concentrates on a spell
     immunities: [],      // "enemyUid:actionId:heroUid": that hero resisted it and is immune for this fight
     xp: 0,
-    log: [{ round: 1, kind: 'info', text: `¡Comienza el combate! Iniciativa: ${order.map(o => `${nameOfSlot(o)} ${o.initiative}`).join(', ')}.` }]
+    ...(caught.side ? {
+      surprise: {
+        side: caught.side,
+        uids: caught.uids,
+        names: caught.uids.map(uid => nameOfSlot({ kind: caught.side === 'enemies' ? 'enemy' : 'player', uid })),
+        reason: caught.reason,
+        check: caught.check
+      }
+    } : {}),
+    log: [
+      { round: 1, kind: 'info', text: `¡Comienza el combate! Iniciativa: ${order.map(o => `${nameOfSlot(o)} ${o.initiative}`).join(', ')}.` },
+      ...caught.log.map(text => ({ round: 1, kind: 'surprise', text }))
+    ]
   };
+  return addOpening(encounter, heroes, opening);
+}
+
+/**
+ * Give a new encounter its opening strike (see below): the hero who started the
+ * fight attacking plays it before the initiative. Nothing changes without a
+ * hero of the fight, or once the fight has begun.
+ * @param {{ heroUid, suggest?, needs?, choices? }} opening  see detectOpeningStrike in surprise.js
+ */
+export function addOpening(encounter, party, opening) {
+  const heroes = asList(party);
+  if (!opening?.heroUid || !isHeroUid(heroes, opening.heroUid) || encounter.opening || encounter.status !== 'active') return encounter;
+  const attacker = heroOf(heroes, opening.heroUid);
+  const caught = encounter.surprise?.side === 'enemies' && encounter.surprise.uids?.length;
+  return pushLog(
+    {
+      ...encounter,
+      opening: { heroUid: opening.heroUid, done: false, suggest: opening.suggest || null, needs: opening.needs || null, choices: opening.choices || null }
+    },
+    'opening', `⚡ Golpe de apertura: ${attacker.name} ataca antes de la iniciativa${caught ? ', con ventaja contra quien no lo ve venir' : ''}.`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Surprise and the opening strike
+// ---------------------------------------------------------------------------
+//
+// SURPRISE (2024 rules): a creature that doesn't see the fight coming rolls its
+// initiative with Disadvantage. Who is surprised is decided by Duncan (validated,
+// see cleanSurprise in surprise.js) or by the local engine (an attack in a quiet
+// scene; an ambush while exploring). When the hidden side makes a check (Stealth
+// to sneak up, Deception to strike mid-conversation, the ambushers' Stealth), a
+// creature whose passive Perception (10 + Wisdom modifier, + Perception for a
+// hero) is equal or higher than the check notices it and is not surprised.
+//
+// THE OPENING STRIKE: the attack the player wrote to start the fight ("le clavo
+// la daga al tabernero") is played by the game before round 1, as an extra
+// action of that hero outside the initiative (they keep their normal turn): a
+// weapon attack or an offensive spell (attack roll, saving throw or automatic
+// hit) against one enemy. Against a surprised enemy the attack roll has
+// Advantage ("objetivo desprevenido"). Its damage, conditions and concentration
+// count: the target may start the fight hurt or dead. While it is pending the
+// fight waits for that hero (currentHeroUid is that hero): see openingAction.
+
+/** Passive Perception: 10 + Wisdom modifier (+ Perception for a hero). */
+export const passivePerception = (creature, isHero) => 10 + (isHero ? skillModifier(creature, 'perception') : mod(creature.stats?.sab));
+
+const SKILL_NAMES = { stealth: 'Sigilo', deception: 'Engaño' };
+
+/** Who is surprised: { side, uids, log, reason, check } (side null: nobody). */
+function surprisedUids(surprise, enemies, heroes, rollDie) {
+  const none = { side: null, uids: [], log: [], reason: '', check: null };
+  if (!surprise || !['enemies', 'heroes'].includes(surprise.side)) return none;
+  const side = surprise.side;
+  const list = Array.isArray(surprise.who) ? surprise.who.map(w => String(w).toLowerCase()) : [];
+  const all = !list.length || list.includes('all') || list.includes('todos');
+  const matches = (...keys) => all || keys.some(k => k && list.includes(String(k).toLowerCase()));
+  let candidates = side === 'enemies'
+    ? enemies.filter(e => matches(e.monsterId, e.uid, e.name, e.baseName))
+    : heroes.filter(h => matches(heroUid(h), h.name));
+  if (!candidates.length) return none;
+  const reason = typeof surprise.reason === 'string' ? surprise.reason.trim().replace(/\s+/g, ' ').slice(0, 120) : '';
+  const log = [];
+  let check = null;
+  const skill = SKILL_NAMES[surprise.check?.skill] ? surprise.check.skill : null;
+  if (skill) {
+    let bonus;
+    let by;
+    let mods = { advantage: [], disadvantage: [], penalty: 0 };
+    if (side === 'enemies') {
+      // The hero who sneaks up or lies
+      const hero = heroOf(heroes, surprise.check.heroUid) || heroes[0];
+      bonus = skillModifier(hero, skill);
+      mods = checkModifiers(hero, { ability: skill === 'stealth' ? 'des' : 'car', skillId: skill });
+      by = hero.name;
+    } else {
+      // The ambushers: one roll with the worst Dexterity among them (as quiet as the clumsiest)
+      bonus = Math.min(...enemies.map(e => mod(e.stats?.des)));
+      by = 'Los atacantes';
+    }
+    const roll = rollD20(rollDie, mods);
+    const total = roll.raw + bonus - mods.penalty;
+    check = { skill, total, by };
+    const noticed = [];
+    candidates = candidates.filter(c => {
+      const pp = passivePerception(c, side === 'heroes');
+      if (pp >= total) noticed.push(`${c.name} (${pp})`);
+      return pp < total;
+    });
+    log.push(`${by} ${side === 'enemies' ? `tira ${SKILL_NAMES[skill]}` : 'tiran Sigilo'}: ${withBonus(roll.raw, bonus - mods.penalty)} = ${total}${describeMode({ ...roll, ...mods })} contra la Percepción pasiva${noticed.length ? `; se dan cuenta: ${noticed.join(', ')}` : ': nadie se da cuenta'}.`);
+  }
+  if (!candidates.length) return { ...none, side, log: [...log, 'Nadie queda sorprendido.'], reason, check };
+  const names = candidates.map(c => c.name);
+  const many = names.length > 1;
+  const whoText = side === 'enemies'
+    ? `${names.join(', ')} ${many ? 'no lo ven venir: quedan sorprendidos' : 'no lo ve venir: queda sorprendido'}`
+    : heroes.length > 1 && candidates.length === heroes.length
+      ? 'El grupo cae en una emboscada: quedan sorprendidos'
+      : `${names.join(', ')} ${many ? 'caen en una emboscada: quedan sorprendidos' : 'cae en una emboscada: queda sorprendido'}`;
+  log.push(`😱 ¡Sorpresa! ${whoText}${reason ? ` (${reason})` : ''} y ${many ? 'tiran' : 'tira'} la iniciativa con desventaja.`);
+  return { side, uids: candidates.map(c => (side === 'enemies' ? c.uid : heroUid(c))), log, reason, check };
+}
+
+/** The opening strike is still to be played. */
+export const openingPending = encounter => Boolean(encounter?.status === 'active' && encounter.opening && !encounter.opening.done);
+
+/** Spells that can open a fight: an attack roll, a saving throw or an automatic hit, against an enemy. */
+export const OFFENSIVE_KINDS = ['attack', 'save', 'auto'];
+
+/**
+ * Play (or give up) the opening strike, then the initiative starts: the enemies
+ * that won it act until a hero's turn. Same results as playerAction.
+ * @param {object} action  { type: 'attack', optionId, targetUid, raging? } | { type: 'spell', spellId, targetUid }
+ *   | { type: 'endTurn' } (the hero gives it up)
+ */
+function openingAction(encounter, party, action, rollDie) {
+  const heroes = asList(party);
+  const uid = encounter.opening.heroUid;
+  const hero = heroOf(heroes, uid);
+  let next = encounter;
+  let hs = heroes;
+  let animations = [];
+  let result;
+  const lost = lostTurnReason(hero);
+  if (lost || action.type === 'endTurn') {
+    next = pushLog(next, 'opening', lost ? `${hero.name} está ${lost} y no llega a atacar.` : `${hero.name} se lo piensa mejor y no ataca antes de la iniciativa.`);
+    result = { skipped: true };
+  } else {
+    const spell = action.type === 'spell' ? spellRows(hero).find(s => s.id === action.spellId) : null;
+    if (!['attack', 'spell'].includes(action.type) || (spell && !OFFENSIVE_KINDS.includes(spell.kind))) {
+      return { ok: false, error: 'El golpe de apertura tiene que ser un ataque o un conjuro ofensivo.' };
+    }
+    const target = next.enemies.find(e => e.uid === action.targetUid && e.status === 'active');
+    if (!target) return { ok: false, error: 'Elige a qué enemigo atacas.' };
+    // A surprised target is caught off guard: Advantage on the attack roll (see attackModifiers)
+    next = updateEnemy(next, target.uid, { unaware: Boolean(target.surprised) });
+    const res = resolveHeroAction(next, hs, uid, action, rollDie);
+    if (!res.ok) return res;
+    ({ encounter: next, heroes: hs, animations } = res);
+    next = { ...next, enemies: next.enemies.map(e => { const { unaware: _u, ...rest } = e; return rest; }) };
+    const after = next.enemies.find(e => e.uid === target.uid);
+    const damage = Math.max(0, target.hp - Math.max(0, after.hp));
+    const used = spell?.name || attackOptions(hero).find(o => o.id === action.optionId)?.itemName || 'su arma';
+    result = {
+      targetUid: target.uid, target: target.name, with: used, damage, hp: Math.max(0, after.hp), maxHp: after.maxHp,
+      status: after.status, surprised: Boolean(target.surprised)
+    };
+    const outcome = after.status === 'dead' ? `${target.name} cae antes de poder reaccionar`
+      : after.status !== 'active' ? `${target.name} ${after.status === 'fled' ? 'huye' : 'se rinde'} antes de que empiece la pelea`
+        : damage ? `${target.name} empieza el combate herido (${after.hp}/${after.maxHp} PG)` : `${target.name} sale ileso`;
+    next = pushLog(next, 'opening', `⚡ Golpe de apertura de ${hero.name} (${used.toLowerCase()}): ${damage ? `${damage} de daño` : 'no hace daño'}; ${outcome}.`, { uid: target.uid });
+  }
+  next = { ...next, opening: { ...next.opening, done: true, result }, actionUsed: false, bonusUsed: false };
+  next = checkEnd(next, hs);
+  if (next.status !== 'active') return { ok: true, encounter: next, ...out(party, hs, uid), animations };
+  const ran = runTurns(next, hs, rollDie);
+  return { ok: true, encounter: ran.encounter, ...out(party, ran.heroes, uid), animations };
+}
+
+/** One line for the chronicle and the campaign memory: who surprised whom, and the opening strike ('' if neither). */
+export function describeSurprise(encounter, party) {
+  const heroes = asList(party);
+  const parts = [];
+  const s = encounter?.surprise;
+  if (s?.uids?.length) {
+    parts.push(s.side === 'enemies'
+      ? `${heroes.length > 1 ? 'el grupo' : heroes[0]?.name || 'el héroe'} sorprende a ${s.names.join(', ')}`
+      : `${s.names.join(', ')} ${s.names.length > 1 ? 'caen' : 'cae'} en una emboscada`);
+  }
+  const r = encounter?.opening?.result;
+  const who = heroOf(heroes, encounter?.opening?.heroUid)?.name;
+  if (r && !r.skipped && who) {
+    parts.push(`golpe de apertura de ${who} contra ${r.target} (${r.with.toLowerCase()}): ${r.damage ? `${r.damage} de daño` : 'sin daño'}${r.status === 'dead' ? `, y ${r.target} cae` : ''}`);
+  }
+  if (!parts.length) return '';
+  const text = parts.join('; ');
+  return `${text[0].toUpperCase()}${text.slice(1)}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -240,9 +449,11 @@ export function normalizeEncounter(encounter, heroIds = []) {
 // ---------------------------------------------------------------------------
 
 export const activeEnemies = encounter => encounter.enemies.filter(e => e.status === 'active');
-export const isPlayerTurn = encounter => encounter.status === 'active' && encounter.order[encounter.turn]?.kind === 'player';
-/** The hero whose turn it is (uid), or null on an enemy's turn. */
-export const currentHeroUid = encounter => (isPlayerTurn(encounter) ? encounter.order[encounter.turn].uid || PLAYER : null);
+/** A hero acts now: their turn, or the opening strike before the initiative. */
+export const isPlayerTurn = encounter => encounter.status === 'active' && (openingPending(encounter) || encounter.order[encounter.turn]?.kind === 'player');
+/** The hero whose turn it is (uid; the attacker while the opening strike is pending), or null on an enemy's turn. */
+export const currentHeroUid = encounter => (openingPending(encounter) ? encounter.opening.heroUid
+  : isPlayerTurn(encounter) ? encounter.order[encounter.turn].uid || PLAYER : null);
 /** The spell a hero concentrates on ({ spellId, name, token }) or null. */
 export const concentrationOf = (encounter, uid) => encounter?.concentrations?.[uid] || null;
 export const isDodging = (encounter, uid) => Array.isArray(encounter.dodging) && encounter.dodging.includes(uid);
@@ -733,6 +944,7 @@ export function playerAction(encounter, party, action, rollDie) {
   if (!isPlayerTurn(encounter)) return { ok: false, error: 'No es tu turno.' };
   const uid = currentHeroUid(encounter);
   if (!isHeroUid(asList(party), uid)) return { ok: false, error: 'Ese héroe no está en este combate.' };
+  if (openingPending(encounter)) return openingAction(encounter, party, action, rollDie);
   const done = (enc, hs, animations) => ({ ok: true, encounter: enc, ...out(party, hs, uid), animations });
 
   const begun = beginPlayerTurn(encounter, asList(party), uid, rollDie);
@@ -748,6 +960,32 @@ export function playerAction(encounter, party, action, rollDie) {
   if (action.type === 'endTurn') return endHeroTurn(next, hs, uid, rollDie, [], party);
   if (isBonus && next.bonusUsed) return { ok: false, error: 'Ya has usado tu acción adicional este turno.' };
   if (!isBonus && next.actionUsed) return { ok: false, error: 'Ya has hecho tu acción este turno: usa una poción o termina el turno.' };
+  const res = resolveHeroAction(next, hs, uid, action, rollDie);
+  if (!res.ok) return res;
+  ({ encounter: next, heroes: hs } = res);
+  const { animations } = res;
+  if (res.finished) return done(next, hs, animations);
+
+  if (!isBonus) next = { ...next, actionUsed: true };
+  next = checkEnd(next, hs);
+  if (next.status !== 'active') return done(next, hs, animations);
+
+  // The turn stays open while there is still something to do: the action, or a potion to use
+  const canDrink = !next.bonusUsed && (me().inventory || []).some(item => healingDice(item));
+  if (!next.actionUsed || canDrink) return done(next, hs, animations);
+  return endHeroTurn(next, hs, uid, rollDie, animations, party);
+}
+
+/**
+ * The effect of one hero action (see playerAction): rolls, damage, conditions,
+ * the log. No turn bookkeeping here (that is playerAction's, or the opening strike's).
+ * @returns {{ ok: false, error } | { ok: true, encounter, heroes, animations, finished? }}
+ *   finished: the party got away (a successful flight)
+ */
+function resolveHeroAction(encounter, heroes, uid, action, rollDie) {
+  let next = encounter;
+  let hs = heroes;
+  const me = () => heroOf(hs, uid);
   const animations = [];
   const target = next.enemies.find(e => e.uid === action.targetUid && e.status === 'active');
   const ally = isHeroUid(hs, action.targetUid) ? heroOf(hs, action.targetUid) : null;
@@ -924,21 +1162,14 @@ export function playerAction(encounter, party, action, rollDie) {
     if (total >= dc) {
       const xp = overcomeXp(next, false);
       next = pushLog({ ...next, status: 'fled', xp }, 'end', `${hero.name} ${group ? 'abre paso y el grupo logra escapar (cargando con los caídos)' : 'logra escapar'} (${withBonus(roll, total - roll)} = ${total} vs CD ${dc}${how}).${xp ? ` +${xp} PX por los enemigos abatidos.` : ''}`);
-      return done(next, hs, animations);
+      return { ok: true, encounter: next, heroes: hs, animations, finished: true };
     }
     next = pushLog(next, 'miss', `${hero.name} intenta ${group ? 'abrir una vía de escape' : 'huir'} pero le cortan el paso (${total} vs CD ${dc}${how}).`);
   } else {
     return { ok: false, error: 'Acción desconocida.' };
   }
 
-  if (!isBonus) next = { ...next, actionUsed: true };
-  next = checkEnd(next, hs);
-  if (next.status !== 'active') return done(next, hs, animations);
-
-  // The turn stays open while there is still something to do: the action, or a potion to use
-  const canDrink = !next.bonusUsed && (me().inventory || []).some(item => healingDice(item));
-  if (!next.actionUsed || canDrink) return done(next, hs, animations);
-  return endHeroTurn(next, hs, uid, rollDie, animations, party);
+  return { ok: true, encounter: next, heroes: hs, animations };
 }
 
 /** End a hero's turn: saves and durations of the end of the turn, then the others act. */
@@ -1245,5 +1476,7 @@ export function describeEncounterResult(encounter, party) {
   if (fled.length) parts.push(`Huyen: ${fled.join(', ')}.`);
   if (fallen.length && encounter.status !== 'defeat') parts.push(`Cayeron inconscientes: ${fallen.join(', ')}.`);
   if (encounter.xp) parts.push(`+${encounter.xp} PX${heroes.length > 1 ? ' para repartir' : ''}.`);
+  const surprise = describeSurprise(encounter, heroes);
+  if (surprise) parts.push(surprise);
   return parts.join(' ');
 }

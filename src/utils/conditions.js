@@ -213,6 +213,8 @@ export function attackModifiers(attacker, target, { ranged = false, targetUid = 
   if (mine.has('agarrado') && targetUid && !grapplers(attacker).includes(targetUid)) disadvantage.push('agarrado por otro');
   if (mine.has('invisible')) advantage.push('invisible');
 
+  // The opening strike against a surprised creature (see encounter.js): it never saw it coming
+  if (target?.unaware) advantage.push('objetivo desprevenido');
   if (theirs.has('cegado')) advantage.push('objetivo cegado');
   if (theirs.has('invisible')) disadvantage.push('objetivo invisible');
   ['paralizado', 'aturdido', 'inconsciente', 'petrificado', 'apresado'].forEach(id => { if (theirs.has(id)) advantage.push(`objetivo ${lower(id)}`); });

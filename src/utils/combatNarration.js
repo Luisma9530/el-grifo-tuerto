@@ -18,7 +18,7 @@ const pick = (list, rng) => list[Math.floor(rng() * list.length)];
  * easy encounter for the hero or the party (its budget is per character, added up).
  * @returns {{ text, suggestedActions, combat: { enemigos } }}
  */
-export function startLocalFight(bestiary, { character, rng = Math.random }) {
+export function startLocalFight(bestiary, { character, rng = Math.random, surprise = null, ambush = false }) {
   const budget = bestiary.budget.low;
   const usable = bestiary.creatures.filter(c => c.xp <= budget);
   const pool = usable.length ? usable : [...bestiary.creatures].sort((a, b) => a.xp - b.xp).slice(0, 1);
@@ -28,9 +28,18 @@ export function startLocalFight(bestiary, { character, rng = Math.random }) {
   const count = Math.max(1, Math.min(group ? 6 : 4, Math.floor(budget / Math.max(1, foe.xp))));
   const many = count > 1;
   const name = character.name || 'Aventurero';
-  const text = `Duncan deja la jarra en el mostrador con un golpe seco.
+  const foes = many ? `**${count} × ${foe.name}**` : `**${foe.name}**`;
+  const text = ambush
+    ? `Duncan baja la voz, como si contara una vieja historia de miedo.
 
-—*Pues ya está, ${name}: has encontrado pelea.* ${many ? `**${count} × ${foe.name}**` : `**${foe.name}**`} ${many ? 'salen' : 'sale'} ${group ? 'al encuentro del grupo' : 'a tu encuentro'} y no hay tiempo para palabras. Las armas, fuera.`;
+—*Ni lo oíste venir, ${name}.* De entre la maleza y las sombras ${many ? 'saltan' : 'salta'} ${foes} sobre ${group ? 'el grupo' : 'ti'}: llevaban rato esperando. Las armas, fuera, ¡ya!`
+    : surprise
+      ? `Duncan deja la jarra en el mostrador con un golpe seco.
+
+—*Eso no se lo esperaba nadie, ${name}.* ${foes} ${many ? 'tardan' : 'tarda'} un instante de más en reaccionar mientras te lanzas al ataque. Ahora veremos qué sale de ese primer golpe.`
+      : `Duncan deja la jarra en el mostrador con un golpe seco.
+
+—*Pues ya está, ${name}: has encontrado pelea.* ${foes} ${many ? 'salen' : 'sale'} ${group ? 'al encuentro del grupo' : 'a tu encuentro'} y no hay tiempo para palabras. Las armas, fuera.`;
   return {
     text,
     suggestedActions: [],
