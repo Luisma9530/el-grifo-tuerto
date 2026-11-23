@@ -51,9 +51,21 @@ describe('SideColumn', () => {
     expect(box().className).toMatch(/lg:hidden/);
     act(() => rail.click());
     expect(box().className).toMatch(/lg:absolute/);
+    act(() => rail.click());
+    expect(box().className).toMatch(/lg:hidden/);
+    act(() => rail.click());
     // the fight ends: back to a normal column, and the next fight starts folded
     act(() => root.render(view(false)));
     act(() => root.render(view(true)));
     expect(box().className).toMatch(/lg:hidden/);
+  });
+
+  it('can be opened from outside and shows a count of news on the rail', () => {
+    const onOpenChange = vi.fn();
+    render(<SideColumn collapsed open={false} onOpenChange={onOpenChange} badge={3}><p>chat</p></SideColumn>);
+    const rail = container.querySelector('button');
+    expect(rail.textContent).toContain('3');
+    act(() => rail.click());
+    expect(onOpenChange).toHaveBeenCalledWith(true);
   });
 });

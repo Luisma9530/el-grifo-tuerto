@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createRoom, joinPlayer, setPresence, claimCharacter, releaseCharacter, castVote, voteTally, breakTie, closeVote,
   restartVotes, controllerOf, ownerOf, canControl, leftoverCharacters, removePlayer, enqueueAction, cancelAction,
-  addChat, restoreRoom, roomToSave, newRoomCode, normalizeCode, cleanName, MAX_PLAYERS, MAX_QUEUE_PER_PLAYER
+  addChat, unreadChatCount, lastChatAt, restoreRoom, roomToSave, newRoomCode, normalizeCode, cleanName, MAX_PLAYERS, MAX_QUEUE_PER_PLAYER
 } from './room';
 
 const CHARS = ['brena', 'tobias', 'ilsa', 'garr'];
@@ -189,6 +189,17 @@ describe('queue and chat', () => {
     const id = room.queue[0].id;
     expect(cancelAction(room, 'b', id).ok).toBe(false);
     expect(cancelAction(room, 'h', id).room.queue).toHaveLength(0);
+  });
+  it('counts the new lines from the others since the last one seen', () => {
+    let room = addChat(base(), 'a', 'hola', 100);
+    room = addChat(room, 'b', 'buenas', 200);
+    room = addChat(room, 'a', 'vamos', 300);
+    expect(unreadChatCount(room.chat, 'a', 0)).toBe(1);
+    expect(unreadChatCount(room.chat, 'b', 0)).toBe(2);
+    expect(unreadChatCount(room.chat, 'b', 100)).toBe(1);
+    expect(unreadChatCount(room.chat, 'b', lastChatAt(room.chat))).toBe(0);
+    expect(lastChatAt([])).toBe(0);
+    expect(unreadChatCount(undefined, 'a')).toBe(0);
   });
   it('chat lines carry the name', () => {
     const room = addChat(base(), 'a', 'hola');

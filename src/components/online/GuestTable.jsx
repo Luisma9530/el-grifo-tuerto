@@ -10,7 +10,8 @@ import LevelUpModal from '../game/LevelUpModal';
 import OnlineToast from './OnlineToast';
 import { useGuestRoom } from '../../online/useOnlineRoom';
 import { roomLink } from '../../online/transport';
-import { controllerOf, canControl, playerName, claimOf } from '../../online/room';
+import { controllerOf, canControl, playerName, claimOf, unreadChatCount, lastChatAt } from '../../online/room';
+import { useMediaQuery, WIDE_LAYOUT } from '../../hooks/useMediaQuery';
 import { sheetIntents } from '../../online/actions';
 import { isAtTavern } from '../../utils/shops';
 import { memberSheets, MAX_PARTY } from '../../utils/party';
@@ -34,6 +35,10 @@ export default function GuestTable({ code, name, kind, onLeave }) {
   const [selectedId, setSelectedId] = useState(null);
   const [mobileTab, setMobileTab] = useState('story');
   const [sideTab, setSideTab] = useState('room');
+  // The side column folded during a fight (computer) and the time of the last chat line seen
+  const [railOpen, setRailOpen] = useState(false);
+  const [chatSeenAt, setChatSeenAt] = useState(0);
+  const wide = useMediaQuery(WIDE_LAYOUT);
   const [localNotice, setLocalNotice] = useState(null);
   const [levelUpId, setLevelUpId] = useState(null);
   const [creating, setCreating] = useState(false);
@@ -46,6 +51,14 @@ export default function GuestTable({ code, name, kind, onLeave }) {
   const inCombat = Boolean(encounter && encounter.status === 'active');
   const turnUid = inCombat ? currentHeroUid(encounter) : null;
   const meta = view.meta || {};
+
+  // New chat lines: seen while the chat is on screen (a phone on its tab; a computer
+  // with the column open, which in a fight means the rail opened)
+  if (!encounter && railOpen) setRailOpen(false);
+  const chat = shared?.chat || [];
+  const chatOnScreen = sideTab === 'room' && (wide ? (!encounter || railOpen) : mobileTab === 'side');
+  if (chatOnScreen && lastChatAt(chat) > chatSeenAt) setChatSeenAt(lastChatAt(chat));
+  const unreadChat = chatOnScreen ? 0 : unreadChatCount(chat, playerId, chatSeenAt);
   const notice = localNotice || room.notices[0]?.text || null;
   const closeNotice = () => {
     if (localNotice) setLocalNotice(null);
@@ -195,6 +208,9 @@ export default function GuestTable({ code, name, kind, onLeave }) {
 
         <SideColumn
           collapsed={Boolean(encounter)}
+          open={railOpen}
+          onOpenChange={setRailOpen}
+          badge={unreadChat}
           mobileVisible={mobileTab === 'side'}
           label="Sala, chat y mapa"
           railIcons={[Users, MapIcon]}
@@ -202,7 +218,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
         >
         <div className="w-full h-full flex flex-col overflow-hidden border-l border-amber-950/60 bg-[#120f18]">
           <div className="flex border-b border-amber-950/60 text-xs font-semibold shrink-0">
-            <button onClick={() => setSideTab('room')} className={tabClass(sideTab === 'room')}>Sala y chat</button>
+            <button onClick={() => setSideTab('room')} className={tabClass(sideTab === 'room')}>Sala y chat{unreadChat > 0 ? ` (${unreadChat})` : ''}</button>
             <button onClick={() => setSideTab('map')} className={tabClass(sideTab === 'map')}>Mapa y misiones</button>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto">
@@ -275,7 +291,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
         tabs={[
           { id: 'story', label: encounter ? 'Combate' : 'Crónica', icon: encounter ? Swords : ScrollText },
           { id: 'party', label: 'Grupo', icon: Shield },
-          { id: 'side', label: 'Sala y mapa', icon: Users, badge: shared?.chat?.length ? true : 0 }
+          { id: 'side', label: 'Sala y mapa', icon: Users, badge: unreadChat }
         ]}
       />
     </div>

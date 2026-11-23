@@ -41,12 +41,20 @@ export function MobileTabBar({ tabs, active, onChange }) {
 /**
  * The right-hand column. During a fight (`collapsed`) it folds into a thin rail on a
  * computer, so the fight gets the room; the rail opens it over the screen. On a phone
- * it is a full-width tab (`mobileVisible`).
+ * it is a full-width tab (`mobileVisible`). `badge`: news on the rail (a number shows as a count).
+ * `open` / `onOpenChange`: to control the rail from outside (the parent folds it again after a fight).
  */
-export function SideColumn({ collapsed = false, mobileVisible = false, label = 'Mapa y diarios', railIcons = [], badge = 0, widthClass = 'lg:w-72 xl:w-80 2xl:w-88', children }) {
-  const [peek, setPeek] = useState(false);
+export function SideColumn({ collapsed = false, mobileVisible = false, label = 'Mapa y diarios', railIcons = [], badge = 0, widthClass = 'lg:w-72 xl:w-80 2xl:w-88', open, onOpenChange, children }) {
+  const [innerPeek, setInnerPeek] = useState(false);
+  const controlled = open !== undefined;
+  const peek = controlled ? open : innerPeek;
+  const setPeek = update => {
+    const next = typeof update === 'function' ? update(peek) : update;
+    if (controlled) onOpenChange?.(next);
+    else setInnerPeek(next);
+  };
   // A new fight starts folded again
-  if (!collapsed && peek) setPeek(false);
+  if (!controlled && !collapsed && innerPeek) setInnerPeek(false);
   const folded = collapsed && !peek;
 
   return (
@@ -64,7 +72,11 @@ export function SideColumn({ collapsed = false, mobileVisible = false, label = '
             const Icon = icon;
             return <Icon key={index} className="w-4 h-4" aria-hidden="true" />;
           })}
-          {badge > 0 && <span className="w-2 h-2 rounded-full bg-amber-400" aria-label="Novedades" />}
+          {badge > 0 && (
+            <span className="min-w-4 h-4 px-1 rounded-full bg-amber-500 text-stone-950 text-[9px] font-bold flex items-center justify-center" aria-label={`${badge} novedades`}>
+              {badge}
+            </span>
+          )}
           <span className="sr-only">{label}</span>
         </button>
       )}
