@@ -46,6 +46,16 @@ describe('PartyPanel', () => {
     expect([...container.querySelectorAll('button')].some(b => b.textContent.trim() === 'Atacar')).toBe(false);
   });
 
+  it('the sheet shows the attacks for reference only, without buttons', () => {
+    render();
+    const summary = [...container.querySelectorAll('summary')].find(el => el.textContent.trim() === 'Ataques');
+    expect(summary).toBeDefined();
+    const rows = container.querySelectorAll('[data-testid="attack-row"]');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0].textContent).toMatch(/al ataque/);
+    expect(summary.parentElement.querySelectorAll('button')).toHaveLength(0);
+  });
+
   it('only offers the menu of Duncan at the tavern; rests are always there', () => {
     render({ atTavern: false });
     click(button('Descanso'));

@@ -317,6 +317,11 @@ export function spellRows(character) {
     .sort((a, b) => a.level - b.level || a.name.localeCompare(b.name, 'es'));
 }
 
+/** Prepared spells that attack or deal damage, with their numbers (attack bonus or save DC): the sheet's reminder. */
+export function damageSpells(character) {
+  return spellRows(character).filter(s => s.entry?.prepared && ['attack', 'save', 'auto'].includes(s.kind) && s.damage);
+}
+
 /**
  * Cast a spell the character knows.
  * @param {(sides: number) => number} rollDie

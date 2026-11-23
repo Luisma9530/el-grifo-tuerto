@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   spellsFor, spellSources, speciesCantrips, spellOptions, sanitizeSpells, spellIssues, buildSpellcasting,
   randomSpellChoices, parseDice, castSpell, describeCast, spellRows, spellNumbers, slotsLeft,
-  longRest, shortRest, hasHitDie, getSpell
+  longRest, shortRest, hasHitDie, getSpell, damageSpells
 } from './spellcasting';
 import { emptyDraft, sanitizeDraft, stepIssues, buildCharacter, randomDraft } from './characterBuilder';
 import { SPELLS, CLASS_SPELLCASTING, MAGIC_INITIATE, SPECIES_CANTRIPS } from '../data/spells';
@@ -175,7 +175,18 @@ describe('choosing spells', () => {
 describe('casting', () => {
   const hero = buildCharacter(wizardDraft()); // Int 17: +5 to hit, DC 13
 
-  it('parses dice notation', () => {
+  it('lists the prepared damage spells for the sheet reminder, with their numbers', () => {
+    const list = damageSpells(hero);
+    expect(list.length).toBeGreaterThan(0);
+    expect(list.every(s => s.entry.prepared && ['attack', 'save', 'auto'].includes(s.kind) && s.damage)).toBe(true);
+    const bolt = list.find(s => s.id === 'fireBolt');
+    expect(bolt).toMatchObject({ level: 0, attackBonus: 5 });
+    const unprepared = { ...hero, spellcasting: { ...hero.spellcasting, known: hero.spellcasting.known.map(e => ({ ...e, prepared: false })) } };
+    expect(damageSpells(unprepared)).toEqual([]);
+    expect(damageSpells({ name: 'Brega' })).toEqual([]);
+  });
+
+    it('parses dice notation', () => {
     expect(parseDice('3d4+3')).toEqual({ count: 3, sides: 4, bonus: 3 });
     expect(parseDice('1d10')).toEqual({ count: 1, sides: 10, bonus: 0 });
     expect(parseDice('fuego')).toBeNull();

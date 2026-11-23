@@ -6,6 +6,7 @@ import { TAVERN_MENU } from '../../data/gameData';
 import { tavernAudio } from '../../utils/audio';
 import SpellsTab, { RestButtons } from './SpellsTab';
 import MenuButton from '../MenuButton';
+import AttacksSummary from './AttacksSummary';
 import ConditionBadges from './ConditionBadges';
 import EquipmentPanel from './EquipmentPanel';
 import { normalizeEquipment, HANDS, isWorn } from '../../utils/equipment';
@@ -305,6 +306,13 @@ export default function PartyPanel({
         {/* STATS SHEET TAB */}
         {activeTab === 'sheet' && (
           <div className="space-y-4">
+            <details>
+              <summary className="cursor-pointer select-none text-[11px] font-mono uppercase text-stone-400 tracking-wider mb-2 hover:text-amber-300">
+                Ataques
+              </summary>
+              <AttacksSummary character={character} />
+            </details>
+
             <details open>
               <summary className="cursor-pointer select-none text-[11px] font-mono uppercase text-stone-400 tracking-wider mb-2 hover:text-amber-300">
                 Características (haz clic para tirar)
