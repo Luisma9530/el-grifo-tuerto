@@ -68,7 +68,7 @@ export function describeGroups(data = []) {
  * @param {{ character?, party?, groups, world?, place?, byDuncan?, date?, id? }} input
  *   party: the heroes in the fight (one to four); character: a lone hero
  */
-export function makeSnapshot({ character = null, party = null, groups, world = null, place = '', byDuncan = false, date = new Date().toISOString(), id = newSnapshotId() }) {
+export function makeSnapshot({ character = null, party = null, groups, world = null, place = '', byDuncan = false, surprise = null, date = new Date().toISOString(), id = newSnapshotId() }) {
   const heroes = Array.isArray(party) && party.length ? party : [character];
   const lead = heroes[0];
   return {
@@ -78,6 +78,8 @@ export function makeSnapshot({ character = null, party = null, groups, world = n
     worldId: world?.id || null,
     worldName: world?.name || '',
     byDuncan: Boolean(byDuncan),
+    // Who was surprised at the start ('enemies' | 'heroes'), so the simulator can replay it
+    surprise: ['enemies', 'heroes'].includes(surprise) ? surprise : null,
     heroName: heroes.length > 1 ? heroes.map(h => h?.name).filter(Boolean).join(', ') : lead?.name || 'Héroe',
     level: Number(lead?.level) || 1,
     character: clone(lead),
@@ -115,7 +117,8 @@ export function normalizeSnapshots(list) {
       party: Array.isArray(s.party) && s.party.length ? s.party.filter(h => h && typeof h === 'object').slice(0, 4) : [s.character],
       level: Number(s.level || s.character.level) || 1,
       result: RESULT_LABELS[s.result] ? s.result : null,
-      rounds: Number(s.rounds) || null
+      rounds: Number(s.rounds) || null,
+      surprise: ['enemies', 'heroes'].includes(s.surprise) ? s.surprise : null
     }))
     .slice(0, MAX_SNAPSHOTS);
 }

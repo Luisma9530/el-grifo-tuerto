@@ -11,8 +11,11 @@
 //   otherwise the best attack against the weakest enemy) and the win rate is
 //   reported, to balance encounters.
 
-import { createEncounter, runEnemyTurns, playerAction, activeEnemies, isPlayerTurn, escapableCondition, currentHeroUid, PLAYER } from './encounter';
+import {
+  createEncounter, runEnemyTurns, playerAction, activeEnemies, isPlayerTurn, escapableCondition, currentHeroUid, PLAYER, addOpening, openingPending
+} from './encounter';
 import { attackOptions } from './combat';
+import { detectOpeningStrike } from './surprise';
 import { spellRows, slotTable, parseDice, cantripDiceMultiplier, getSpell } from './spellcasting';
 import { normalizeEquipment } from './equipment';
 import { normalizeConditions, createCondition, addCondition, removeConditions, conditionsOf, conditionName, EXHAUSTION_MAX } from './conditions';
@@ -139,14 +142,28 @@ export function simulatorParty(party) {
   });
 }
 
+/** Surprise options of the simulator: nobody, the party surprises the enemies, or an ambush on the party. */
+export const SIM_SURPRISE = [
+  { id: 'none', label: 'Sin sorpresa' },
+  { id: 'enemies', label: 'A favor: el grupo sorprende (golpe de apertura)' },
+  { id: 'heroes', label: 'En contra: emboscada al grupo' }
+];
+
 /**
  * Start a practice fight (the enemies that won initiative act first).
  * @param {object | object[]} party  one hero or up to four
+ * @param {{ surprise?: 'none' | 'enemies' | 'heroes' }} [options]
+ *   'enemies': every enemy is surprised and the first hero plays an opening
+ *   strike before the initiative (chosen in the combat view); 'heroes': the whole party is ambushed
  * @returns {{ encounter, heroes, character }}
  */
-export function startSimulation(party, groups, rollDie) {
+export function startSimulation(party, groups, rollDie, { surprise = 'none' } = {}) {
   const heroes = Array.isArray(party) ? simulatorParty(party) : simulatorHero(party);
-  const encounter = { ...createEncounter(groups, heroes, rollDie), simulation: true };
+  const side = ['enemies', 'heroes'].includes(surprise) ? surprise : null;
+  let encounter = { ...createEncounter(groups, heroes, rollDie, { surprise: side ? { side } : null }), simulation: true };
+  // The first hero opens; the weapon in hand and a lone target come preselected
+  if (side === 'enemies') encounter = addOpening(encounter, heroes, detectOpeningStrike('', heroes[0], encounter.enemies) || { heroUid: heroes[0]?.id || PLAYER });
+  if (openingPending(encounter)) return { encounter, heroes, character: heroes[0] };
   return runEnemyTurns(encounter, heroes, rollDie);
 }
 
@@ -217,6 +234,14 @@ export function bestAttack(hero, target) {
  * @param {object[]} [allies]  the rest of the party
  */
 export function autoAction(encounter, hero, { healBelow = 0.35, allies = [] } = {}) {
+  // The opening strike: the best attack against the weakest enemy (a surprised one first)
+  if (openingPending(encounter)) {
+    const living = activeEnemies(encounter);
+    const pool = living.some(e => e.surprised) ? living.filter(e => e.surprised) : living;
+    const target = [...pool].sort((a, b) => a.hp - b.hp)[0];
+    const attack = target && bestAttack(hero, target);
+    return attack ? { ...attack, targetUid: target.uid } : { type: 'endTurn' };
+  }
   const potion = (hero.inventory || []).filter(i => healingDice(i)).sort((a, b) => average(healingDice(a)) - average(healingDice(b)))[0];
   const fallen = allies.find(a => a.id !== hero.id && a.hp <= 0);
   if (!encounter.bonusUsed && potion && fallen) return { type: 'potion', itemId: potion.id, targetUid: fallen.id };
@@ -232,7 +257,7 @@ export function autoAction(encounter, hero, { healBelow = 0.35, allies = [] } = 
 /** Play a whole fight with the simple AI. @returns {{ encounter, heroes, character }} */
 export function autoFight(party, groups, rollDie, options = {}) {
   const single = !Array.isArray(party);
-  let { encounter, heroes } = startSimulation(single ? party : party, groups, rollDie);
+  let { encounter, heroes } = startSimulation(party, groups, rollDie, { surprise: options.surprise });
   let guard = 0;
   while (encounter.status === 'active' && guard++ < 800) {
     if (!isPlayerTurn(encounter)) break;
@@ -259,13 +284,13 @@ export const dieFrom = rng => sides => 1 + Math.floor(rng() * sides);
  * @returns {{ runs, victory, defeat, fled, timeout, winRate, avgRounds, avgHpLeft, avgPotions, avgFallen }}
  *   avgHpLeft: share of the party's HP left after a victory; avgFallen: heroes at 0 HP at the end of a victory
  */
-export function simulateMany(party, groups, runs = 100, { rng = Math.random, healBelow = 0.35 } = {}) {
+export function simulateMany(party, groups, runs = 100, { rng = Math.random, healBelow = 0.35, surprise = 'none' } = {}) {
   const n = Math.max(1, Math.min(1000, Math.round(Number(runs) || 1)));
   const rollDie = dieFrom(rng);
   const totals = { victory: 0, defeat: 0, fled: 0, timeout: 0, rounds: 0, hpLeft: 0, potions: 0, fallen: 0 };
   for (let i = 0; i < n; i++) {
     const start = Array.isArray(party) ? simulatorParty(party) : simulatorHero(party);
-    const { encounter, heroes: end } = autoFight(start, groups, rollDie, { healBelow });
+    const { encounter, heroes: end } = autoFight(start, groups, rollDie, { healBelow, surprise });
     totals[encounter.status] = (totals[encounter.status] || 0) + 1;
     totals.rounds += encounter.round;
     if (encounter.status === 'victory') {

@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FlaskConical, Footprints, Shield, Skull, Swords, Wand2, Heart, Flag, Hand, Unlock, Brain } from 'lucide-react';
+import { FlaskConical, Footprints, Shield, Skull, Swords, Wand2, Heart, Flag, Hand, Unlock, Brain, Zap } from 'lucide-react';
 import { attackOptions, damageLabel, rageBonus } from '../../utils/combat';
 import { spellRows, spellSummary } from '../../utils/spellcasting';
 import { formatModifier } from '../../utils/characterBuilder';
-import { activeEnemies, isPlayerTurn, escapableCondition, escapeBonus, currentHeroUid, concentrationOf } from '../../utils/encounter';
+import { activeEnemies, isPlayerTurn, escapableCondition, escapeBonus, currentHeroUid, concentrationOf, openingPending, OFFENSIVE_KINDS } from '../../utils/encounter';
 import { speedZeroReason, conditionName } from '../../utils/conditions';
 import ConditionBadges from './ConditionBadges';
 import { normalizeEquipment, fleeDC } from '../../utils/equipment';
@@ -15,7 +15,8 @@ const LOG_COLORS = {
   heal: 'text-sky-300', down: 'text-amber-300 font-semibold', morale: 'text-amber-200', end: 'text-amber-100 font-semibold',
   enemyHit: 'text-red-300', enemyCrit: 'text-red-200 font-semibold', enemyMiss: 'text-stone-500',
   duncan: 'text-amber-100/90 italic font-serif', injury: 'text-red-400 font-bold',
-  condition: 'text-fuchsia-300', conditionEnd: 'text-teal-300', herodown: 'text-red-300 font-semibold'
+  condition: 'text-fuchsia-300', conditionEnd: 'text-teal-300', herodown: 'text-red-300 font-semibold',
+  surprise: 'text-orange-300 font-semibold', opening: 'text-yellow-200 font-semibold'
 };
 
 const ACTION_TABS = [
@@ -51,7 +52,17 @@ function SwapGear({ character, disabled, onSwap }) {
 
 const STATUS_LABELS = { dead: 'Abatido', fled: 'Ha huido', surrendered: 'Se ha rendido' };
 
-function EnemyCard({ enemy, selected, onSelect, isTurn, nameOf }) {
+/** Caught off guard at the start of the fight (shown during the first round). */
+function SurprisedBadge() {
+  return (
+    <span className="inline-flex items-center rounded border border-orange-500/60 bg-orange-950/40 px-1.5 py-0.5 text-[10px] font-semibold text-orange-200"
+      title="No lo vio venir: tiró la iniciativa con desventaja.">
+      😱 Sorprendido
+    </span>
+  );
+}
+
+function EnemyCard({ enemy, selected, onSelect, isTurn, nameOf, surprised = false }) {
   const out = enemy.status !== 'active';
   const percent = Math.max(0, Math.round((enemy.hp / enemy.maxHp) * 100));
   return (
@@ -84,6 +95,7 @@ function EnemyCard({ enemy, selected, onSelect, isTurn, nameOf }) {
           </div>
           <p className="text-[10px] font-mono text-stone-500 mt-0.5">{enemy.hp}/{enemy.maxHp} PG{enemy.skipTurns ? ' · pierde su turno' : ''}</p>
           <ConditionBadges creature={enemy} nameOf={nameOf} focusable={false} size="xs" className="mt-1" />
+          {surprised && <div className="mt-1"><SurprisedBadge /></div>}
         </>
       )}
     </button>
@@ -91,7 +103,7 @@ function EnemyCard({ enemy, selected, onSelect, isTurn, nameOf }) {
 }
 
 /** A hero of the party in the fight: HP, AC, conditions, concentration; the one whose turn it is is highlighted. */
-function HeroCard({ hero, encounter, isTurn, nameOf }) {
+function HeroCard({ hero, encounter, isTurn, nameOf, surprised = false }) {
   const conc = concentrationOf(encounter, hero.id || 'player');
   const down = hero.hp <= 0;
   return (
@@ -107,6 +119,7 @@ function HeroCard({ hero, encounter, isTurn, nameOf }) {
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
           <ConditionBadges creature={hero} nameOf={nameOf} />
+          {surprised && <SurprisedBadge />}
           {conc && (
             <span className="inline-flex items-center gap-1 rounded border border-purple-600/60 bg-purple-950/40 px-1.5 py-0.5 text-[10px] font-semibold text-purple-200"
               title={`${hero.name} se concentra en ${conc.name}: si recibe daño, salvación de Constitución (CD 10 o la mitad del daño) para mantenerlo.`}>
@@ -132,26 +145,35 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
   const character = heroes.find(h => (h.id || 'player') === turnUid) || heroes.find(h => h.hp > 0) || heroes[0];
   const group = heroes.length > 1;
   const living = activeEnemies(encounter);
+  // The opening strike (before the initiative): what the player wrote, or a choice when it was not clear
+  const opening = openingPending(encounter) ? encounter.opening : null;
+  const suggest = opening?.suggest || {};
   const [allyUid, setAllyUid] = useState(null);
-  const [targetUid, setTargetUid] = useState(living[0]?.uid || null);
+  const [targetUid, setTargetUid] = useState(opening ? suggest.targetUid || null : living[0]?.uid || null);
   const [raging, setRaging] = useState(false);
-  const [tab, setTab] = useState('attacks');
+  const [tab, setTab] = useState(suggest.type === 'spell' || (opening?.choices?.spells?.length && !opening.choices.options?.length) ? 'spells' : 'attacks');
   const logEnd = useRef(null);
   // Online: the hero of this turn is played by somebody else (`waitingFor`: who)
   const playerTurn = isPlayerTurn(encounter) && !busy && !waitingFor;
   const over = encounter.status !== 'active';
   const currentTurn = encounter.order[encounter.turn];
 
-  // Keep a living target selected
+  // Keep a living target selected (for the opening strike, the player picks it when it was not clear)
+  const waitPick = Boolean(opening) && !suggest.targetUid && targetUid === null;
   useEffect(() => {
+    if (waitPick) return;
     if (!living.some(e => e.uid === targetUid)) setTargetUid(living[0]?.uid || null);
-  }, [living, targetUid]);
+  }, [living, targetUid, waitPick]);
 
   useEffect(() => {
     logEnd.current?.scrollIntoView({ behavior: 'smooth' });
   }, [encounter.log.length]);
 
-  const spells = spellRows(character).filter(s => !s.blocked);
+  const spells = spellRows(character).filter(s => !s.blocked && (!opening || OFFENSIVE_KINDS.includes(s.kind)));
+  const surprisedNow = uid => encounter.round === 1 && !over && (encounter.surprise?.uids || []).includes(uid);
+  const suggested = (kind, id) => Boolean(opening) && (kind === 'attack'
+    ? suggest.optionId === id || Boolean(opening.choices?.options?.includes(id))
+    : suggest.spellId === id || Boolean(opening.choices?.spells?.includes(id)));
   const potions = (character.inventory || []).filter(i => healingDice(i));
   const act = action => onAction({ ...action, targetUid });
   // Potions and healing spells: on themselves, or on an ally
@@ -172,13 +194,13 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
       {/* Header: round and initiative */}
       <div className="px-4 py-2.5 border-b border-red-950/60 bg-[#140d14] flex items-center gap-3 overflow-x-auto">
         <span className="font-cinzel font-bold text-red-200 text-sm shrink-0 flex items-center gap-1.5">
-          <Swords className="w-4 h-4" /> Ronda {encounter.round}
+          {opening ? <><Zap className="w-4 h-4 text-yellow-300" /> Golpe de apertura</> : <><Swords className="w-4 h-4" /> Ronda {encounter.round}</>}
         </span>
         <div className="flex items-center gap-1.5 text-[10px] font-mono">
           {encounter.order.map((slot, index) => {
             const enemy = slot.kind === 'enemy' ? encounter.enemies.find(e => e.uid === slot.uid) : null;
             if (enemy && enemy.status !== 'active') return null;
-            const current = index === encounter.turn && !over;
+            const current = index === encounter.turn && !over && !opening;
             return (
               <span key={slot.uid || 'player'}
                 className={`px-2 py-0.5 rounded border whitespace-nowrap ${
@@ -200,9 +222,10 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
               key={enemy.uid}
               enemy={enemy}
               selected={enemy.uid === targetUid}
-              isTurn={currentTurn?.uid === enemy.uid && !over}
+              isTurn={currentTurn?.uid === enemy.uid && !over && !opening}
               onSelect={() => setTargetUid(enemy.uid)}
               nameOf={nameOf}
+              surprised={surprisedNow(enemy.uid)}
             />
           ))}
         </div>
@@ -210,7 +233,7 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
         {/* The party */}
         <div className={`grid gap-2 ${group ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
           {heroes.map(hero => (
-            <HeroCard key={hero.id || 'player'} hero={hero} encounter={encounter} nameOf={nameOf} isTurn={!over && (hero.id || 'player') === turnUid} />
+            <HeroCard key={hero.id || 'player'} hero={hero} encounter={encounter} nameOf={nameOf} isTurn={!over && (hero.id || 'player') === turnUid} surprised={surprisedNow(hero.id || 'player')} />
           ))}
         </div>
 
@@ -250,7 +273,7 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
           <>
             <div className="flex items-center justify-between gap-2 mb-2">
               <div className="flex gap-1 text-xs">
-                {ACTION_TABS.filter(t => t.id !== 'spells' || spells.length > 0).map(t => {
+                {ACTION_TABS.filter(t => (t.id !== 'spells' || spells.length > 0) && (!opening || t.id === 'attacks' || t.id === 'spells')).map(t => {
                   const TabIcon = t.icon;
                   return (
                     <button key={t.id} onClick={() => setTab(t.id)} aria-pressed={tab === t.id}
@@ -266,6 +289,24 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
                   : waitingFor && isPlayerTurn(encounter) ? `Turno de ${character.name} · lo juega ${waitingFor}` : 'Los enemigos actúan…'}
               </span>
             </div>
+
+            {opening && (
+              <div className="mb-2 p-2 rounded-lg bg-yellow-950/30 border border-yellow-700/50 flex items-center justify-between gap-2">
+                <p className="text-[11px] text-yellow-100">
+                  <Zap className="w-3.5 h-3.5 inline -mt-0.5 mr-1 text-yellow-300" />
+                  {`${character.name} ataca antes de la iniciativa: es su turno de la ronda 1.`}
+                  {waitPick ? ' Elige a qué enemigo atacas: pulsa su carta.' : ''}
+                  {opening.needs?.means ? ' Elige con qué atacas: lo marcado encaja con lo que escribiste.' : ''}
+                  {living.some(e => e.surprised) ? ' Contra un enemigo sorprendido tiene ventaja.' : ''}
+                </p>
+                {playerTurn && (
+                  <button onClick={() => onAction({ type: 'endTurn' })}
+                    className="px-2.5 py-1 rounded-lg border border-yellow-700/60 text-yellow-100 hover:bg-yellow-900/40 text-[11px] font-bold shrink-0">
+                    No atacar
+                  </button>
+                )}
+              </div>
+            )}
 
             {playerTurn && (actionUsed || bonusUsed) && (
               <div className="mb-2 p-2 rounded-lg bg-sky-950/30 border border-sky-800/50 flex items-center justify-between gap-2">
@@ -312,7 +353,7 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
                   {attackOptions(character).map(option => (
                     <button key={option.id} disabled={!canAct || !targetUid}
                       onClick={() => act({ type: 'attack', optionId: option.id, raging })}
-                      className="text-left p-2 rounded-lg bg-[#1b1420] border border-stone-800 hover:border-red-600/60 disabled:opacity-40">
+                      className={`text-left p-2 rounded-lg bg-[#1b1420] border hover:border-red-600/60 disabled:opacity-40 ${suggested('attack', option.id) ? 'border-yellow-500/70 ring-1 ring-yellow-500/40' : 'border-stone-800'}`}>
                       <span className="block text-xs font-semibold text-stone-100">{option.itemName}</span>
                       <span className="block text-[10px] font-mono text-stone-400">{formatModifier(option.attackBonus)} · {damageLabel(option)} {option.type}</span>
                     </button>
@@ -325,7 +366,7 @@ export default function CombatView({ encounter, heroes: heroesIn = null, charact
                   {spells.map(spell => (
                     <button key={spell.id} disabled={!canAct || (['attack', 'save', 'auto'].includes(spell.kind) && !targetUid)}
                       onClick={() => (spell.kind === 'heal' ? actOnAlly : act)({ type: 'spell', spellId: spell.id })}
-                      className="text-left p-2 rounded-lg bg-[#17121f] border border-stone-800 hover:border-purple-500/60 disabled:opacity-40">
+                      className={`text-left p-2 rounded-lg bg-[#17121f] border hover:border-purple-500/60 disabled:opacity-40 ${suggested('spell', spell.id) ? 'border-yellow-500/70 ring-1 ring-yellow-500/40' : 'border-stone-800'}`}>
                       <span className="block text-xs font-semibold text-purple-100">{spell.name} <span className="text-stone-500 font-normal">· {spell.level === 0 ? 'truco' : `nivel ${spell.level}`}</span></span>
                       <span className="block text-[10px] font-mono text-stone-400">{spellSummary(spell)}</span>
                     </button>

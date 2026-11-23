@@ -8,8 +8,10 @@ import { describeLoot } from './loot';
 import { SHOP_TYPES } from './shops';
 
 /** Words that mean the hero starts (or provokes) a fight. */
-const AGGRESSIVE = /\b(atac|golpe|pele|lucha|mata|asesin|desenvain|carg|embist|apuñal|dispar|emboscad|combat|enfrent)/;
-export const isAggressive = actionLower => AGGRESSIVE.test(actionLower || '');
+const AGGRESSIVE = /\b(atac|golpe|pele|lucha|mata|asesin|desenvain|carg|embist|apuñal|dispar|emboscad|combat|enfrent|acuchill|degoll|degüell|ensart|estoc|puñetazo|patada|hiero a|tajo)/;
+/** Striking someone with a weapon or a spell: "le clavo la daga", "le lanzo un rayo de escarcha". */
+const STRIKE = /\b(le|les)\s+(clav|hund|raj|lanz|arroj)\w*\s+(la|el|un|una|mi|mis|los|las)\s+(daga|espada|hacha|lanza|cuchill|puñal|flecha|virote|saeta|rayo|descarga|proyectil|bola|llama|estoque|maza|martillo|jabalina|cimitarra|navaja|garrote|conjuro|hechizo)/;
+export const isAggressive = actionLower => AGGRESSIVE.test(actionLower || '') || STRIKE.test(actionLower || '');
 
 const pick = (list, rng) => list[Math.floor(rng() * list.length)];
 
@@ -18,7 +20,7 @@ const pick = (list, rng) => list[Math.floor(rng() * list.length)];
  * easy encounter for the hero or the party (its budget is per character, added up).
  * @returns {{ text, suggestedActions, combat: { enemigos } }}
  */
-export function startLocalFight(bestiary, { character, rng = Math.random }) {
+export function startLocalFight(bestiary, { character, rng = Math.random, surprise = null, ambush = false }) {
   const budget = bestiary.budget.low;
   const usable = bestiary.creatures.filter(c => c.xp <= budget);
   const pool = usable.length ? usable : [...bestiary.creatures].sort((a, b) => a.xp - b.xp).slice(0, 1);
@@ -28,9 +30,18 @@ export function startLocalFight(bestiary, { character, rng = Math.random }) {
   const count = Math.max(1, Math.min(group ? 6 : 4, Math.floor(budget / Math.max(1, foe.xp))));
   const many = count > 1;
   const name = character.name || 'Aventurero';
-  const text = `Duncan deja la jarra en el mostrador con un golpe seco.
+  const foes = many ? `**${count} × ${foe.name}**` : `**${foe.name}**`;
+  const text = ambush
+    ? `Duncan baja la voz, como si contara una vieja historia de miedo.
 
-—*Pues ya está, ${name}: has encontrado pelea.* ${many ? `**${count} × ${foe.name}**` : `**${foe.name}**`} ${many ? 'salen' : 'sale'} ${group ? 'al encuentro del grupo' : 'a tu encuentro'} y no hay tiempo para palabras. Las armas, fuera.`;
+—*Ni lo oíste venir, ${name}.* De entre la maleza y las sombras ${many ? 'saltan' : 'salta'} ${foes} sobre ${group ? 'el grupo' : 'ti'}: llevaban rato esperando. Las armas, fuera, ¡ya!`
+    : surprise
+      ? `Duncan deja la jarra en el mostrador con un golpe seco.
+
+—*Eso no se lo esperaba nadie, ${name}.* ${foes} ${many ? 'tardan' : 'tarda'} un instante de más en reaccionar mientras te lanzas al ataque. Ahora veremos qué sale de ese primer golpe.`
+      : `Duncan deja la jarra en el mostrador con un golpe seco.
+
+—*Pues ya está, ${name}: has encontrado pelea.* ${foes} ${many ? 'salen' : 'sale'} ${group ? 'al encuentro del grupo' : 'a tu encuentro'} y no hay tiempo para palabras. Las armas, fuera.`;
   return {
     text,
     suggestedActions: [],
@@ -111,6 +122,24 @@ export function narrateShopOpening(type, { character }) {
 // ---------------------------------------------------------------------------
 // Key moments narrated by the AI during a fight (phase 3)
 // ---------------------------------------------------------------------------
+
+/**
+ * Local engine (and fallback): Duncan's line about the opening strike, from the
+ * result the game computed (see openingAction in encounter.js).
+ * @param {{ target, with, damage, hp, maxHp, status, surprised }} result
+ */
+export function openingLine(result, hero) {
+  const name = hero?.name || 'Aventurero';
+  const how = result.surprised ? 'Ni lo vio venir' : 'Lo vio venir, pero tarde';
+  if (result.status === 'dead') return `—*${how}.* ${result.target} se desploma antes de que nadie pueda reaccionar: el primer golpe de ${name} ha bastado.`;
+  if (result.status === 'fled') return `—*${how}.* ${result.target} da media vuelta y sale corriendo antes de que empiece la pelea.`;
+  if (result.status === 'surrendered') return `—*${how}.* ${result.target} suelta las armas a la primera: no quiere más.`;
+  if (result.damage > 0) {
+    const share = result.maxHp ? result.hp / result.maxHp : 1;
+    return `—*${how}.* El golpe de ${name} entra y ${result.target} retrocede ${share <= 0.5 ? 'malherido, sangrando' : 'con un gruñido de dolor'}. Ahora, a por el resto.`;
+  }
+  return `—*Mala suerte.* ${result.target} se aparta en el último instante y el primer golpe de ${name} se pierde en el aire.`;
+}
 
 /** At most this many AI narrations during one fight (the outcome is narrated apart). */
 export const MAX_MOMENTS = 2;

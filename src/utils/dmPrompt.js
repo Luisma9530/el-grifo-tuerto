@@ -12,6 +12,7 @@ import { characterLevel } from './characterLevel';
 import { QUEST_REPLY_ACTIONS, QUEST_IMPORTANCE, cleanQuestChanges, questGoldCap } from './quests';
 import { cleanRecruitOffer, cleanDeparture, RECRUIT_CLASS_NAMES } from './recruit';
 import { MAX_PARTY } from './party';
+import { SURPRISE_REPLY_SIDES } from './surprise';
 
 /** Limb ids and states in the reply (Spanish, as the model writes them) -> sheet values. */
 export const LIMB_REPLY_IDS = { brazoDerecho: 'rightArm', brazoIzquierdo: 'leftArm', piernaDerecha: 'rightLeg', piernaIzquierda: 'leftLeg' };
@@ -137,7 +138,21 @@ const COMBAT_SCHEMA = {
         },
         required: ['id', 'cantidad']
       }
-    }
+    },
+    sorpresa: {
+      type: 'OBJECT',
+      nullable: true,
+      description: 'Quién no ve venir la pelea (tira la iniciativa con desventaja). Casi siempre "nadie".',
+      properties: {
+        quien: { type: 'STRING', enum: Object.keys(SURPRISE_REPLY_SIDES) },
+        afectados: { type: 'ARRAY', nullable: true, items: { type: 'STRING' }, description: 'ids de los enemigos sorprendidos, o nombres del grupo; vacío o ["todos"] = todo ese bando.' },
+        tirada: { type: 'STRING', nullable: true, enum: ['sigilo', 'engano'], description: 'Si el bando oculto se acerca a escondidas (sigilo) o ataca en mitad de una conversación con un engaño (engano): el juego la tira contra la Percepción pasiva.' },
+        motivo: { type: 'STRING', nullable: true }
+      },
+      required: ['quien']
+    },
+    ataqueDelHeroe: { type: 'BOOLEAN', nullable: true, description: 'true si la pelea empieza porque quien actúa ataca a alguien.' },
+    objetivo: { type: 'STRING', nullable: true, description: 'id del enemigo al que ataca quien actúa, si ataca.' }
   },
   required: ['enemigos']
 };
@@ -336,7 +351,9 @@ Narra el desenlace (cómo queda el lugar, qué hacen los que se rindieron o huye
 - "condiciones": casi siempre una lista vacía. Solo si la historia aplica o quita una condición a ${name} (un veneno, una maldición, días sin dormir o una marcha forzada, una explosión que lo deja sordo, un sanador o un antídoto que lo cura): [{"condicion": ${STORY_CONDITION_IDS.map(id => `"${id}"`).join(' | ')}, "accion": "aplicar" | "quitar", "duracion": "descansoCorto" | "descansoLargo" | "permanente", "niveles": 1 (solo para agotamiento), "causa": "texto breve"}]. Por defecto duran hasta un descanso largo; el agotamiento se acumula por niveles (máximo ${EXHAUSTION_MAX}, y cada descanso largo quita uno). El juego aplica los efectos a las tiradas; tú no los resuelvas. En los combates el juego gestiona las condiciones por su cuenta.${requestSummary ? `
 - "resumen": reescribe el resumen de la campaña juntando el resumen anterior y la crónica reciente (máximo 800 caracteres, frases cortas): hechos clave, personajes no jugadores y su relación con ${name}, misiones abiertas, pistas, deudas y objetos importantes. Es tu memoria para el resto de la partida.` : ''}
 ${bestiary ? `
-- "combate": SOLO si en esta escena empieza una pelea (alguien ataca al héroe, o el héroe ataca a alguien). En ese caso NO resuelvas la pelea: narra solo cómo aparecen los enemigos (sin golpes, aciertos, daño ni tiradas), pon "usaTirada": false y "danio": 0, y devuelve los enemigos; el juego llevará el combate con sus propias tiradas. Usa únicamente estas criaturas: ${describeBestiary(bestiary)}. Para ${group ? `el grupo de ${partySize}` : `${name} solo`}, un combate normal suma unos ${bestiary.budget.moderate} PX (fácil ${bestiary.budget.low}, duro ${bestiary.budget.high}). Puedes dar a un único enemigo un "nombre" propio y un "rasgo" breve, y marcarlo "elite" si es un jefe. Si no empieza ninguna pelea, omite "combate".` : ''}${allowShop ? `
+- "combate": SOLO si en esta escena empieza una pelea (alguien ataca al héroe, o el héroe ataca a alguien). En ese caso NO resuelvas la pelea: narra solo cómo aparecen los enemigos (sin golpes, aciertos, daño ni tiradas), pon "usaTirada": false y "danio": 0, y devuelve los enemigos; el juego llevará el combate con sus propias tiradas. Usa únicamente estas criaturas: ${describeBestiary(bestiary)}. Para ${group ? `el grupo de ${partySize}` : `${name} solo`}, un combate normal suma unos ${bestiary.budget.moderate} PX (fácil ${bestiary.budget.low}, duro ${bestiary.budget.high}). Puedes dar a un único enemigo un "nombre" propio y un "rasgo" breve, y marcarlo "elite" si es un jefe. Si no empieza ninguna pelea, omite "combate".
+  · Si la pelea empieza porque ${name} ataca a alguien ("ataco al guardia", "le clavo la daga al tabernero"), pon "ataqueDelHeroe": true y en "objetivo" el id de esa criatura. Ese primer golpe lo resuelve el juego con sus dados antes de la iniciativa: NO digas si acierta, si hiere o si mata, ni cifras de daño; narra solo el instante en que ${name} se lanza y cómo reaccionan los demás.
+  · "sorpresa": {"quien": "enemigos" | "grupo" | "nadie", "afectados": [...], "tirada": "sigilo" | "engano", "motivo"}. "enemigos" si ${name} ataca sin que lo esperen (en mitad de una conversación, por la espalda, sin haber sacado el arma); "grupo" solo si los enemigos tienden una emboscada ${group ? 'al grupo' : `a ${name}`} (nunca si ${name} es quien ataca); "nadie" si la tensión ya era evidente o se ven venir. Los sorprendidos tiran la iniciativa con desventaja. Pon "tirada" solo si el bando oculto se acerca a escondidas ("sigilo") o ataca con un engaño en plena charla ("engano"): el juego la tira contra la Percepción pasiva de cada uno y los que se den cuenta no quedan sorprendidos.` : ''}${allowShop ? `
 - "tienda": SOLO si ${name} entra en una tienda, va al mercado o habla con un mercader para comprar o vender: {"tipo": "herrero" (armas y armaduras) | "alquimista" (pociones) | "general" (equipo de aventurero)}. El juego abrirá la tienda con sus propios precios y su género: tú no cobras ni pagas nada ("oro": 0), no inventas precios ni das objetos; narra solo la llegada y al tendero. ${shopsHere || 'Aquí no hay tiendas fijas: sería un buhonero o un puesto improvisado.'} Si el jugador intenta comprar o vender equipo, usa "tienda" en vez de "oro". Si no, omite "tienda".` : ''}
 ${allowRecruit ? `
 - "reclutar": SOLO si en esta escena un personaje no jugador se ofrece de verdad a unirse al grupo (lo contratan, le salvan la vida, comparte su causa...): {"nombre", "clase": ${RECRUIT_CLASS_NAMES.map(c => `"${c}"`).join(' | ')}, "especie", "motivo"}. No lo sumes tú: el juego pregunta al jugador si acepta y crea su ficha con las reglas. El grupo tiene ${partySize} de ${MAX_PARTY} miembros. Raro: no más de uno cada muchas escenas. Si no, omite "reclutar".` : ''}${allowDeparture ? `
