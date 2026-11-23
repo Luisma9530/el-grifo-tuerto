@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { Heart, Shield, Coins, Backpack, Coffee, Sparkles, Wand2, UserMinus } from 'lucide-react';
+import { Heart, Shield, Coins, Backpack, BedDouble, Sparkles, Wand2, UserMinus, MoreVertical, ChevronDown, ChevronUp } from 'lucide-react';
 import { getModifier, getModifierNumber } from '../../utils/gameEngine';
 import { skillRows, proficiencyBonus, formatModifier } from '../../utils/characterBuilder';
 import { TAVERN_MENU } from '../../data/gameData';
 import { tavernAudio } from '../../utils/audio';
 import SpellsTab, { RestButtons } from './SpellsTab';
-import AttacksPanel from './AttacksPanel';
+import MenuButton from '../MenuButton';
 import ConditionBadges from './ConditionBadges';
 import EquipmentPanel from './EquipmentPanel';
 import { normalizeEquipment, HANDS, isWorn } from '../../utils/equipment';
@@ -94,14 +94,17 @@ export default function PartyPanel({
   onCastSpell,
   onRest,
   onLevelUp,
-  onAttack,
   onUseItem,
   busy = false,
-  inCombat = false
+  inCombat = false,
+  atTavern = false
 }) {
   const progress = xpProgress(character);
   const levelUpReady = canLevelUp(character);
-  const [activeTab, setActiveTab] = useState('sheet'); // 'sheet' | 'spells' | 'inventory' | 'menu'
+  const [activeTab, setActiveTab] = useState('sheet'); // 'sheet' | 'spells' | 'inventory' | 'rest'
+  // In a fight the column only shows the party (the fight has its own actions); the sheet opens on demand
+  const [sheetInCombat, setSheetInCombat] = useState(false);
+  const compact = inCombat && !sheetInCombat;
   const hasMagic = Boolean(character.spellcasting);
   const hands = normalizeEquipment(character).hands;
   const heldIn = itemId => {
@@ -125,14 +128,28 @@ export default function PartyPanel({
   return (
     <div className="h-full flex flex-col bg-[#120f18] border-r border-amber-950/60 overflow-hidden text-stone-200">
       
-      {group && <PartyRoster party={party} activeId={character.id} onSelect={onSelectMember} busy={false} />}
+      {(group || inCombat) && <PartyRoster party={party} activeId={character.id} onSelect={onSelectMember} busy={false} />}
+
+      {inCombat && (
+        <button
+          type="button"
+          onClick={() => setSheetInCombat(open => !open)}
+          aria-expanded={sheetInCombat}
+          className="mx-2 my-2 px-3 py-2 rounded-lg border border-stone-800 bg-[#17131f] hover:border-amber-700/60 text-xs text-stone-300 flex items-center justify-between gap-2"
+        >
+          <span className="truncate">{sheetInCombat ? 'Ocultar la ficha' : `Ver la ficha de ${character.name}`}</span>
+          {sheetInCombat ? <ChevronUp className="w-3.5 h-3.5 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 shrink-0" />}
+        </button>
+      )}
+
+      {!compact && (<>
 
       {/* Character Profile Header */}
       <div className="p-4 bg-gradient-to-b from-[#1c1626] to-[#120f18] border-b border-amber-950/50">
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div 
-              className="w-13 h-13 rounded-xl bg-amber-950/80 border-2 border-amber-500/50 flex items-center justify-center text-3xl shadow-inner"
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className="w-12 h-12 shrink-0 rounded-xl bg-amber-950/80 border-2 border-amber-500/50 flex items-center justify-center text-3xl shadow-inner"
             >
               {character.avatar || '🛡️'}
             </div>
@@ -153,11 +170,13 @@ export default function PartyPanel({
               <ConditionBadges creature={character} nameOf={() => 'un enemigo'} className="mt-1" />
             </div>
           </div>
-          {group && !inCombat && (
-            <button onClick={dismiss} disabled={busy} title={`Despedir a ${character.name} del grupo`}
-              className="p-1.5 rounded-lg text-stone-500 hover:text-red-300 hover:bg-red-950/40 disabled:opacity-40" aria-label={`Despedir a ${character.name}`}>
-              <UserMinus className="w-4 h-4" />
-            </button>
+          {group && !inCombat && !busy && (
+            <MenuButton
+              title={`Más opciones de ${character.name}`}
+              icon={<MoreVertical className="w-4 h-4" />}
+              buttonClassName="p-1.5 rounded-lg text-stone-500 hover:text-stone-200 hover:bg-stone-800/60"
+              items={[{ label: `Despedir a ${character.name} del grupo`, icon: <UserMinus className="w-4 h-4" />, tone: 'text-red-300', onClick: dismiss }]}
+            />
           )}
 
         </div>
@@ -215,27 +234,18 @@ export default function PartyPanel({
             )}
           </div>
 
-          {/* AC and Gold pill row */}
-          <div className="grid grid-cols-2 gap-2 pt-1">
-            <div className="p-2 rounded-lg bg-[#181320] border border-stone-800 flex items-center justify-between">
-              <div className="flex items-center gap-1.5 text-xs text-stone-400">
-                <Shield className="w-3.5 h-3.5 text-blue-400" />
-                <span>Armadura</span>
-              </div>
-              <span className="font-cinzel font-bold text-stone-100 text-sm">
-                CA {character.ac}
-              </span>
-            </div>
-
-            <div className="p-2 rounded-lg bg-[#181320] border border-stone-800 flex items-center justify-between">
-              <div className="flex items-center gap-1.5 text-xs text-stone-400">
-                <Coins className="w-3.5 h-3.5 text-amber-400" />
-                <span>{group ? 'Bolsa común' : 'Oro'}</span>
-              </div>
-              <span className="font-mono font-bold text-amber-300 text-sm" title={group ? 'El oro es de todo el grupo' : undefined}>
-                {formatCoins(purse)}
-              </span>
-            </div>
+          {/* AC and gold in one line */}
+          <div className="flex items-center justify-between gap-2 pt-1 text-xs">
+            <span className="flex items-center gap-1.5 text-stone-400">
+              <Shield className="w-3.5 h-3.5 text-blue-400" />
+              <span>Armadura</span>
+              <span className="font-cinzel font-bold text-stone-100">CA {character.ac}</span>
+            </span>
+            <span className="flex items-center gap-1.5 text-stone-400" title={group ? 'El oro es de todo el grupo' : undefined}>
+              <Coins className="w-3.5 h-3.5 text-amber-400" />
+              <span>{group ? 'Bolsa común' : 'Oro'}</span>
+              <span className="font-mono font-bold text-amber-300">{formatCoins(purse)}</span>
+            </span>
           </div>
         </div>
       </div>
@@ -250,7 +260,7 @@ export default function PartyPanel({
               : 'border-transparent text-stone-400 hover:text-stone-200'
           }`}
         >
-          <span>Atributos</span>
+          <span>Ficha</span>
         </button>
         {hasMagic && (
           <button
@@ -277,15 +287,15 @@ export default function PartyPanel({
           <span>Equipo</span>
         </button>
         <button
-          onClick={() => setActiveTab('menu')}
+          onClick={() => setActiveTab('rest')}
           className={`flex-1 py-2.5 flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
-            activeTab === 'menu'
+            activeTab === 'rest'
               ? 'border-amber-500 text-amber-300 bg-amber-500/10 font-semibold'
               : 'border-transparent text-stone-400 hover:text-stone-200'
           }`}
         >
-          <Coffee className="w-3.5 h-3.5" />
-          <span>Taberna</span>
+          <BedDouble className="w-3.5 h-3.5" />
+          <span>Descanso</span>
         </button>
       </div>
 
@@ -295,12 +305,10 @@ export default function PartyPanel({
         {/* STATS SHEET TAB */}
         {activeTab === 'sheet' && (
           <div className="space-y-4">
-            <AttacksPanel character={character} onAttack={onAttack} busy={busy} />
-
-            <div>
-              <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block mb-2">
-                Tiradas de Habilidad (Haz clic para tirar):
-              </span>
+            <details open>
+              <summary className="cursor-pointer select-none text-[11px] font-mono uppercase text-stone-400 tracking-wider mb-2 hover:text-amber-300">
+                Características (haz clic para tirar)
+              </summary>
               <div className="grid grid-cols-2 gap-2">
                 {[
                   { key: 'fue', name: 'Fuerza', stat: character.stats.fue },
@@ -329,13 +337,13 @@ export default function PartyPanel({
                   </button>
                 ))}
               </div>
-            </div>
+            </details>
 
             {/* Skills: proficient ones add the proficiency bonus */}
-            <div>
-              <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block mb-2">
-                Habilidades (competencia +{proficiencyBonus(character)}):
-              </span>
+            <details open>
+              <summary className="cursor-pointer select-none text-[11px] font-mono uppercase text-stone-400 tracking-wider mb-2 hover:text-amber-300">
+                Habilidades (competencia +{proficiencyBonus(character)})
+              </summary>
               <div className="rounded-xl border border-stone-800 overflow-hidden">
                 {skillRows(character).map((skill, index) => (
                   <button
@@ -362,8 +370,13 @@ export default function PartyPanel({
                   </button>
                 ))}
               </div>
-            </div>
+            </details>
 
+            <details>
+              <summary className="cursor-pointer select-none text-[11px] font-mono uppercase text-stone-400 tracking-wider hover:text-amber-300">
+                Rasgos y biografía
+              </summary>
+              <div className="mt-2 space-y-3">
             {/* Rules details for characters made with the creation wizard */}
             {character.rulesVersion && (
               <div className="p-3 rounded-xl bg-stone-900/60 border border-stone-800 space-y-1.5 text-[11px]">
@@ -393,6 +406,8 @@ export default function PartyPanel({
                 "{character.backstory}"
               </p>
             </div>
+              </div>
+            </details>
           </div>
         )}
 
@@ -466,11 +481,14 @@ export default function PartyPanel({
           </div>
         )}
 
-        {/* TAVERN BAR / MENU TAB */}
-        {activeTab === 'menu' && (
+        {/* REST TAB: rests, and the menu of Duncan when the party is at the tavern */}
+        {activeTab === 'rest' && (
           <div className="space-y-2.5">
             <RestButtons character={character} onRest={onRest} busy={busy} cost={longRestCost} partySize={party.length} />
 
+            {!atTavern ? (
+              <p className="text-[11px] text-stone-500 italic">La carta de Maese Duncan solo se sirve en la taberna.</p>
+            ) : (<>
             <span className="text-[11px] font-mono uppercase text-stone-400 tracking-wider block">
               Bebidas & Viandas de Maese Duncan:
             </span>
@@ -501,10 +519,12 @@ export default function PartyPanel({
                 </button>
               </div>
             ))}
+            </>)}
           </div>
         )}
 
       </div>
+      </>)}
     </div>
   );
 }
