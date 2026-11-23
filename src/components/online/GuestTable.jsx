@@ -1,16 +1,19 @@
 import React, { useMemo, useState, lazy, Suspense } from 'react';
-import { ArrowLeft, Wifi, WifiOff, Loader2 } from 'lucide-react';
+import { ArrowLeft, Wifi, WifiOff, Loader2, ScrollText, Swords, Shield, Users, Map as MapIcon } from 'lucide-react';
 import PartyPanel from '../game/PartyPanel';
 import StoryStream from '../game/StoryStream';
 import CombatView from '../game/CombatView';
 import WorldMapPanel from '../game/WorldMapPanel';
+import { MobileTabBar, SideColumn } from '../game/GameLayout';
 import RoomPanel from './RoomPanel';
 import LevelUpModal from '../game/LevelUpModal';
 import OnlineToast from './OnlineToast';
 import { useGuestRoom } from '../../online/useOnlineRoom';
 import { roomLink } from '../../online/transport';
-import { controllerOf, canControl, playerName, claimOf } from '../../online/room';
-import { sheetIntents, quickAttackOption } from '../../online/actions';
+import { controllerOf, canControl, playerName, claimOf, unreadChatCount, lastChatAt } from '../../online/room';
+import { useMediaQuery, WIDE_LAYOUT } from '../../hooks/useMediaQuery';
+import { sheetIntents } from '../../online/actions';
+import { isAtTavern } from '../../utils/shops';
 import { memberSheets, MAX_PARTY } from '../../utils/party';
 import { currentHeroUid } from '../../utils/encounter';
 import { longRestCost } from '../../utils/partyActions';
@@ -32,6 +35,10 @@ export default function GuestTable({ code, name, kind, onLeave }) {
   const [selectedId, setSelectedId] = useState(null);
   const [mobileTab, setMobileTab] = useState('story');
   const [sideTab, setSideTab] = useState('room');
+  // The side column folded during a fight (computer) and the time of the last chat line seen
+  const [railOpen, setRailOpen] = useState(false);
+  const [chatSeenAt, setChatSeenAt] = useState(0);
+  const wide = useMediaQuery(WIDE_LAYOUT);
   const [localNotice, setLocalNotice] = useState(null);
   const [levelUpId, setLevelUpId] = useState(null);
   const [creating, setCreating] = useState(false);
@@ -44,6 +51,14 @@ export default function GuestTable({ code, name, kind, onLeave }) {
   const inCombat = Boolean(encounter && encounter.status === 'active');
   const turnUid = inCombat ? currentHeroUid(encounter) : null;
   const meta = view.meta || {};
+
+  // New chat lines: seen while the chat is on screen (a phone on its tab; a computer
+  // with the column open, which in a fight means the rail opened)
+  if (!encounter && railOpen) setRailOpen(false);
+  const chat = shared?.chat || [];
+  const chatOnScreen = sideTab === 'room' && (wide ? (!encounter || railOpen) : mobileTab === 'side');
+  if (chatOnScreen && lastChatAt(chat) > chatSeenAt) setChatSeenAt(lastChatAt(chat));
+  const unreadChat = chatOnScreen ? 0 : unreadChatCount(chat, playerId, chatSeenAt);
   const notice = localNotice || room.notices[0]?.text || null;
   const closeNotice = () => {
     if (localNotice) setLocalNotice(null);
@@ -110,7 +125,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
 
   return (
     <div className="h-screen flex flex-col bg-[#0b090e] overflow-hidden text-[#e8ded2]">
-      <header className="h-14 bg-[#120f18] border-b border-sky-950/60 px-4 flex items-center justify-between shrink-0 z-30 gap-2">
+      <header className="h-14 bg-[#120f18] border-b border-sky-950/60 px-2 sm:px-4 flex items-center justify-between shrink-0 z-30 gap-2">
         <div className="flex items-center gap-2.5 min-w-0">
           <button onClick={onLeave} className="flex items-center gap-1 text-xs text-stone-400 hover:text-amber-300">
             <ArrowLeft className="w-4 h-4" /> <span className="hidden sm:inline">Salir</span>
@@ -118,7 +133,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
           <span className="font-cinzel font-bold text-amber-200 text-sm truncate">{meta.title || 'Partida online'}</span>
         </div>
         <div className="flex items-center gap-2 text-xs">
-          <span className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border ${room.hostOnline ? 'border-sky-700/60 bg-sky-950/60 text-sky-200' : 'border-red-800/60 bg-red-950/50 text-red-200'}`}>
+          <span className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border ${room.hostOnline ? 'border-sky-700/60 bg-sky-950/60 text-sky-200' : 'border-red-800/60 bg-red-950/50 text-red-200'}`}>
             {room.hostOnline ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
             Sala {shared?.code || code}
           </span>
@@ -126,16 +141,8 @@ export default function GuestTable({ code, name, kind, onLeave }) {
         </div>
       </header>
 
-      <div className="lg:hidden flex border-b border-amber-950/60 bg-[#14101c] text-xs font-semibold">
-        <button onClick={() => setMobileTab('story')} className={tabClass(mobileTab === 'story')}>Crónica</button>
-        <button onClick={() => setMobileTab('party')} className={tabClass(mobileTab === 'party')}>Grupo</button>
-        <button onClick={() => setMobileTab('side')} className={tabClass(mobileTab === 'side')}>
-          Sala y mapa{shared?.chat?.length ? ` (${shared.chat.length})` : ''}
-        </button>
-      </div>
-
       <div className="flex-1 flex overflow-hidden relative">
-        <div className={`w-full lg:w-72 xl:w-80 shrink-0 ${mobileTab === 'party' ? 'block' : 'hidden lg:block'}`}>
+        <div className={`w-full ${encounter ? 'lg:w-60 xl:w-64' : 'lg:w-72 xl:w-80'} shrink-0 ${mobileTab === 'party' ? 'block' : 'hidden lg:block'}`}>
           <PartyPanel
             character={character}
             party={heroes}
@@ -150,10 +157,10 @@ export default function GuestTable({ code, name, kind, onLeave }) {
             onCastSpell={actFor(acts.spell)}
             onRest={hostOnly}
             onLevelUp={openLevelUp}
-            onAttack={actFor(acts.attack)}
             onUseItem={actFor(acts.item)}
             busy={false}
             inCombat={inCombat}
+            atTavern={isAtTavern(view.world)}
           />
         </div>
 
@@ -192,10 +199,6 @@ export default function GuestTable({ code, name, kind, onLeave }) {
               onSendAction={actFor(acts.text)}
               onOpenGeminiConnect={() => setLocalNotice(meta.aiActive ? 'Duncan usa la clave de Gemini del anfitrión: tú no necesitas ninguna.' : 'El anfitrión juega con el motor local (sin IA). Si conecta su clave de Gemini, Duncan narrará para todos.')}
               keysCount={meta.aiActive ? 1 : 0}
-              onQuickAttack={() => {
-                const option = quickAttackOption(character);
-                if (option) actFor(acts.attack)({ optionId: option.id });
-              }}
               onQuickCheck={skillId => actFor(acts.check)({ skillId })}
               inputLocked={mine.length === 0}
               inputNotice={meta.pendingRecruit ? `${meta.pendingRecruit.character?.name} quiere unirse al grupo: decide el anfitrión.` : storyNotice}
@@ -203,9 +206,19 @@ export default function GuestTable({ code, name, kind, onLeave }) {
           )}
         </div>
 
-        <div className={`w-full lg:w-80 xl:w-96 shrink-0 flex-col h-full overflow-hidden border-l border-amber-950/60 bg-[#120f18] ${mobileTab === 'side' ? 'flex' : 'hidden lg:flex'}`}>
+        <SideColumn
+          collapsed={Boolean(encounter)}
+          open={railOpen}
+          onOpenChange={setRailOpen}
+          badge={unreadChat}
+          mobileVisible={mobileTab === 'side'}
+          label="Sala, chat y mapa"
+          railIcons={[Users, MapIcon]}
+          widthClass="lg:w-80 xl:w-96"
+        >
+        <div className="w-full h-full flex flex-col overflow-hidden border-l border-amber-950/60 bg-[#120f18]">
           <div className="flex border-b border-amber-950/60 text-xs font-semibold shrink-0">
-            <button onClick={() => setSideTab('room')} className={tabClass(sideTab === 'room')}>Sala y chat</button>
+            <button onClick={() => setSideTab('room')} className={tabClass(sideTab === 'room')}>Sala y chat{unreadChat > 0 ? ` (${unreadChat})` : ''}</button>
             <button onClick={() => setSideTab('map')} className={tabClass(sideTab === 'map')}>Mapa y misiones</button>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto">
@@ -226,6 +239,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
             )}
           </div>
         </div>
+        </SideColumn>
 
         {/* The host left: the room waits */}
         {!room.hostOnline && (
@@ -269,6 +283,17 @@ export default function GuestTable({ code, name, kind, onLeave }) {
       )}
 
       <OnlineToast text={notice} onClose={closeNotice} />
+
+      {/* Phone: the sections in a bar at the bottom */}
+      <MobileTabBar
+        active={mobileTab}
+        onChange={setMobileTab}
+        tabs={[
+          { id: 'story', label: encounter ? 'Combate' : 'Crónica', icon: encounter ? Swords : ScrollText },
+          { id: 'party', label: 'Grupo', icon: Shield },
+          { id: 'side', label: 'Sala y mapa', icon: Users, badge: unreadChat }
+        ]}
+      />
     </div>
   );
 }

@@ -301,7 +301,8 @@ export async function createDiceEngine(canvas) {
     if (disposed) return;
 
     if (playback && !playback.finished) {
-      const t = (now - playback.startedAt) / 1000;
+      // The first frame's timestamp can be a little earlier than the moment the roll started
+      const t = Math.max(0, (now - playback.startedAt) / 1000);
       const { sim } = playback;
 
       while (playback.impactIndex < sim.impacts.length && sim.impacts[playback.impactIndex].time <= t) {

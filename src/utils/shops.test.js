@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   settlementOf, shopsAt, openShop, generateStock, seededRng, buyItem, sellItem, sellPrice, shopBuys, shopRows,
-  normalizeShops, describeShopsForPrompt, SETTLEMENTS
+  normalizeShops, describeShopsForPrompt, SETTLEMENTS, isAtTavern
 } from './shops';
 import { makeItem, catalogByKey, formatCoins, drinkPotion, healingDice, addItem, catalogEntry, inventoryWeight } from './items';
 import { normalizeEquipment, equipItem, setWornArmor } from './equipment';
@@ -38,6 +38,15 @@ describe('settlements', () => {
     expect(shopsAt(city, customWorld)).toEqual(['smith', 'alchemist', 'general']);
     expect(shopsAt({ id: 'x', name: 'Bosque' }, customWorld)).toEqual([]);
     expect(describeShopsForPrompt(tavern, oakhaven)).toMatch(/Tienda general \("general"\), Boticario \("alquimista"\)/);
+  });
+
+  it('knows when the party is at a tavern (the menu of Duncan is only offered there)', () => {
+    expect(isAtTavern(oakhaven)).toBe(true);
+    const onTheRoad = { ...oakhaven, mapNodes: oakhaven.mapNodes.map(n => ({ ...n, status: n.id === dock.id ? 'current' : 'unlocked' })) };
+    expect(isAtTavern(onTheRoad)).toBe(false);
+    expect(isAtTavern({ ...customWorld, mapNodes: [{ id: 'x', name: 'Posada del Cuervo', status: 'current' }] })).toBe(true);
+    expect(isAtTavern({ mapNodes: [] })).toBe(false);
+    expect(isAtTavern(null)).toBe(false);
   });
 });
 

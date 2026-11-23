@@ -311,6 +311,16 @@ export function addChat(room, playerId, text, at = Date.now()) {
   return { ...room, chat: [...room.chat, line].slice(-MAX_CHAT) };
 }
 
+/**
+ * Chat lines from the others that arrived after `seenAt` (the time of the last line this
+ * player saw). By time, not by count: the chat only keeps its last lines.
+ */
+export const unreadChatCount = (chat, playerId, seenAt = 0) =>
+  (chat || []).filter(line => line.playerId !== playerId && (line.at || 0) > seenAt).length;
+
+/** Time of the newest line in the chat (0 when empty). */
+export const lastChatAt = chat => (chat || []).reduce((max, line) => Math.max(max, line.at || 0), 0);
+
 /** What a saved room keeps between sessions of the host (no queue: it was for that session). */
 export const roomToSave = room => ({
   code: room.code, hostId: room.hostId, players: room.players, claims: room.claims, voted: room.voted, votes: room.votes, ties: room.ties, chat: room.chat.slice(-30)

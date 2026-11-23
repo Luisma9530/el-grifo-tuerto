@@ -4,15 +4,8 @@
 
 import { getSkill } from '../utils/characterBuilder';
 import { getSpell } from '../utils/spellcasting';
-import { attackOptions } from '../utils/combat';
 
 export const ABILITY_NAMES = { fue: 'Fuerza', des: 'Destreza', con: 'Constitución', int: 'Inteligencia', sab: 'Sabiduría', car: 'Carisma' };
-
-/** The weapon of the quick "Atacar" under the chronicle: the first one in hand. */
-export function quickAttackOption(character) {
-  const options = attackOptions(character);
-  return options.find(o => o.weapon) || options[0] || null;
-}
 
 /** Intents for the sheet's buttons (characterId: who acts). */
 export const sheetIntents = characterId => ({

@@ -156,13 +156,18 @@ export default function App() {
     window.location.reload();
   };
 
+  // The campaign «Jugar» resumes (read on each render of the landing page: it is cheap and always current)
+  const resumable = currentView === 'landing' ? (() => {
+    const id = getActiveCampaignId();
+    return id ? getCampaignById(id) : null;
+  })() : null;
+
   return (
     <div className="min-h-screen bg-[#0b090e] text-[#e8ded2] flex flex-col font-sans">
       
       {currentView === 'landing' ? (
         <>
           <Navbar
-            currentView={currentView}
             setView={setCurrentView}
             onEnterTavern={handleStartGame}
             onOpenInvite={() => setIsInviteOpen(true)}
@@ -173,6 +178,7 @@ export default function App() {
             onOpenJoin={() => setIsJoinOpen(true)}
             campaignsCount={campaignsCount}
             keysCount={geminiKeys.length}
+            canResume={Boolean(resumable)}
           />
 
           <main className="flex-1">
@@ -182,9 +188,7 @@ export default function App() {
                 const el = document.getElementById('worlds');
                 el?.scrollIntoView({ behavior: 'smooth' });
               }}
-              onOpenCampaigns={() => setIsCampaignsOpen(true)}
-              onOpenSimulator={() => setSimulator({})}
-              campaignsCount={campaignsCount}
+              resumeTitle={resumable?.title || null}
             />
 
             <LiveTavernDemo
@@ -201,10 +205,7 @@ export default function App() {
             <Faq />
           </main>
 
-          <Footer
-            onEnterTavern={handleStartGame}
-            onOpenInvite={() => setIsInviteOpen(true)}
-          />
+          <Footer onEnterTavern={handleStartGame} />
 
           {/* Only on the landing page, so it never interrupts a game */}
           <BackupReminder refreshKey={`${campaignsCount}-${currentView}`} />

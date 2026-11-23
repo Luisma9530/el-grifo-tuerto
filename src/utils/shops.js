@@ -67,6 +67,9 @@ export function settlementOf(node, world = null) {
 
 export const currentNode = world => world?.mapNodes?.find(n => n.status === 'current') || null;
 
+/** The party is at a tavern now (Duncan's menu of drinks and food is only offered there). */
+export const isAtTavern = world => settlementOf(currentNode(world), world) === 'tavern';
+
 /** Shop types at a node ([] for wild places). */
 export function shopsAt(node, world = null) {
   const kind = settlementOf(node, world);
