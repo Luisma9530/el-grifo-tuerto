@@ -14,6 +14,8 @@
 //         engine gave them one: { kind: 'mision' | 'rumor' | 'encargo', text, source }
 //       - turns: actions narrated in this group's scene
 //       - suggestions: Duncan's last suggestions for this scene
+//       - common: true for the group that stayed where the party was when a new
+//         hero started somewhere else: it goes on with the common chronicle
 //   party.prologues: the scenes of the groups that already joined another, kept
 //     as history: [{ id, memberIds, names, place }]
 //
@@ -49,6 +51,12 @@ export const groupById = (party, id) => groupsOf(party).find(g => g.id === id) |
 export const groupOf = (party, memberId) => groupsOf(party).find(g => g.memberIds.includes(memberId)) || null;
 /** The scene a member plays in: their group's id, or null when the party is together. */
 export const sceneIdOf = (party, memberId = party?.activeId) => groupOf(party, memberId)?.id || null;
+/**
+ * The chronicle a group writes in: its own (its id) or, for the group that stayed
+ * where the party was when somebody started apart (`common`), the common one (null).
+ */
+export const chronicleKey = group => (group && !group.common ? group.id : null);
+export const chronicleKeyOf = (party, memberId = party?.activeId) => chronicleKey(groupOf(party, memberId));
 export const isOriginsCampaign = party => party?.startMode === ORIGINS_MODE;
 
 /** The members of a group, in the party's order. */
@@ -156,7 +164,8 @@ export function normalizeSplit(party, saved = party) {
     gold: roundCoins(Math.max(0, Number(g.gold) || 0)),
     hook: cleanHook(g.hook),
     turns: Math.max(0, Math.round(Number(g.turns) || 0)),
-    suggestions: Array.isArray(g.suggestions) ? g.suggestions.filter(s => typeof s === 'string').slice(0, MAX_SUGGESTIONS) : []
+    suggestions: Array.isArray(g.suggestions) ? g.suggestions.filter(s => typeof s === 'string').slice(0, MAX_SUGGESTIONS) : [],
+    ...(g.common === true ? { common: true } : {})
   }));
   return tidySplit({
     ...out,
@@ -211,7 +220,7 @@ export function placeNewMember(party, memberId, nodeId, { hereNodeId = null, mee
     const others = party.members.filter(m => m.id !== memberId).map(m => m.id);
     if (!others.length) return party;
     const groups = [
-      { id: newGroupId(), memberIds: others, nodeId: hereNodeId, gold: party.gold, hook: null, turns: SCENE_TURNS, suggestions: [] },
+      { id: newGroupId(), memberIds: others, nodeId: hereNodeId, gold: party.gold, hook: null, turns: SCENE_TURNS, suggestions: [], common: true },
       { id: newGroupId(), memberIds: [memberId], nodeId, gold: 0, hook: null, turns: 0, suggestions: [] }
     ];
     return tidySplit({ ...party, gold: 0, split: { groups, meetingNodeId: meetingNodeId || hereNodeId, spotlight: { groupId: groups[1].id, count: 0 } } });
@@ -246,12 +255,14 @@ export function moveGroup(party, groupId, nodeId, { placeOf = () => '' } = {}) {
     gold: roundCoins(here.reduce((sum, g) => sum + (Number(g.gold) || 0), 0)),
     hook: null,
     turns: 0,
-    suggestions: []
+    suggestions: [],
+    // (joining the group that writes the common chronicle, they go on with it)
+    ...(here.some(g => g.common) ? { common: true } : {})
   };
   const groups = [...moved.filter(g => g.nodeId !== nodeId), merged];
   const prologues = [
     ...(party.prologues || []),
-    ...joined.map(j => ({ id: j.id, memberIds: j.memberIds, names: j.names, place: j.place }))
+    ...joined.filter(j => !here.find(g => g.id === j.id)?.common).map(j => ({ id: j.id, memberIds: j.memberIds, names: j.names, place: j.place }))
   ].slice(-12);
   const next = tidySplit({ ...party, prologues, activeId: group.memberIds[0] || party.activeId, split: { ...party.split, groups, spotlight: { groupId: merged.id, count: 0 } } });
   return {
@@ -362,6 +373,7 @@ export function visibleScenes(party, world, memberIds = null) {
       place: world?.mapNodes?.find(n => n.id === g.nodeId)?.name || '',
       nodeId: g.nodeId,
       hook: g.hook,
+      key: chronicleKey(g),
       spotlight: party.split.spotlight?.groupId === g.id
     }));
 }

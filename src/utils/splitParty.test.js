@@ -4,7 +4,7 @@ import { restParty, applySceneEffects, finishFight } from './partyActions';
 import {
   startApart, isSplit, groupOf, scopeParty, unscopeParty, inScope, moveGroup, countSceneTurn, nextQueued,
   sceneWorld, sceneMessages, tagNewMessages, readablePrologues, visibleScenes, placeNewMember, setHook,
-  normalizeSplit, SCENE_TURNS, sceneIdOf
+  normalizeSplit, SCENE_TURNS, sceneIdOf, chronicleKeyOf
 } from './splitParty';
 
 const hero = (id, name, over = {}) => ({ id, name, race: 'Humano', class: 'Guerrero', hp: 10, maxHp: 20, ac: 12, gold: 0, inventory: [], stats: { con: 10 }, hitDie: 10, level: 1, ...over });
@@ -187,6 +187,22 @@ describe('nuevos personajes y guardado', () => {
     expect(groupOf(split, 'b').nodeId).toBe('z1');
     expect(groupOf(split, 'a').nodeId).toBe('tavern');
     expect(isSplit(placeNewMember(party, 'b', 'tavern', { hereNodeId: 'tavern' }))).toBe(false);
+  });
+
+  it('los que ya estaban siguen con la crónica común; el recién llegado tiene la suya', () => {
+    const split = placeNewMember(createParty([hero('a', 'Ana'), hero('b', 'Bruno')]), 'b', 'z1', { hereNodeId: 'tavern' });
+    expect(chronicleKeyOf(split, 'a')).toBeNull();
+    expect(chronicleKeyOf(split, 'b')).toBe(groupOf(split, 'b').id);
+    // al encontrarse, el prólogo es solo el del recién llegado
+    const met = moveGroup(split, groupOf(split, 'b').id, 'tavern');
+    expect(met.ended).toBe(true);
+    expect(met.party.prologues.map(p => p.names)).toEqual(['Bruno']);
+    // y sigue siendo común si se juntan con más grupos aún separados
+    const three = placeNewMember(placeNewMember(createParty([hero('a', 'Ana'), hero('b', 'Bruno'), hero('c', 'Cira')]), 'b', 'z1', { hereNodeId: 'tavern' }), 'c', 'z2');
+    const res = moveGroup(three, groupOf(three, 'b').id, 'tavern');
+    expect(res.ended).toBe(false);
+    expect(chronicleKeyOf(res.party, 'b')).toBeNull();
+    expect(normalizeSplit(res.party, JSON.parse(JSON.stringify(res.party))).split.groups.find(g => g.memberIds.includes('a')).common).toBe(true);
   });
 
   it('se guarda y se migra: las campañas antiguas siguen juntas', () => {

@@ -19,7 +19,7 @@ import { currentHeroUid } from '../../utils/encounter';
 import { longRestCost } from '../../utils/partyActions';
 import { canLevelUp } from '../../utils/leveling';
 import {
-  isSplit, sceneIdOf, scopeParty, sceneWorld, sceneMessages, readablePrologues, visibleScenes, groupById, groupOf, isOriginsCampaign
+  isSplit, sceneIdOf, chronicleKey, scopeParty, sceneWorld, sceneMessages, readablePrologues, visibleScenes, groupById, groupOf, isOriginsCampaign
 } from '../../utils/splitParty';
 import { zonesFor, suggestZone, fitLabel } from '../../utils/origins';
 
@@ -111,7 +111,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
   const scope = scopeParty(view.party, shownLead);
   const sceneHeroes = memberSheets(encounter?.heroIds?.length ? scopeParty(view.party, encounter.heroIds[0]) : scope);
   const sceneWorldView = sceneWorld(view.world, view.party, shownLead);
-  const chronicle = sceneMessages(view.chronicle || [], shownScene);
+  const chronicle = sceneMessages(view.chronicle || [], chronicleKey(groupById(view.party, shownScene)));
   const prologues = readablePrologues(view.party, viewerIds).map(p => ({ id: p.id, label: `Prólogo de ${p.names}${p.place ? ` (${p.place})` : ''}`, messages: sceneMessages(view.chronicle || [], p.id) }));
   const suggestions = shownScene ? groupById(view.party, shownScene)?.suggestions || [] : meta.suggestedActions || [];
   const placeOf = id => view.world.mapNodes?.find(n => n.id === groupOf(view.party, id)?.nodeId)?.name || '';

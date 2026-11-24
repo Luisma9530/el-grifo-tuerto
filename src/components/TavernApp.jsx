@@ -54,7 +54,7 @@ import {
 } from '../utils/partyActions';
 import { makeRecruitOffer, departingMember } from '../utils/recruit';
 import {
-  isSplit, groupOf, groupById, sceneIdOf, scopeParty, unscopeParty, inScope, sceneWorld, withCurrentNode,
+  isSplit, groupOf, groupById, sceneIdOf, chronicleKey, chronicleKeyOf, scopeParty, unscopeParty, inScope, sceneWorld, withCurrentNode,
   sceneMessages, tagNewMessages, moveGroup, setHook, setSuggestions, countSceneTurn, nextQueued, joinNames, groupNames,
   readablePrologues, visibleScenes, placeNewMember, isOriginsCampaign
 } from '../utils/splitParty';
@@ -174,11 +174,11 @@ export default function TavernApp({
   });
   // While the party is apart, every new message belongs to a scene (its group's
   // chronicle): the scene of the action being narrated, else the one of whoever acts
-  const sceneRef = useRef(null);
+  const sceneRef = useRef(undefined);
   // The online room open now (for handlers that run after a reply)
   const roomRef = useRef(null);
   const setMessages = next => {
-    const key = sceneRef.current ?? sceneIdOf(partyRef.current);
+    const key = sceneRef.current !== undefined ? sceneRef.current : chronicleKeyOf(partyRef.current);
     setMessagesState(prev => tagNewMessages(prev, typeof next === 'function' ? next(prev) : next, key));
   };
   // A line for a given scene (the one the spotlight passes to, for example)
@@ -340,16 +340,17 @@ export default function TavernApp({
     const partyFull = partyRef.current;
     const partyNow = scopeParty(partyFull, actorId);
     const size = membersOf(partyNow).length;
-    const sceneKey = sceneIdOf(partyFull, actorId);
     const group = groupOf(partyFull, actorId);
+    // The chronicle this scene writes in (null: the common one)
+    const ownChronicle = chronicleKey(group);
     // The world from this scene's place (it may have just travelled)
     const world = sceneWorld(worldState, partyFull, actorId);
-    sceneRef.current = sceneKey;
+    sceneRef.current = ownChronicle;
 
     // Add the action to messages, with who did it (not for the narration after a fight)
     const playerMessage = {
       sender: 'player', actor: sheet.name, avatar: sheet.avatar, text: actionText, timestamp: now(),
-      ...(authorRef.current ? { by: authorRef.current } : {}), ...(sceneKey ? { groupId: sceneKey } : {})
+      ...(authorRef.current ? { by: authorRef.current } : {}), ...(ownChronicle ? { groupId: ownChronicle } : {})
     };
     const newMsgList = combatResult ? messages : [...messages, playerMessage];
     // (lines just added with functional updates, like the fight's or a rest's, are kept)
@@ -380,8 +381,8 @@ export default function TavernApp({
       // until they are together (it would mix the scenes).
       const apart = isSplit(partyFull);
       const requestSummary = !apart && currentKeys.length > 0 && needsSummary(newMsgList, summaryCoverage);
-      const history = sceneKey
-        ? historyForPrompt(sceneMessages(newMsgList, sceneKey), 0)
+      const history = apart
+        ? historyForPrompt(sceneMessages(newMsgList, ownChronicle), 0)
         : historyForPrompt(newMsgList, summaryCoverage).filter(m => !m.groupId);
       // A group apart that still has no reason to go to the meeting point: Duncan may give one
       // (the local engine does from this group's second scene on, if he didn't)
@@ -592,7 +593,7 @@ export default function TavernApp({
     } catch (err) {
       console.error(err);
     } finally {
-      sceneRef.current = null;
+      sceneRef.current = undefined;
       setIsGenerating(false);
     }
   };
@@ -605,8 +606,8 @@ export default function TavernApp({
     setParty(res.party);
     if (!res.pass || roomRef.current) return;
     const place = worldState.mapNodes?.find(n => n.id === res.pass.nodeId)?.name || 'otro lugar';
-    pushSceneMessage(key, `🎬 La historia deja esta escena por un momento: mientras tanto, en ${place}… (vuelve cuando quieras eligiendo a uno de aquí).`);
-    pushSceneMessage(res.pass.id, `🎬 Mientras tanto, en ${place}: le toca a ${groupNames(res.party, res.pass)}.`);
+    pushSceneMessage(chronicleKey(groupById(partyRef.current, key)), `🎬 La historia deja esta escena por un momento: mientras tanto, en ${place}… (vuelve cuando quieras eligiendo a uno de aquí).`);
+    pushSceneMessage(chronicleKey(res.pass), `🎬 Mientras tanto, en ${place}: le toca a ${groupNames(res.party, res.pass)}.`);
     setActiveShopKey(null);
     setParty(p => setActiveMember(p, res.pass.memberIds[0]));
   };
@@ -618,7 +619,7 @@ export default function TavernApp({
     setPendingRecruit(null);
     // The companion joins the group of whoever met them, wherever it is
     const withId = membersOf(partyRef.current).some(m => m.id === offer.withId) ? offer.withId : partyRef.current.activeId;
-    sceneRef.current = sceneIdOf(partyRef.current, withId);
+    sceneRef.current = chronicleKeyOf(partyRef.current, withId);
     try {
       if (!accept) {
         recordEvent(`El grupo rechaza la compañía de ${offer.character.name}`);
@@ -634,7 +635,7 @@ export default function TavernApp({
       recordEvent(`${res.member.name} (${res.member.className}) se une al grupo`);
       pushSystemMessage(`🤝 ${res.member.name} se une al grupo: ${res.member.race} · ${res.member.className} de nivel ${res.member.level}, con su equipo inicial. Selecciónalo en la ficha para verlo o hacerlo actuar.`);
     } finally {
-      sceneRef.current = null;
+      sceneRef.current = undefined;
     }
   };
 
@@ -1507,7 +1508,7 @@ export default function TavernApp({
   const viewerIds = room && !room.shareScenes ? (hostActors || []).map(h => h.id) : null;
   const scenes = visibleScenes(party, worldState, viewerIds);
   const shownScene = !apart ? null : scenes.some(s => s.id === sceneId) ? sceneId : scenes[0]?.id || sceneId;
-  const chronicle = sceneMessages(messages, shownScene);
+  const chronicle = sceneMessages(messages, chronicleKey(groupById(party, shownScene)));
   const prologues = readablePrologues(party, viewerIds).map(p => ({ id: p.id, label: `Prólogo de ${p.names}${p.place ? ` (${p.place})` : ''}`, messages: sceneMessages(messages, p.id) }));
   const sceneSuggestions = sceneId ? groupById(party, sceneId)?.suggestions || [] : suggestedActions;
   const placeOfMember = id => worldState.mapNodes?.find(n => n.id === groupOf(party, id)?.nodeId)?.name || '';
