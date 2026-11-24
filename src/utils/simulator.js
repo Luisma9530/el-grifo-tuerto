@@ -7,18 +7,18 @@
 //   then adjusted (HP, hands, armor, potions, spell slots, prepared spells,
 //   starting conditions, level).
 // - A fight summary from the log (rounds, damage, potions, spells, conditions).
-// - "Simular N veces": a simple AI plays the hero (heal below a threshold,
-//   otherwise the best attack against the weakest enemy) and the win rate is
-//   reported, to balance encounters.
+// - "Simular N veces": an AI plays the heroes (weapons, cantrips, spells with
+//   slots, healing and control; see simulatorAI.js) and the win rate is
+//   reported, with how the AI played, to balance encounters.
 
 import {
-  createEncounter, runEnemyTurns, playerAction, activeEnemies, isPlayerTurn, escapableCondition, currentHeroUid, PLAYER, addOpening, openingPending
+  createEncounter, runEnemyTurns, playerAction, isPlayerTurn, currentHeroUid, PLAYER, addOpening, openingPending
 } from './encounter';
-import { attackOptions } from './combat';
 import { detectOpeningStrike } from './surprise';
-import { spellRows, slotTable, parseDice, cantripDiceMultiplier, getSpell } from './spellcasting';
+import { slotTable, getSpell } from './spellcasting';
+import { autoAction, bestAttack } from './simulatorAI';
 import { normalizeEquipment } from './equipment';
-import { normalizeConditions, createCondition, addCondition, removeConditions, conditionsOf, conditionName, EXHAUSTION_MAX } from './conditions';
+import { normalizeConditions, createCondition, addCondition, removeConditions, conditionName, EXHAUSTION_MAX } from './conditions';
 import { healingDice, potionForItem, makeItem, addItem } from './items';
 import { buildCharacter, randomDraft } from './characterBuilder';
 import { levelHeroTo, quickLevelUpChoices } from './leveling';
@@ -202,69 +202,37 @@ export function fightSummary(encounter, startParty, endParty) {
 }
 
 // ---------------------------------------------------------------------------
-// Simple AI for the heroes ("Simular N veces")
+// The heroes' AI ("Simular N veces", see simulatorAI.js)
 // ---------------------------------------------------------------------------
 
-const average = notation => {
-  const d = parseDice(notation);
-  return d ? d.count * (d.sides + 1) / 2 + d.bonus : 0;
-};
-const hitChance = (bonus, ac) => Math.max(0.05, Math.min(0.95, (21 - (ac - bonus)) / 20));
-
-/** The best damaging option against this target: a weapon or a cantrip (spell slots are kept). */
-export function bestAttack(hero, target) {
-  const weapons = attackOptions(hero).map(o => ({
-    action: { type: 'attack', optionId: o.id },
-    expected: hitChance(o.attackBonus, target.ac) * Math.max(1, average(o.damage) + o.damageBonus)
-  }));
-  const cantrips = spellRows(hero)
-    .filter(s => !s.blocked && s.level === 0 && s.damage && ['attack', 'save', 'auto'].includes(s.kind))
-    .map(s => {
-      const dmg = average(s.damage) * cantripDiceMultiplier(hero);
-      const expected = s.kind === 'attack' ? hitChance(s.attackBonus, target.ac) * dmg : s.kind === 'auto' ? dmg : dmg * 0.55;
-      return { action: { type: 'spell', spellId: s.id }, expected };
-    });
-  return [...weapons, ...cantrips].sort((a, b) => b.expected - a.expected)[0]?.action || null;
-}
+export { autoAction, bestAttack };
 
 /**
- * A hero's next move: give a potion to an unconscious ally, drink one below
- * `healBelow` (share of max HP), break free when held, otherwise hit the
- * weakest enemy with the best option.
- * @param {object[]} [allies]  the rest of the party
+ * Play a whole fight with the AI.
+ * @returns {{ encounter, heroes, character, ai }}
+ *   ai: how it played: { casts: { [spellName]: times }, slots, heals, revives, controls }
  */
-export function autoAction(encounter, hero, { healBelow = 0.35, allies = [] } = {}) {
-  // The opening strike: the best attack against the weakest enemy (a surprised one first)
-  if (openingPending(encounter)) {
-    const living = activeEnemies(encounter);
-    const pool = living.some(e => e.surprised) ? living.filter(e => e.surprised) : living;
-    const target = [...pool].sort((a, b) => a.hp - b.hp)[0];
-    const attack = target && bestAttack(hero, target);
-    return attack ? { ...attack, targetUid: target.uid } : { type: 'endTurn' };
-  }
-  const potion = (hero.inventory || []).filter(i => healingDice(i)).sort((a, b) => average(healingDice(a)) - average(healingDice(b)))[0];
-  const fallen = allies.find(a => a.id !== hero.id && a.hp <= 0);
-  if (!encounter.bonusUsed && potion && fallen) return { type: 'potion', itemId: potion.id, targetUid: fallen.id };
-  if (!encounter.bonusUsed && potion && hero.hp < hero.maxHp * healBelow) return { type: 'potion', itemId: potion.id };
-  if (encounter.actionUsed) return { type: 'endTurn' };
-  const target = [...activeEnemies(encounter)].sort((a, b) => a.hp - b.hp)[0];
-  if (!target) return { type: 'endTurn' };
-  if (escapableCondition(hero) && conditionsOf(hero).some(c => c.id === 'apresado')) return { type: 'escape' };
-  const attack = bestAttack(hero, target);
-  return attack ? { ...attack, targetUid: target.uid } : { type: 'dodge' };
-}
-
-/** Play a whole fight with the simple AI. @returns {{ encounter, heroes, character }} */
 export function autoFight(party, groups, rollDie, options = {}) {
   const single = !Array.isArray(party);
   let { encounter, heroes } = startSimulation(party, groups, rollDie, { surprise: options.surprise });
+  const ai = { casts: {}, slots: 0, heals: 0, revives: 0, controls: 0 };
   let guard = 0;
   while (encounter.status === 'active' && guard++ < 800) {
     if (!isPlayerTurn(encounter)) break;
     const uid = currentHeroUid(encounter);
     const hero = heroes.find(h => (h.id || PLAYER) === uid) || heroes[0];
     const input = single ? heroes[0] : heroes;
-    let result = playerAction(encounter, input, autoAction(encounter, hero, { ...options, allies: heroes }), rollDie);
+    const action = autoAction(encounter, hero, { ...options, allies: heroes });
+    let result = playerAction(encounter, input, action, rollDie);
+    if (result.ok && action.type === 'spell') {
+      const after = result.heroes.find(h => (h.id || PLAYER) === uid) || result.heroes[0];
+      const name = getSpell(action.spellId)?.name || action.spellId;
+      ai.casts[name] = (ai.casts[name] || 0) + 1;
+      ai.slots += Math.max(0, slotsUsed(after) - slotsUsed(hero));
+      if (action.ai === 'heal') ai.heals += 1;
+      if (action.ai === 'revive') ai.revives += 1;
+      if (action.ai === 'control') ai.controls += 1;
+    }
     // An action the engine refuses (charmed, wrong target...): dodge, or end the turn
     if (!result.ok) result = playerAction(encounter, input, { type: encounter.actionUsed ? 'endTurn' : 'dodge' }, rollDie);
     if (!result.ok) result = playerAction(encounter, input, { type: 'endTurn' }, rollDie);
@@ -272,25 +240,31 @@ export function autoFight(party, groups, rollDie, options = {}) {
     ({ encounter, heroes } = result);
   }
   if (encounter.status === 'active') encounter = { ...encounter, status: 'timeout' };
-  return { encounter, heroes, character: heroes[0] };
+  return { encounter, heroes, character: heroes[0], ai };
 }
 
 /** A die from a random number generator. */
 export const dieFrom = rng => sides => 1 + Math.floor(rng() * sides);
 
 /**
- * Fight the same encounter `runs` times with the simple AI.
+ * Fight the same encounter `runs` times with the AI.
  * @param {object | object[]} party  one hero or up to four
- * @returns {{ runs, victory, defeat, fled, timeout, winRate, avgRounds, avgHpLeft, avgPotions, avgFallen }}
- *   avgHpLeft: share of the party's HP left after a victory; avgFallen: heroes at 0 HP at the end of a victory
+ * @param {{ useSlots?: boolean }} [options]  useSlots: false = the old AI (weapons and cantrips only)
+ * @returns {{ runs, victory, defeat, fled, timeout, winRate, avgRounds, avgHpLeft, avgPotions, avgFallen, ai }}
+ *   avgHpLeft: share of the party's HP left after a victory; avgFallen: heroes at 0 HP at the end of a victory;
+ *   ai: how the AI played, per fight on average:
+ *   { topSpells: [{ name, perFight }] (up to 3), avgCasts, avgSlots, avgHeals, avgRevives, avgControls }
  */
-export function simulateMany(party, groups, runs = 100, { rng = Math.random, healBelow = 0.35, surprise = 'none' } = {}) {
+export function simulateMany(party, groups, runs = 100, { rng = Math.random, healBelow = 0.35, surprise = 'none', useSlots = true } = {}) {
   const n = Math.max(1, Math.min(1000, Math.round(Number(runs) || 1)));
   const rollDie = dieFrom(rng);
-  const totals = { victory: 0, defeat: 0, fled: 0, timeout: 0, rounds: 0, hpLeft: 0, potions: 0, fallen: 0 };
+  const totals = { victory: 0, defeat: 0, fled: 0, timeout: 0, rounds: 0, hpLeft: 0, potions: 0, fallen: 0, slots: 0, heals: 0, revives: 0, controls: 0 };
+  const casts = {};
   for (let i = 0; i < n; i++) {
     const start = Array.isArray(party) ? simulatorParty(party) : simulatorHero(party);
-    const { encounter, heroes: end } = autoFight(start, groups, rollDie, { healBelow, surprise });
+    const { encounter, heroes: end, ai } = autoFight(start, groups, rollDie, { healBelow, surprise, useSlots });
+    Object.entries(ai.casts).forEach(([name, times]) => { casts[name] = (casts[name] || 0) + times; });
+    ['slots', 'heals', 'revives', 'controls'].forEach(key => { totals[key] += ai[key]; });
     totals[encounter.status] = (totals[encounter.status] || 0) + 1;
     totals.rounds += encounter.round;
     if (encounter.status === 'victory') {
@@ -309,6 +283,14 @@ export function simulateMany(party, groups, runs = 100, { rng = Math.random, hea
     avgRounds: totals.rounds / n,
     avgHpLeft: totals.victory ? totals.hpLeft / totals.victory : 0,
     avgPotions: totals.potions / n,
-    avgFallen: totals.victory ? totals.fallen / totals.victory : 0
+    avgFallen: totals.victory ? totals.fallen / totals.victory : 0,
+    ai: {
+      topSpells: Object.entries(casts).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, times]) => ({ name, perFight: times / n })),
+      avgCasts: Object.values(casts).reduce((a, b) => a + b, 0) / n,
+      avgSlots: totals.slots / n,
+      avgHeals: totals.heals / n,
+      avgRevives: totals.revives / n,
+      avgControls: totals.controls / n
+    }
   };
 }

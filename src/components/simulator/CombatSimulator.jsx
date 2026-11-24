@@ -406,22 +406,22 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
                 </label>
               </section>
 
-              {/* Optional: many fights with a simple AI */}
+              {/* Optional: many fights played by the AI */}
               {heroes.length > 0 && groups.length > 0 && (
                 <section className="p-3 rounded-xl bg-[#121620] border border-sky-900/40">
-                  <h3 className="text-xs font-bold text-sky-100 mb-2 flex items-center gap-1.5"><BarChart3 className="w-3.5 h-3.5" /> Simular N veces (IA sencilla)</h3>
+                  <h3 className="text-xs font-bold text-sky-100 mb-2 flex items-center gap-1.5"><BarChart3 className="w-3.5 h-3.5" /> Simular N veces (IA)</h3>
                   <div className="flex flex-wrap items-center gap-2 text-xs text-stone-300">
                     <label className="flex items-center gap-1.5">Combates
                       <input type="number" min={1} max={1000} value={batch.runs} onChange={e => setBatch(b => ({ ...b, runs: Math.max(1, Math.min(1000, Number(e.target.value) || 1)) }))}
                         className="w-20 bg-[#1a1523] border border-stone-700 rounded-lg px-2 py-1 font-mono" />
                     </label>
-                    <label className="flex items-center gap-1.5">Bebe poción por debajo del
+                    <label className="flex items-center gap-1.5">Se cura por debajo del
                       <input type="number" min={0} max={100} value={batch.healBelow} onChange={e => setBatch(b => ({ ...b, healBelow: Math.max(0, Math.min(100, Number(e.target.value) || 0)) }))}
                         className="w-16 bg-[#1a1523] border border-stone-700 rounded-lg px-2 py-1 font-mono" /> % de PG
                     </label>
                     <button onClick={runBatch} className="px-3 py-1.5 rounded-lg bg-sky-800 hover:bg-sky-700 text-white font-bold">Simular</button>
                   </div>
-                  <p className="mt-1 text-[10px] text-stone-500">Cada héroe ataca con su mejor arma o truco al enemigo más débil, se cura por debajo del umbral y da una poción a un compañero inconsciente. No gasta espacios de conjuro.</p>
+                  <p className="mt-1 text-[10px] text-stone-500">Cada turno, cada héroe elige lo que más rinde: su mejor arma o truco, un conjuro con espacio cuando compensa (guarda los de nivel alto y no los gasta en un enemigo casi muerto), un conjuro de control contra un enemigo peligroso, o curar a quien esté caído o por debajo del umbral (con poción o conjuro). Juega con las mismas reglas que tú.</p>
                   {batch.result && (
                     <div className={`mt-2 grid grid-cols-2 ${heroes.length > 1 ? 'sm:grid-cols-6' : 'sm:grid-cols-5'} gap-2 text-center`}>
                       <Stat label="Victorias" value={percent(batch.result.winRate)} tone="text-emerald-300" />
@@ -432,6 +432,7 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
                       {heroes.length > 1 && <Stat label="Caídos al ganar" value={batch.result.avgFallen.toFixed(1)} />}
                     </div>
                   )}
+                  {batch.result?.ai && <AiSummary ai={batch.result.ai} />}
                 </section>
               )}
             </>
@@ -471,6 +472,22 @@ export default function CombatSimulator({ onClose, initialSnapshot = null, campa
         />
       )}
     </div>
+  );
+}
+
+/** How the AI played in "Simular N veces": its most cast spells and what it spent, per fight. */
+function AiSummary({ ai }) {
+  const n = value => value.toFixed(1).replace('.', ',');
+  const parts = [`${n(ai.avgSlots)} espacios de conjuro gastados`];
+  if (ai.avgHeals + ai.avgRevives > 0) parts.push(`${n(ai.avgHeals + ai.avgRevives)} curaciones con conjuro`);
+  if (ai.avgControls > 0) parts.push(`${n(ai.avgControls)} conjuros de control`);
+  return (
+    <p className="mt-2 text-[11px] text-stone-400">
+      <span className="text-sky-200 font-bold">Cómo jugó la IA (media por combate):</span>{' '}
+      {ai.topSpells.length
+        ? <>conjuros y trucos más usados: {ai.topSpells.map(s => `${s.name} (${n(s.perFight)})`).join(', ')}; {parts.join(', ')}.</>
+        : 'no lanzó conjuros: solo armas y pociones.'}
+    </p>
   );
 }
 
