@@ -55,7 +55,7 @@ import {
 import { makeRecruitOffer, departingMember } from '../utils/recruit';
 import {
   isSplit, groupOf, groupById, sceneIdOf, chronicleKey, chronicleKeyOf, scopeParty, unscopeParty, inScope, sceneWorld, withCurrentNode,
-  sceneMessages, tagNewMessages, moveGroup, setHook, setSuggestions, countSceneTurn, nextQueued, joinNames, groupNames,
+  sceneMessages, tagNewMessages, moveGroup, meetingNames, setHook, setSuggestions, countSceneTurn, nextQueued, joinNames, groupNames,
   readablePrologues, visibleScenes, placeNewMember, isOriginsCampaign
 } from '../utils/splitParty';
 import { sceneNoteFor, hookLabel, zonesFor, suggestZone, zoneIntro } from '../utils/origins';
@@ -1170,7 +1170,7 @@ export default function TavernApp({
       if (!res.met) {
         return handleSendAction(`${many ? `${names} deciden` : `${names} decide`} abandonar la posición y viajar hacia: "${node.name}".`, { sheet });
       }
-      const who = joinNames(res.met.joined.map(j => j.names));
+      const who = meetingNames(res.met.joined.map(j => j.names));
       recordEvent(`En ${node.name} se cruzan los caminos de ${who}: forman un grupo`);
       pushSystemMessage(`🤝 ¡Encuentro en ${node.name}! Se cruzan los caminos de ${who}.${res.ended ? ' A partir de ahora jugáis juntos: una sola crónica, una sola bolsa. Los prólogos de cada uno quedan en el historial.' : ' Siguen siendo un grupo aparte de los que aún no han llegado.'}`);
       return handleSendAction(`${names} ${many ? 'llegan' : 'llega'} a "${node.name}" y ${many ? 'se encuentran' : 'se encuentra'} con ${joinNames(res.met.joined.filter(j => j.id !== moving.id).map(j => j.names))}.`, {
@@ -1415,6 +1415,23 @@ export default function TavernApp({
     return handleUseItem(item);
   };
 
+  // The member the host chose on screen: the queue selects whoever acts, and once it is
+  // empty the host gets their own character back (a party apart: their own scene)
+  const hostPickRef = useRef(null);
+  const chooseMember = id => {
+    hostPickRef.current = id;
+    handleSelectMember(id);
+  };
+  const queueEmpty = !room || room.queue.length === 0;
+  useEffect(() => {
+    const back = hostPickRef.current || heroes.find(h => room && canControl(room, room.hostId, h.id))?.id;
+    if (!room || !queueEmpty || queueRunning || isGenerating || encounter || !back || party.activeId === back) return;
+    if (!membersOf(party).some(m => m.id === back) || canControl(room, room.hostId, party.activeId)) return;
+    if (canControl(room, room.hostId, back)) setParty(p => setActiveMember(p, back));
+    // Only when the table goes quiet
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queueEmpty, queueRunning, isGenerating, encounter, party.activeId]);
+
   // The queue: one action at a time, when Duncan is free (paused during a fight)
   // Apart, the queue alternates between the groups (see nextQueued in splitParty.js)
   const lastSceneRef = useRef(null);
@@ -1515,7 +1532,7 @@ export default function TavernApp({
   const chooseScene = id => {
     const g = groupById(party, id);
     const who = g?.memberIds.find(m => !viewerIds || viewerIds.includes(m));
-    if (who) handleSelectMember(who);
+    if (who) chooseMember(who);
   };
   const elsewhere = apart
     ? heroes.filter(h => !sceneHeroes.some(s => s.id === h.id) && (!viewerIds || viewerIds.includes(h.id))).map(h => ({ ...h, place: placeOfMember(h.id) }))
@@ -1613,7 +1630,7 @@ export default function TavernApp({
             party={sceneHeroes}
             elsewhere={elsewhere}
             purse={scene.gold}
-            onSelectMember={handleSelectMember}
+            onSelectMember={chooseMember}
             onDismissMember={handleDismissMember}
             onTransferItem={handleTransferItem}
             longRestCost={longRestCost(scene)}
@@ -1659,7 +1676,7 @@ export default function TavernApp({
               suggestedActions={sceneSuggestions}
               character={character}
               party={heroes}
-              onSelectMember={handleSelectMember}
+              onSelectMember={chooseMember}
               scenes={sceneTabs}
               onSelectScene={chooseScene}
               prologues={prologues}

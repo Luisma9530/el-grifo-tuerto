@@ -171,8 +171,13 @@ describe('crónicas por escena', () => {
   it('cada jugador lee solo los prólogos y escenas de sus personajes', () => {
     let party = apart();
     party = moveGroup(party, groupOf(party, 'a').id, 'z2').party;
-    expect(readablePrologues(party, ['a'])).toHaveLength(1);
+    // juntos ya: cada uno puede leer también los prólogos de los demás
+    expect(readablePrologues(party, ['a'])).toHaveLength(2);
     expect(readablePrologues(party, null)).toHaveLength(2);
+    let trio = startApart(createParty([hero('a', 'Ana'), hero('b', 'Bruno'), hero('c', 'Cira')]), { a: 'z1', b: 'z2', c: 'z3' });
+    trio = moveGroup(trio, groupOf(trio, 'a').id, 'z2').party;
+    expect(readablePrologues(trio, ['a']).map(p => p.names)).toEqual(['Ana', 'Bruno']);
+    expect(readablePrologues(trio, ['c'])).toHaveLength(0);
     const three = startApart(createParty([hero('a', 'Ana'), hero('b', 'Bruno')]), { a: 'z1', b: 'z2' });
     expect(visibleScenes(three, world, ['a']).map(s => s.place)).toEqual(['Minas']);
     expect(visibleScenes(three, world, null)).toHaveLength(2);

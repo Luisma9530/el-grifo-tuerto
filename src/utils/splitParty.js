@@ -69,6 +69,9 @@ export function joinNames(names) {
 }
 export const groupNames = (party, group) => joinNames(groupMembers(party, group).map(m => m.name));
 
+/** The groups that meet, each as a whole: "Ana con Bruno y Cira", "Ana, Bruno y Cira". */
+export const meetingNames = list => (list.length === 2 ? `${list[0]} con ${list[1]}` : joinNames(list));
+
 /**
  * The party as seen from a member's scene: only those who are with them, and
  * their group's purse. When the party is together it is the party itself.
@@ -352,11 +355,18 @@ export const sceneMessages = (messages, key = null) => (messages || []).filter(m
 
 /**
  * The prologues a viewer may read (`memberIds`: the characters they play, null:
- * all of them, as alone or when the host lets everyone read the others' scenes).
+ * all of them, as alone or when the host lets everyone read the others' scenes):
+ * those of the characters who are with theirs now (once met, there is no surprise
+ * to keep; together, everyone's).
  */
 export function readablePrologues(party, memberIds = null) {
   const list = party?.prologues || [];
-  return memberIds ? list.filter(p => p.memberIds.some(id => memberIds.includes(id))) : list;
+  if (!memberIds) return list;
+  const near = isSplit(party)
+    ? groupsOf(party).filter(g => g.memberIds.some(id => memberIds.includes(id))).flatMap(g => g.memberIds)
+    : (party?.members || []).map(m => m.id);
+  const ids = new Set([...memberIds, ...near]);
+  return list.filter(p => p.memberIds.some(id => ids.has(id)));
 }
 
 /**
