@@ -99,7 +99,7 @@ describe('el encuentro', () => {
     const ga = groupOf(party, 'a').id;
     const gb = groupOf(party, 'b').id;
     party = setHook(party, ga, { kind: 'rumor', text: 'Oyó hablar del monasterio.', source: 'duncan' });
-    const res = moveGroup(party, ga, 'z2', { place: 'Monasterio' });
+    const res = moveGroup(party, ga, 'z2', { placeOf: id => world.mapNodes.find(n => n.id === id)?.name });
     expect(res.ended).toBe(true);
     expect(isSplit(res.party)).toBe(false);
     expect(res.party.gold).toBe(35);
@@ -107,6 +107,7 @@ describe('el encuentro', () => {
     expect(res.met.joined[0].hook.text).toContain('monasterio');
     expect(res.party.prologues.map(p => p.id)).toEqual([ga, gb]);
     expect(res.party.prologues[1].memberIds).toEqual(['b', 'c']);
+    expect(res.party.prologues.map(p => p.place)).toEqual(['Minas', 'Monasterio']);
   });
 
   it('sin coincidir, solo cambia de lugar', () => {

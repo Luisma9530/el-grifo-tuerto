@@ -229,14 +229,16 @@ export function placeNewMember(party, memberId, nodeId, { hereNodeId = null, mee
  * scenes of both are kept as prologues).
  * @returns {{ party, met: null | { groupId, joined: { id, names, memberIds, hook }[], names: string[] }, ended: boolean }}
  */
-export function moveGroup(party, groupId, nodeId, { place = '' } = {}) {
+export function moveGroup(party, groupId, nodeId, { placeOf = () => '' } = {}) {
   const group = groupById(party, groupId);
   if (!group) return { party, met: null, ended: false };
   const moved = party.split.groups.map(g => (g.id === groupId ? { ...g, nodeId } : g));
   const here = moved.filter(g => g.nodeId === nodeId);
   if (here.length < 2) return { party: { ...party, split: { ...party.split, groups: moved } }, met: null, ended: false };
 
-  const joined = here.map(g => ({ id: g.id, memberIds: g.memberIds, names: groupNames(party, g), hook: g.hook }));
+  // Each prologue is named after where it was played (the arriving group, where it came from)
+  const before = new Map(party.split.groups.map(g => [g.id, g.nodeId]));
+  const joined = here.map(g => ({ id: g.id, memberIds: g.memberIds, names: groupNames(party, g), hook: g.hook, place: String(placeOf(before.get(g.id)) || '').slice(0, 80) }));
   const merged = {
     id: newGroupId(),
     memberIds: here.flatMap(g => g.memberIds),
@@ -249,7 +251,7 @@ export function moveGroup(party, groupId, nodeId, { place = '' } = {}) {
   const groups = [...moved.filter(g => g.nodeId !== nodeId), merged];
   const prologues = [
     ...(party.prologues || []),
-    ...joined.map(j => ({ id: j.id, memberIds: j.memberIds, names: j.names, place: String(place || '').slice(0, 80) }))
+    ...joined.map(j => ({ id: j.id, memberIds: j.memberIds, names: j.names, place: j.place }))
   ].slice(-12);
   const next = tidySplit({ ...party, prologues, activeId: group.memberIds[0] || party.activeId, split: { ...party.split, groups, spotlight: { groupId: merged.id, count: 0 } } });
   return {

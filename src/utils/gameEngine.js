@@ -10,6 +10,7 @@ import { localRecruitScene } from './localRecruit';
 import { rollDie } from './dice';
 import { getStoredGeminiKeys } from './geminiKeys';
 import { readCombatStart, localSurprise, localAmbush, isWildExploration } from './surprise';
+import { localHook, hookParagraph, narrateMeeting } from './origins';
 
 // Dice, modifiers and the stored Gemini keys live in their own small modules
 // (re-exported here so every existing import keeps working)
@@ -23,7 +24,7 @@ export { getStoredGeminiKeys, saveStoredGeminiKeys, testGeminiKey } from './gemi
 async function askGemini(key, context) {
   const structured = await requestGemini(key, {
     prompt: buildDMPrompt({ ...context, structured: true }),
-    generationConfig: { responseMimeType: 'application/json', responseSchema: dmResponseSchema(context.requestSummary, Boolean(context.bestiary), Boolean(context.allowShop), { allowRecruit: Boolean(context.allowRecruit), allowDeparture: Boolean(context.allowDeparture) }) }
+    generationConfig: { responseMimeType: 'application/json', responseSchema: dmResponseSchema(context.requestSummary, Boolean(context.bestiary), Boolean(context.allowShop), { allowRecruit: Boolean(context.allowRecruit), allowDeparture: Boolean(context.allowDeparture), allowMeetingHook: Boolean(context.meetingPlace) }) }
   });
   if (structured.ok || structured.reason !== 'bad-request') return structured;
 
@@ -70,7 +71,34 @@ export async function generateDMResponse({
   summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null,
   allowShop = false, shopsHere = '', shopTypesHere = [], loot = null, quests = [], here = null,
   companions = '', partySize = 1, partyNames = [], allowRecruit = false, allowDeparture = false,
-  lastWasAmbush = false
+  lastWasAmbush = false,
+  // The party is apart (see splitParty.js): `sceneNote` tells Duncan who is in this scene;
+  // `meetingHook` { place, names, force }: this group still has no reason to go to the
+  // meeting point (Duncan may give one; with `force`, the local engine gives it if he didn't);
+  // `meeting` { joined, place }: groups that just met here (the meeting is narrated)
+  sceneNote = '', meetingHook = null, meeting = null
+}) {
+  const reply = await dmResponse({
+    playerAction, character, world, history, apiKey, apiKeys, playerRoll, spellCast, rest, effectsApplied, weaponAttack,
+    summary, events, requestSummary, bestiary, combatResult, allowShop, shopsHere, shopTypesHere, loot, quests, here,
+    companions, partySize, partyNames, allowRecruit, allowDeparture, lastWasAmbush, sceneNote, meetingHook, meeting
+  });
+  // A reason to go to the meeting point: Duncan's, or the local engine's when it is due
+  // (never in the reply that starts a fight or closes one)
+  if (!meetingHook || reply.combat || combatResult) return { ...reply, meetingHook: null };
+  if (reply.meetingHook) return { ...reply, meetingHook: { ...reply.meetingHook, source: 'duncan' } };
+  if (!meetingHook.force) return { ...reply, meetingHook: null };
+  const hook = { ...localHook(meetingHook.names, meetingHook.place, Math.random), source: 'local' };
+  return { ...reply, text: `${reply.text}\n\n${hookParagraph(hook, meetingHook.place)}`, meetingHook: hook };
+}
+
+async function dmResponse({
+  playerAction, character, world, history = [], apiKey = null, apiKeys = [], playerRoll = null,
+  spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
+  summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null,
+  allowShop = false, shopsHere = '', shopTypesHere = [], loot = null, quests = [], here = null,
+  companions = '', partySize = 1, partyNames = [], allowRecruit = false, allowDeparture = false,
+  lastWasAmbush = false, sceneNote = '', meetingHook = null, meeting = null
 }) {
   // Rests, finished fights and spells without an attack or a saving throw involve no d20 at all
   const needsNoRoll = Boolean(rest) || Boolean(weaponAttack) || Boolean(combatResult)
@@ -109,7 +137,8 @@ export async function generateDMResponse({
         const reply = await askGemini(keyToUse, {
           playerAction, character, world, history, d20, playerRoll, spellCast, rest, effectsApplied,
           weaponAttack, summary, events, requestSummary, bestiary, combatResult, allowShop, shopsHere,
-          quests: describeQuestsForPrompt(quests), companions, partySize, allowRecruit, allowDeparture
+          quests: describeQuestsForPrompt(quests), companions, partySize, allowRecruit, allowDeparture,
+          sceneNote, meetingPlace: meetingHook?.place || ''
         });
 
         if (reply.ok) {
@@ -148,6 +177,7 @@ export async function generateDMResponse({
               // A companion offers to join, or a member leaves (the game validates and asks the player)
               recruit: allowRecruit && !startsFight && !combatResult ? parsed.recruit : null,
               departure: allowDeparture && !combatResult ? parsed.departure : null,
+              meetingHook: parsed.meetingHook || null,
               // A fight that starts is rolled by the game, not by Duncan
               roll: parsed.usedRoll && !playerRoll && !needsNoRoll && !startsFight ? { sides: 20, value: d20 } : null,
               source: 'gemini',
@@ -196,6 +226,9 @@ export async function generateDMResponse({
   let ambush = null;
   if (combatResult) {
     ({ text, suggestedActions, goldEarned } = narrateCombatEnd(combatResult, { character, rng: Math.random, loot }));
+    spellXp = 0;
+  } else if (meeting) {
+    ({ text, suggestedActions } = narrateMeeting({ ...meeting, world }));
     spellXp = 0;
   } else if (bestiary && !playerRoll && isAggressive(actionLower)) {
     // A fight starts: the game resolves it with creatures of the bestiary. The

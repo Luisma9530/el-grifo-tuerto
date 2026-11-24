@@ -152,8 +152,9 @@ export function saveCampaign(campaignData) {
 /**
  * Create a new brand-new campaign initialized with world & character
  */
-export function createNewCampaign({ world, character = null, party = null, title }) {
-  const initialMessages = [
+// `messages` / `suggestedActions`: an opening of its own (a campaign that starts apart, see origins.js)
+export function createNewCampaign({ world, character = null, party = null, title, messages = null, suggestedActions = null }) {
+  const initialMessages = messages?.length ? messages : [
     {
       sender: 'duncan',
       text: world.initialStory,
@@ -161,7 +162,7 @@ export function createNewCampaign({ world, character = null, party = null, title
     }
   ];
 
-  const defaultActions = [
+  const defaultActions = suggestedActions?.length ? suggestedActions : [
     'Preguntar a Maese Duncan por rumores locales',
     'Pedir una jarra de cerveza negra para entrar en calor',
     'Revisar tu equipo y afilar tus armas',

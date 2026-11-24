@@ -10,7 +10,7 @@ import { BACKGROUNDS, SPECIES } from '../data/srd';
 import { presetZones } from '../data/startZones';
 import { SETTLEMENTS } from './shops';
 import { createParty } from './party';
-import { startApart, HOOK_KINDS, joinNames } from './splitParty';
+import { startApart, HOOK_KINDS, joinNames, groupsOf, groupOf, groupNames } from './splitParty';
 import { requestGemini } from './geminiClient';
 
 export const START_MODES = { together: 'together', origins: 'origins' };
@@ -367,4 +367,28 @@ Las miradas se encuentran, se miden y, tras un silencio incómodo, alguien suelt
 —*Bueno, bueno* —gruñe Duncan—. *${joinNames(all)}: a partir de ahora, lo que le pase a uno os pasa a todos. ¿Por dónde empezáis?*`,
     suggestedActions: ['Presentarse y contar qué los trajo aquí', 'Comparar las pistas que trae cada uno', 'Pedir una ronda para sellar el trato', 'Preguntar a Duncan qué sabe de todo esto']
   };
+}
+
+// ---------------------------------------------------------------- what Duncan is told about the scene
+
+const nodeName = (world, id) => world?.mapNodes?.find(n => n.id === id)?.name || 'otro lugar';
+
+/**
+ * The note for Duncan's prompt while the party is apart: who is in this scene,
+ * who is elsewhere (and must not appear), where they will meet; or, with
+ * `meeting`, the groups that just met here.
+ */
+export function sceneNoteFor(party, memberId, world, { meeting = null } = {}) {
+  const groups = groupsOf(party);
+  if (meeting) {
+    const who = meeting.joined.map(j => `${j.names}${j.hook ? ` (vino por un ${hookLabel(j.hook.kind).toLowerCase()}: ${j.hook.text.replace(/\.$/, '')})` : ''}`);
+    const group = groupOf(party, memberId);
+    const still = groups.filter(g => g.id !== group?.id).map(g => `${groupNames(party, g)} (en ${nodeName(world, g.nodeId)})`);
+    return `ENCUENTRO: en ${meeting.place} se cruzan por primera vez los caminos de ${joinNames(who)}. Hasta ahora no se conocían ni sabían lo que le pasaba al otro. Narra cómo se encuentran, se miden y deciden seguir juntos como un solo grupo, y que cada uno traiga a la escena el motivo que lo trajo. Esta escena no necesita tirada ni empieza ningún combate.${still.length ? ` Aún faltan por llegar: ${still.join('; ')}.` : ''}`;
+  }
+  const group = groupOf(party, memberId);
+  if (!group) return '';
+  const others = groups.filter(g => g.id !== group.id).map(g => `${groupNames(party, g)} (en ${nodeName(world, g.nodeId)})`);
+  const meetingName = nodeName(world, party.split.meetingNodeId);
+  return `La historia va por separado: esta escena es solo de ${groupNames(party, group)}, en ${nodeName(world, group.nodeId)}. ${joinNames(others)} ${others.length > 1 ? 'están' : 'está'} lejos: no aparecen en esta escena ni saben lo que pasa aquí (no los menciones como presentes). Más adelante la historia juntará a todos en ${meetingName}.${group.hook ? ` Los de esta escena ya tienen un motivo para ir allí: ${group.hook.text}` : ''}`;
 }
