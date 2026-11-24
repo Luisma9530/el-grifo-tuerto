@@ -160,7 +160,9 @@ export default function PartySetup({ world, members, onAddWithWizard, onChange, 
           <fieldset className="p-4 rounded-xl bg-[#141019] border border-amber-900/40 space-y-2">
             <legend className="px-1 text-[11px] font-mono uppercase tracking-wider text-amber-400/80">Cómo empieza la historia</legend>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="radiogroup" aria-label="Cómo empieza la historia">
-              {START_OPTIONS(world).map(({ id, icon: Icon, title, text }) => (
+              {START_OPTIONS(world).map(({ id, icon, title, text }) => {
+                const OptionIcon = icon;
+                return (
                 <button
                   key={id}
                   type="button"
@@ -169,10 +171,11 @@ export default function PartySetup({ world, members, onAddWithWizard, onChange, 
                   onClick={() => setMode(id)}
                   className={`text-left p-3 rounded-xl border transition-colors ${mode === id ? 'bg-amber-500/10 border-amber-500 text-amber-100' : 'bg-[#17131f] border-stone-800 text-stone-300 hover:border-amber-800'}`}
                 >
-                  <span className="flex items-center gap-1.5 text-sm font-bold"><Icon className="w-4 h-4" /> {title}</span>
+                  <span className="flex items-center gap-1.5 text-sm font-bold"><OptionIcon className="w-4 h-4" /> {title}</span>
                   <span className="block mt-1 text-[11px] text-stone-400">{text}</span>
                 </button>
-              ))}
+                );
+              })}
             </div>
             {origins && (
               <p className="text-[11px] text-stone-400" role="status">

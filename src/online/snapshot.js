@@ -22,8 +22,32 @@ const publicMessage = m => ({
   timestamp: m.timestamp,
   xp: m.xp,
   source: m.source,
-  notice: m.notice
+  notice: m.notice,
+  // While the party is apart: the scene (group) the message belongs to
+  ...(m.groupId ? { groupId: m.groupId } : {})
 });
+
+/**
+ * The chronicle sent to the players: the last MAX_CHRONICLE messages of each
+ * chronicle (the common one and each scene of a party apart), in order. Each
+ * player's table shows only the chronicles they may read (see splitParty.js).
+ */
+export function chronicleForPlayers(messages = []) {
+  const counts = new Map();
+  const keep = [];
+  let chars = 0;
+  for (let i = messages.length - 1; i >= 0 && keep.length < MAX_CHRONICLE * 2; i--) {
+    const key = messages[i]?.groupId || '';
+    const n = counts.get(key) || 0;
+    if (n >= MAX_CHRONICLE) continue;
+    // (the realtime service limits the size of each message: never more text than before)
+    chars += Math.min(MAX_TEXT, String(messages[i]?.text || '').length);
+    if (chars > MAX_CHRONICLE * MAX_TEXT) break;
+    counts.set(key, n + 1);
+    keep.push(messages[i]);
+  }
+  return keep.reverse();
+}
 
 /** The room as the players see it (it holds nothing secret, see room.js). */
 export const publicRoom = room => ({
@@ -35,7 +59,8 @@ export const publicRoom = room => ({
   votes: room.votes,
   ties: room.ties,
   queue: room.queue.map(q => ({ id: q.id, playerId: q.playerId, characterId: q.characterId, kind: q.kind, label: q.label })),
-  chat: room.chat
+  chat: room.chat,
+  shareScenes: Boolean(room.shareScenes)
 });
 
 /**
@@ -64,7 +89,7 @@ export function buildSections(game) {
       events: (game.events || []).slice(-MAX_EVENTS),
       summary: game.summary || ''
     },
-    chronicle: (game.messages || []).slice(-MAX_CHRONICLE).map(publicMessage),
+    chronicle: chronicleForPlayers(game.messages || []).map(publicMessage),
     room: game.room ? publicRoom(game.room) : null
   };
 }

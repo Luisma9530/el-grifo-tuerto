@@ -21,7 +21,8 @@ export const MAX_ID = 80;
 export const MAX_INTENT_BYTES = 8000;
 
 const ABILITIES = ['fue', 'des', 'con', 'int', 'sab', 'car'];
-const ACT_KINDS = ['text', 'check', 'attack', 'spell', 'item'];
+// 'travel': while the party is apart, a player moves their own group on the map
+const ACT_KINDS = ['text', 'check', 'attack', 'spell', 'item', 'travel'];
 const COMBAT_TYPES = ['attack', 'spell', 'equip', 'dodge', 'flee', 'escape', 'potion', 'endTurn'];
 
 // eslint-disable-next-line no-control-regex -- control characters are what it removes
@@ -77,6 +78,10 @@ export function sanitizeIntent(raw) {
         const spellId = id(p.spellId);
         if (!spellId) return bad;
         payload = { spellId, target: str(p.target, 60) };
+      } else if (raw.kind === 'travel') {
+        const nodeId = id(p.nodeId);
+        if (!nodeId) return bad;
+        payload = { nodeId };
       } else {
         const itemId = id(p.itemId);
         if (!itemId) return bad;
@@ -92,8 +97,10 @@ export function sanitizeIntent(raw) {
     }
     case 'create': {
       // A new character for this player: the wizard's choices (the host builds the sheet)
+      // (and, in a campaign that started apart, the zone where they start)
       const draft = cleanDraft(raw.draft);
-      return draft ? { ok: true, intent: { type: 'create', draft } } : { ok: false, error: 'La ficha que llegó no es válida.' };
+      if (raw.zoneId != null && !id(raw.zoneId)) return bad;
+      return draft ? { ok: true, intent: { type: 'create', draft, zoneId: raw.zoneId ?? null } } : { ok: false, error: 'La ficha que llegó no es válida.' };
     }
     case 'levelUp': {
       const choices = sanitizeLevelUpChoices(raw.choices);
@@ -159,6 +166,7 @@ export function describeQueued(name, kind, payload, extra = {}) {
   if (kind === 'check') return `${name}: tirada de ${extra.label || payload.skillId || payload.ability}`;
   if (kind === 'attack') return `${name}: ataque${payload.target ? ` a ${payload.target}` : ''}`;
   if (kind === 'spell') return `${name}: conjuro${extra.label ? ` ${extra.label}` : ''}${payload.target ? ` sobre ${payload.target}` : ''}`;
+  if (kind === 'travel') return `${name}: viaja a ${extra.label || 'otro lugar'}`;
   return `${name}: usa ${extra.label || 'un objeto'}`;
 }
 
@@ -197,6 +205,10 @@ export function applyIntent(room, game, playerId, intent) {
       if (!known(intent.characterId)) return { ok: false, error: 'Ese personaje no está en el grupo.' };
       if (!canControl(room, playerId, intent.characterId)) return { ok: false, error: `No controlas a ${nameOf(intent.characterId)}.` };
       if (game.inCombat) return { ok: false, error: 'En combate se juega por turnos: espera al turno de tu personaje.' };
+      if (intent.kind === 'travel') {
+        if (!game.apart && playerId !== room.hostId) return { ok: false, error: 'Los viajes del grupo los decide el anfitrión.' };
+        if (!(game.nodeIds || []).includes(intent.payload.nodeId)) return { ok: false, error: 'Ese lugar no está en el mapa.' };
+      }
       const extra = { label: game.labelFor?.(intent.kind, intent.payload, intent.characterId) || '' };
       const res = enqueueAction(room, {
         playerId,
@@ -213,7 +225,7 @@ export function applyIntent(room, game, playerId, intent) {
       if (game.inCombat) return { ok: false, error: 'Espera a que acabe el combate para unirte al grupo.' };
       const own = claimOf(room, playerId);
       if (own) return { ok: false, error: `Ya juegas con ${nameOf(own)}: suéltalo antes de crear otro personaje.` };
-      return { ok: true, room, direct: { kind: 'create', draft: intent.draft } };
+      return { ok: true, room, direct: { kind: 'create', draft: intent.draft, zoneId: intent.zoneId || null } };
     }
     case 'equip':
     case 'levelUp': {

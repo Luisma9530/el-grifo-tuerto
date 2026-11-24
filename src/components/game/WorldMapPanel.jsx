@@ -8,12 +8,21 @@ import { unseenQuestCount } from '../../utils/quests';
  * `onOpenShop(type)`: open a shop of the current location.
  * `shopsLocked`: why the shops can't be opened now (a fight...), or null.
  * Three tabs: the map (with the shops of the place), the quests and the campaign diary.
+ * A party apart (see splitParty.js): `markers` [{ nodeId, label, current }] show where
+ * each group this screen follows is, `meetingNodeId` the meeting point once this scene
+ * has a reason to go there, `travelLocked` why travelling has to wait.
  */
 export default function WorldMapPanel({
   world, onTravelToNode, summary = '', events = [], onOpenShop, shopsLocked = null,
-  quests = [], onAbandonQuest = () => {}, onQuestSeen = () => {}
+  quests = [], onAbandonQuest = () => {}, onQuestSeen = () => {},
+  markers = [], meetingNodeId = null, travelLocked = null
 }) {
   const [tab, setTab] = useState('map'); // 'map' | 'quests' | 'diary'
+  const travel = node => {
+    if (travelLocked || node.status === 'current' || node.status === 'locked') return;
+    onTravelToNode(node);
+  };
+  const othersAt = nodeId => markers.filter(m => m.nodeId === nodeId && !m.current).map(m => m.label);
   const here = currentNode(world);
   const shops = shopsAt(here, world);
   const news = unseenQuestCount(quests);
@@ -112,8 +121,8 @@ export default function WorldMapPanel({
               <div
                 key={node.id}
                 style={{ left: `${node.x}%`, top: `${node.y}%` }}
-                onClick={() => !isLocked && onTravelToNode(node)}
-                title={`${node.name} - ${node.desc}`}
+                onClick={() => travel(node)}
+                title={`${node.name} - ${node.desc}${othersAt(node.id).length ? ` · Aquí: ${othersAt(node.id).join(', ')}` : ''}${node.id === meetingNodeId ? ' · Punto de encuentro' : ''}`}
                 className={`absolute -translate-x-1/2 -translate-y-1/2 cursor-pointer group transition-all ${
                   isLocked ? 'cursor-not-allowed opacity-50' : 'hover:scale-125'
                 }`}
@@ -126,7 +135,7 @@ export default function WorldMapPanel({
                     ? 'bg-stone-900 border-stone-700 text-stone-500'
                     : 'bg-[#241a2e] border-amber-600/70 text-amber-300'
                 }`}>
-                  {isCurrent ? '📍' : isLocked ? '🔒' : '🏛️'}
+                  {isCurrent ? '📍' : isLocked ? '🔒' : node.id === meetingNodeId ? '🧭' : othersAt(node.id).length ? '👥' : '🏛️'}
                 </div>
 
                 {/* Node name tooltip on hover */}
@@ -147,7 +156,7 @@ export default function WorldMapPanel({
             {world.mapNodes.map((node) => (
               <div
                 key={node.id}
-                onClick={() => node.status !== 'locked' && onTravelToNode(node)}
+                onClick={() => travel(node)}
                 className={`p-2.5 rounded-xl border text-xs flex items-start justify-between gap-2 transition-colors ${
                   node.status === 'current'
                     ? 'bg-amber-950/40 border-amber-500/60 text-amber-200'
@@ -164,8 +173,10 @@ export default function WorldMapPanel({
                   <p className="text-[10px] text-stone-400 mt-0.5 leading-tight">
                     {node.desc}
                   </p>
+                  {node.id === meetingNodeId && <p className="text-[10px] text-emerald-300 mt-0.5">🧭 Punto de encuentro: allí os llevan vuestros motivos.</p>}
+                  {othersAt(node.id).length > 0 && <p className="text-[10px] text-sky-300 mt-0.5">👥 Aquí: {othersAt(node.id).join(', ')}</p>}
                 </div>
-                {node.status === 'discovered' && (
+                {node.status === 'discovered' && !travelLocked && (
                   <button className="text-[10px] text-amber-400 hover:text-amber-300 font-bold shrink-0 self-center">
                     Viajar →
                   </button>

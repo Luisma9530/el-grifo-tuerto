@@ -13,7 +13,9 @@ export const sheetIntents = characterId => ({
   check: ({ ability = null, skillId = null }) => ({ type: 'act', characterId, kind: 'check', payload: { skillId: skillId || null, ability: skillId ? null : ability } }),
   attack: ({ optionId, target = '', targetAC = null, raging = false }) => ({ type: 'act', characterId, kind: 'attack', payload: { optionId, target, targetAC, raging } }),
   spell: (spellId, target = '') => ({ type: 'act', characterId, kind: 'spell', payload: { spellId, target } }),
-  item: item => ({ type: 'act', characterId, kind: 'item', payload: { itemId: item.id } })
+  item: item => ({ type: 'act', characterId, kind: 'item', payload: { itemId: item.id } }),
+  // While the party is apart: their group travels to a node of the map
+  travel: node => ({ type: 'act', characterId, kind: 'travel', payload: { nodeId: node.id } })
 });
 
 /** The name for the queue of a check, a spell or an item ("Percepción", "Proyectil mágico"...). */

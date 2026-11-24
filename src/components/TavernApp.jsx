@@ -53,12 +53,18 @@ import {
   restParty, finishFight, storyXp, payPartyReward, longRestCost, applySceneEffects, applySceneConditions, applySceneLimbs
 } from '../utils/partyActions';
 import { makeRecruitOffer, departingMember } from '../utils/recruit';
+import {
+  isSplit, groupOf, groupById, sceneIdOf, scopeParty, unscopeParty, inScope, sceneWorld, withCurrentNode,
+  sceneMessages, tagNewMessages, moveGroup, setHook, setSuggestions, countSceneTurn, nextQueued, joinNames, groupNames,
+  readablePrologues, visibleScenes, placeNewMember, isOriginsCampaign
+} from '../utils/splitParty';
+import { sceneNoteFor, hookLabel, zonesFor, suggestZone, zoneIntro } from '../utils/origins';
 import { LOCAL_CONTROLLER } from '../utils/party';
 import { onlineConfig, roomLink } from '../online/transport';
 import { useHostRoom, wasOnline, storedPlayerName, storePlayerName } from '../online/useOnlineRoom';
 import { buildSections } from '../online/snapshot';
 import {
-  ownerOf, controllerOf, canControl, playerName, claimCharacter, releaseCharacter, breakTie, closeVote, removePlayer, dequeueAction, enqueueAction
+  ownerOf, controllerOf, canControl, playerName, claimCharacter, releaseCharacter, breakTie, closeVote, removePlayer, dequeueAction, enqueueAction, setShareScenes
 } from '../online/room';
 import { stillValid } from '../online/protocol';
 import { applyOwnChange } from '../online/ownChanges';
@@ -108,7 +114,8 @@ export default function TavernApp({
     return `${activeCharacter?.name || 'Héroe'} en ${activeWorld?.name || 'la Taberna'}`;
   });
 
-  const [world, setWorld] = useState(() => storedCampaign()?.world || activeWorld);
+  // The world as saved; `world` (below) is the world as the scene of whoever acts sees it
+  const [worldState, setWorld] = useState(() => storedCampaign()?.world || activeWorld);
 
   // The party (see party.js): older campaigns become a party of one. The ref
   // holds the latest party for handlers that wait on Duncan or on the dice.
@@ -118,14 +125,28 @@ export default function TavernApp({
   });
   const partyRef = useRef(party);
   const setParty = next => {
-    const value = typeof next === 'function' ? next(partyRef.current) : next;
+    const before = partyRef.current;
+    const value = typeof next === 'function' ? next(before) : next;
     partyRef.current = value;
     setPartyState(value);
+    // The last ones apart got together (or the others left): the party is where that group was
+    if (isSplit(before) && !isSplit(value)) {
+      const node = groupOf(before, value.members[0]?.id)?.nodeId;
+      if (node) setWorld(w => withCurrentNode(w, node));
+    }
   };
-  // Change one member (functions get the latest sheet, with the purse as `gold`)
-  const updateMemberState = (id, update) => setParty(p => updateMember(p, id, update));
+  // The party may be apart (see splitParty.js): each group plays its own scene. The
+  // scene of whoever acts decides what is seen and touched: the members who are
+  // there, their purse, their place on the map and their chronicle.
+  const sceneParty = (id = partyRef.current.activeId) => scopeParty(partyRef.current, id);
+  const setSceneParty = (id, next) => setParty(p => unscopeParty(p, id, next));
+  // Change one member (functions get the latest sheet, with their scene's purse as `gold`)
+  const updateMemberState = (id, update) => setParty(p => inScope(p, id, s => updateMember(s, id, update)));
+  const scene = scopeParty(party);
+  const sceneId = sceneIdOf(party);
+  const world = sceneWorld(worldState, party);
   // The member who acts outside combat
-  const character = activeSheet(party);
+  const character = activeSheet(scene);
   const setCharacter = update => updateMemberState(character.id, update);
 
   // The ambience can also be switched in Ajustes: read it from the player, this only re-renders
@@ -146,11 +167,22 @@ export default function TavernApp({
     ];
   });
 
-  const [messages, setMessages] = useState(() => {
+  const [messages, setMessagesState] = useState(() => {
     const camp = storedCampaign();
     if (camp?.messages?.length > 0) return camp.messages;
     return [{ sender: 'duncan', text: activeWorld.initialStory, timestamp: 'Inicio de Campaña' }];
   });
+  // While the party is apart, every new message belongs to a scene (its group's
+  // chronicle): the scene of the action being narrated, else the one of whoever acts
+  const sceneRef = useRef(null);
+  // The online room open now (for handlers that run after a reply)
+  const roomRef = useRef(null);
+  const setMessages = next => {
+    const key = sceneRef.current ?? sceneIdOf(partyRef.current);
+    setMessagesState(prev => tagNewMessages(prev, typeof next === 'function' ? next(prev) : next, key));
+  };
+  // A line for a given scene (the one the spotlight passes to, for example)
+  const pushSceneMessage = (key, text) => setMessagesState(prev => [...prev, { sender: 'system', text, timestamp: now(), ...(key ? { groupId: key } : {}) }]);
 
   const [summary, setSummary] = useState(() => storedCampaign()?.summary || '');
   const [summaryCoverage, setSummaryCoverage] = useState(() => storedCampaign()?.summaryCoverage || 0);
@@ -213,7 +245,7 @@ export default function TavernApp({
     if (campaignInitRef.current) return;
     campaignInitRef.current = true;
     if (!currentCampaignId) {
-      const newCamp = createNewCampaign({ world, party, title: campaignTitle });
+      const newCamp = createNewCampaign({ world: worldState, party, title: campaignTitle });
       if (newCamp) setCurrentCampaignId(newCamp.id);
     }
     // Run once on mount only: creates the campaign from the initial state.
@@ -228,7 +260,7 @@ export default function TavernApp({
       setCampaignTitle(camp.title);
       setWorld(camp.world);
       setParty(camp.party);
-      setMessages(camp.messages || []);
+      setMessagesState(camp.messages || []);
       setSummary(camp.summary || '');
       setSummaryCoverage(camp.summaryCoverage || 0);
       setEvents(camp.events || []);
@@ -262,7 +294,7 @@ export default function TavernApp({
     const saved = saveCampaign({
       id: currentCampaignId,
       title: campaignTitle,
-      world,
+      world: worldState,
       party,
       messages,
       suggestedActions,
@@ -281,7 +313,7 @@ export default function TavernApp({
     } else {
       setSaveStatus(isQuotaError(getLastSaveError()) ? 'quota' : 'error');
     }
-  }, [messages, party, world, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter, shops, combatSnapshots, quests, pendingRecruit, lastAmbush]);
+  }, [messages, party, worldState, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter, shops, combatSnapshots, quests, pendingRecruit, lastAmbush]);
 
   const toggleSound = () => {
     tavernAudio.toggleTavernAmbience();
@@ -297,22 +329,31 @@ export default function TavernApp({
   // caller changed it in this same tick: state updates are not visible here until the next render)
   // `spellCast` / `rest`: what the action was, so the Dungeon Master narrates it properly
   // `effectsApplied`: HP / gold for this action were already changed here (drinks, rests, healing)
+  // `meeting`: { joined, place } groups that were apart just met here (Duncan narrates the meeting)
   const handleSendAction = async (actionText, {
     playerRoll = null, sheet = character, spellCast = null, rest = null, effectsApplied = false,
-    weaponAttack = null, combatResult = null, loot = null
+    weaponAttack = null, combatResult = null, loot = null, meeting = null
   } = {}) => {
     if (!actionText || isGenerating) return;
     const actorId = sheet.id;
-    const partyNow = partyRef.current;
+    // Only the members of the actor's scene take part (all of them when the party is together)
+    const partyFull = partyRef.current;
+    const partyNow = scopeParty(partyFull, actorId);
     const size = membersOf(partyNow).length;
+    const sceneKey = sceneIdOf(partyFull, actorId);
+    const group = groupOf(partyFull, actorId);
+    // The world from this scene's place (it may have just travelled)
+    const world = sceneWorld(worldState, partyFull, actorId);
+    sceneRef.current = sceneKey;
 
     // Add the action to messages, with who did it (not for the narration after a fight)
-    const newMsgList = combatResult ? messages : [
-      ...messages,
-      { sender: 'player', actor: sheet.name, avatar: sheet.avatar, text: actionText, timestamp: now(), ...(authorRef.current ? { by: authorRef.current } : {}) }
-    ];
-    // (the fight's own system lines were just added with functional updates: keep them)
-    if (!combatResult) setMessages(newMsgList);
+    const playerMessage = {
+      sender: 'player', actor: sheet.name, avatar: sheet.avatar, text: actionText, timestamp: now(),
+      ...(authorRef.current ? { by: authorRef.current } : {}), ...(sceneKey ? { groupId: sceneKey } : {})
+    };
+    const newMsgList = combatResult ? messages : [...messages, playerMessage];
+    // (lines just added with functional updates, like the fight's or a rest's, are kept)
+    if (!combatResult) setMessages(prev => [...prev, playerMessage]);
     setIsGenerating(true);
 
     try {
@@ -320,7 +361,7 @@ export default function TavernApp({
       setGeminiKeys(currentKeys);
 
       // A plain action outside combat may start a fight: Duncan gets a short list of creatures
-      const mayStartFight = !encounter && !combatResult && !playerRoll && !spellCast && !rest && !weaponAttack;
+      const mayStartFight = !encounter && !combatResult && !playerRoll && !spellCast && !rest && !weaponAttack && !meeting;
       // ...or open a shop (the game sets the prices), or bring in a companion
       const here = currentNode(world);
       const levels = membersOf(partyNow).map(m => m.level || 1);
@@ -334,13 +375,28 @@ export default function TavernApp({
         : null;
 
       // Small requests: summary + uncovered messages; the summary is refreshed in
-      // this same call every few turns (only when the AI is connected)
-      const requestSummary = currentKeys.length > 0 && needsSummary(newMsgList, summaryCoverage);
+      // this same call every few turns (only when the AI is connected). While the
+      // party is apart, Duncan sees only this scene's chronicle and the summary waits
+      // until they are together (it would mix the scenes).
+      const apart = isSplit(partyFull);
+      const requestSummary = !apart && currentKeys.length > 0 && needsSummary(newMsgList, summaryCoverage);
+      const history = sceneKey
+        ? historyForPrompt(sceneMessages(newMsgList, sceneKey), 0)
+        : historyForPrompt(newMsgList, summaryCoverage).filter(m => !m.groupId);
+      // A group apart that still has no reason to go to the meeting point: Duncan may give one
+      // (the local engine does from this group's second scene on, if he didn't)
+      const meetingNode = apart ? worldState.mapNodes?.find(n => n.id === partyFull.split.meetingNodeId) : null;
+      const askHook = group && !group.hook && meetingNode && group.nodeId !== meetingNode.id && !combatResult && !meeting
+        ? { place: meetingNode.name, names: groupNames(partyFull, group), force: (group.turns || 0) >= 1 }
+        : null;
       const response = await generateDMResponse({
         playerAction: actionText,
         character: sheet,
         world,
-        history: historyForPrompt(newMsgList, summaryCoverage),
+        history,
+        sceneNote: apart || meeting ? sceneNoteFor(partyFull, actorId, worldState, { meeting }) : '',
+        meetingHook: askHook,
+        meeting,
         apiKeys: currentKeys,
         playerRoll,
         spellCast,
@@ -361,7 +417,7 @@ export default function TavernApp({
         companions: describeCompanions(partyNow, actorId, describeConditionsForPrompt),
         partySize: size,
         partyNames: membersOf(partyNow).map(m => m.name),
-        allowRecruit: mayStartFight && size < MAX_PARTY && !pendingRecruit,
+        allowRecruit: mayStartFight && membersOf(partyFull).length < MAX_PARTY && !pendingRecruit,
         allowDeparture: !combatResult && !encounter && size > 1,
         lastWasAmbush: lastAmbush
       });
@@ -408,24 +464,24 @@ export default function TavernApp({
       const damage = response.damageTaken || 0;
       const healing = effectsApplied ? 0 : response.healing || 0;
       const goldChange = effectsApplied ? 0 : response.goldEarned || 0;
-      const scene = applySceneEffects(partyRef.current, actorId, {
+      const scene = applySceneEffects(sceneParty(actorId), actorId, {
         damage, healing, goldChange, damageTargets: response.damageTargets, healingTargets: response.healingTargets
       });
-      if (damage || healing || goldChange) setParty(scene.party);
+      if (damage || healing || goldChange) setSceneParty(actorId, scene.party);
       const groupHit = scene.hit.length > 1 || (scene.hit[0] && scene.hit[0] !== sheet.name);
       const groupHealed = scene.healed.length > 1 || (scene.healed[0] && scene.healed[0] !== sheet.name);
 
       // Limbs lost, disabled or healed in the story (validated by parseDMReply)
-      const limbs = fightGroups.length ? { applied: [] } : applySceneLimbs(partyRef.current, actorId, response.limbChanges || []);
+      const limbs = fightGroups.length ? { applied: [] } : applySceneLimbs(sceneParty(actorId), actorId, response.limbChanges || []);
       if (limbs.applied.length) {
-        setParty(limbs.party);
+        setSceneParty(actorId, limbs.party);
         limbs.applied.forEach(({ name, change }) => recordEvent(limbFact(name, change)));
       }
 
       // Conditions applied or removed by the story (validated by parseDMReply)
-      const conditionResult = fightGroups.length ? { applied: [], collapsed: [] } : applySceneConditions(partyRef.current, actorId, response.conditionChanges || []);
+      const conditionResult = fightGroups.length ? { applied: [], collapsed: [] } : applySceneConditions(sceneParty(actorId), actorId, response.conditionChanges || []);
       if (conditionResult.applied.length) {
-        setParty(conditionResult.party);
+        setSceneParty(actorId, conditionResult.party);
         conditionResult.applied.forEach(({ name, change }) => {
           const fact = conditionFact(name, change);
           if (fact) recordEvent(fact);
@@ -435,7 +491,7 @@ export default function TavernApp({
       // Experience from the story goes to every member; quest rewards to the party
       const ready = new Set();
       if (response.xpEarned > 0 || questsPaid.length) {
-        let next = partyRef.current;
+        let next = sceneParty(actorId);
         if (response.xpEarned > 0) {
           const res = storyXp(next, response.xpEarned);
           next = res.party;
@@ -446,7 +502,7 @@ export default function TavernApp({
           next = res.party;
           res.ready.forEach(n => ready.add(n));
         });
-        setParty(next);
+        setSceneParty(actorId, next);
       }
 
       setMessages(prev => [
@@ -493,14 +549,15 @@ export default function TavernApp({
 
       // A companion offers to join: the game builds the sheet, the player decides
       if (response.recruit && !fightGroups.length) {
-        const offer = makeRecruitOffer(response.recruit, partyRef.current, { scene: newMsgList.length + 1 });
+        const offer = makeRecruitOffer(response.recruit, sceneParty(actorId), { scene: newMsgList.length + 1 });
         if (offer) {
-          setPendingRecruit(offer);
+          // (who met them: the companion joins that member's group)
+          setPendingRecruit({ ...offer, withId: actorId });
           pushSystemMessage(`🤝 ${offer.character.name} (${offer.character.race} · ${offer.character.className}, nivel ${offer.character.level}) quiere unirse al grupo. Decide si lo aceptas bajo la crónica.`);
         }
       }
       // A member leaves the party through the story
-      const leaving = response.departure ? departingMember(partyRef.current, response.departure) : null;
+      const leaving = response.departure ? departingMember(sceneParty(actorId), response.departure) : null;
       if (leaving) {
         const res = removeMember(partyRef.current, leaving.id);
         if (res.ok) {
@@ -511,17 +568,47 @@ export default function TavernApp({
       }
 
       if (response.exploration) setLastAmbush(response.exploration.ambushed);
+      // Each scene keeps its own suggestions while the party is apart
+      const sceneNow = sceneIdOf(partyRef.current, actorId);
       if (response.suggestedActions) {
-        setSuggestedActions(response.suggestedActions);
+        if (sceneNow) setParty(p => setSuggestions(p, sceneNow, response.suggestedActions));
+        else setSuggestedActions(response.suggestedActions);
+      }
+
+      // The reason this group goes to the meeting point (Duncan's or the local engine's)
+      if (response.meetingHook && sceneNow && !groupById(partyRef.current, sceneNow)?.hook) {
+        const hookGroup = groupById(partyRef.current, sceneNow);
+        const place = worldState.mapNodes?.find(n => n.id === partyRef.current.split.meetingNodeId);
+        setParty(p => setHook(p, sceneNow, response.meetingHook));
+        // The meeting point can be reached from now on
+        if (place?.status === 'locked') setWorld(w => ({ ...w, mapNodes: w.mapNodes.map(n => (n.id === place.id ? { ...n, status: 'discovered' } : n)) }));
+        recordEvent(`${groupNames(partyRef.current, hookGroup)}: ${hookLabel(response.meetingHook.kind).toLowerCase()} que lleva a ${place?.name || 'la taberna'}`);
+        pushSystemMessage(`🧭 ${hookLabel(response.meetingHook.kind)}: ${response.meetingHook.text} Rumbo: ${place?.name || 'la taberna'} (viaja desde el mapa cuando quieras).`);
       }
 
       if (fightGroups.length) startEncounter(fightGroups, { byDuncan: true, start: response.combat, actionText, actorId });
       else if (response.shop && SHOP_TYPES[response.shop]) handleOpenShop(response.shop, { byDuncan: true });
+      else if (sceneNow && !combatResult) passSpotlight(sceneNow);
     } catch (err) {
       console.error(err);
     } finally {
+      sceneRef.current = null;
       setIsGenerating(false);
     }
+  };
+
+  // Turns between scenes (see splitParty.js): after SCENE_TURNS narrated actions the
+  // spotlight passes to the next group. Alone, the game switches to it; online, the
+  // queue alternates between the groups by itself.
+  const passSpotlight = key => {
+    const res = countSceneTurn(partyRef.current, key);
+    setParty(res.party);
+    if (!res.pass || roomRef.current) return;
+    const place = worldState.mapNodes?.find(n => n.id === res.pass.nodeId)?.name || 'otro lugar';
+    pushSceneMessage(key, `🎬 La historia deja esta escena por un momento: mientras tanto, en ${place}… (vuelve cuando quieras eligiendo a uno de aquí).`);
+    pushSceneMessage(res.pass.id, `🎬 Mientras tanto, en ${place}: le toca a ${groupNames(res.party, res.pass)}.`);
+    setActiveShopKey(null);
+    setParty(p => setActiveMember(p, res.pass.memberIds[0]));
   };
 
   // ---------------------------------------------------------------- companions
@@ -529,19 +616,26 @@ export default function TavernApp({
     const offer = pendingRecruit;
     if (!offer) return;
     setPendingRecruit(null);
-    if (!accept) {
-      recordEvent(`El grupo rechaza la compañía de ${offer.character.name}`);
-      pushSystemMessage(`🙅 ${offer.character.name} no se une al grupo.`);
-      return;
+    // The companion joins the group of whoever met them, wherever it is
+    const withId = membersOf(partyRef.current).some(m => m.id === offer.withId) ? offer.withId : partyRef.current.activeId;
+    sceneRef.current = sceneIdOf(partyRef.current, withId);
+    try {
+      if (!accept) {
+        recordEvent(`El grupo rechaza la compañía de ${offer.character.name}`);
+        pushSystemMessage(`🙅 ${offer.character.name} no se une al grupo.`);
+        return;
+      }
+      const res = addMember(sceneParty(withId), offer.character);
+      if (!res.ok) {
+        pushSystemMessage(`🤝 ${res.error}`);
+        return;
+      }
+      setSceneParty(withId, res.party);
+      recordEvent(`${res.member.name} (${res.member.className}) se une al grupo`);
+      pushSystemMessage(`🤝 ${res.member.name} se une al grupo: ${res.member.race} · ${res.member.className} de nivel ${res.member.level}, con su equipo inicial. Selecciónalo en la ficha para verlo o hacerlo actuar.`);
+    } finally {
+      sceneRef.current = null;
     }
-    const res = addMember(partyRef.current, offer.character);
-    if (!res.ok) {
-      pushSystemMessage(`🤝 ${res.error}`);
-      return;
-    }
-    setParty(res.party);
-    recordEvent(`${res.member.name} (${res.member.className}) se une al grupo`);
-    pushSystemMessage(`🤝 ${res.member.name} se une al grupo: ${res.member.race} · ${res.member.className} de nivel ${res.member.level}, con su equipo inicial. Selecciónalo en la ficha para verlo o hacerlo actuar.`);
   };
 
   // The player dismisses a member (outside combat). They take their own equipment.
@@ -559,16 +653,26 @@ export default function TavernApp({
 
   const handleTransferItem = (fromId, toId, itemId) => {
     if (encounter) return 'En mitad de un combate no hay tiempo para repartir el equipo.';
-    const res = transferItem(partyRef.current, fromId, toId, itemId);
+    // Only between members who are in the same place
+    if (sceneIdOf(partyRef.current, fromId) !== sceneIdOf(partyRef.current, toId)) return 'Está lejos: solo puedes pasar objetos a quien está contigo.';
+    const res = transferItem(sceneParty(fromId), fromId, toId, itemId);
     if (!res.ok) return res.error;
-    setParty(res.party);
+    setSceneParty(fromId, res.party);
     const from = memberSheet(partyRef.current, fromId);
     const to = memberSheet(partyRef.current, toId);
     pushSystemMessage(`🎒 ${from.name} pasa ${res.item.name} a ${to.name}.`);
     return null;
   };
 
-  const handleSelectMember = id => setParty(p => setActiveMember(p, id));
+  // Choosing someone of another scene switches to that scene (not while Duncan narrates or in a fight)
+  const handleSelectMember = id => {
+    const p = partyRef.current;
+    if (sceneIdOf(p, id) !== sceneIdOf(p)) {
+      if (isGenerating || encounter) return;
+      setActiveShopKey(null);
+    }
+    setParty(prev => setActiveMember(prev, id));
+  };
 
   // ---------------------------------------------------------------- combat encounters
   const combatDie = sides => rollDie(sides, { silent: true });
@@ -576,7 +680,8 @@ export default function TavernApp({
   // `start`: how the fight starts (see readCombatStart in surprise.js): `surprise` (who is
   // caught off guard) and `heroAttacks` (the action of `actorId` was an attack: the opening strike)
   const startEncounter = (groups, { byDuncan = false, start = null, actionText = '', actorId = null } = {}) => {
-    const heroes = memberSheets(partyRef.current);
+    // Only those who are there fight (the whole party when it is together)
+    const heroes = memberSheets(sceneParty(actorId || partyRef.current.activeId));
     const surprise = start?.surprise || null;
     // How the fight starts (the whole party), kept so it can be fought again in the simulator
     const snapshot = makeSnapshot({ party: heroes, groups, world, place: currentNode(world)?.name || '', byDuncan, surprise: surprise?.side || null });
@@ -667,7 +772,7 @@ export default function TavernApp({
 
   // Play an action on this encounter (the one in state, or one just started)
   const playCombatAction = async (encounter, action) => {
-    const heroes = memberSheets(partyRef.current);
+    const heroes = memberSheets(sceneParty(encounter.heroIds?.[0]));
     const result = playerAction(encounter, heroes, action, combatDie);
     if (!result.ok) {
       setEncounter(prev => ({ ...prev, log: [...prev.log, { round: prev.round, kind: 'info', text: `⚠️ ${result.error}` }] }));
@@ -698,16 +803,19 @@ export default function TavernApp({
     if (!encounter || encounter.status === 'active') return;
     const loot = generateLoot(encounter);
     const won = encounter.status === 'victory';
-    const heroes = memberSheets(partyRef.current).filter(h => (encounter.heroIds || []).includes(h.id));
+    // The fight was of one scene: its purse, its members
+    const fighterId = (encounter.heroIds || []).find(id => membersOf(partyRef.current).some(m => m.id === id)) || partyRef.current.activeId;
+    const fightParty = sceneParty(fighterId);
+    const heroes = memberSheets(fightParty).filter(h => (encounter.heroIds || []).includes(h.id));
     const group = heroes.length > 1;
-    const receiver = activeSheet(partyRef.current);
+    const receiver = activeSheet(fightParty);
     const line = `${describeEncounterResult(encounter, heroes.length ? heroes : [character])}${won ? ` Botín: ${describeLoot(loot)}${loot.items.length ? ` (los objetos, en la mochila de ${receiver.name}; las monedas, a la bolsa común)` : ''}.` : ''}`;
     pushSystemMessage(line);
     const defeated = encounter.enemies.filter(e => e.status !== 'active').map(e => e.name);
     if (won) recordEvent(`${group ? 'El grupo vence' : 'Vence'} en combate a ${defeated.slice(0, 3).join(', ')}${defeated.length > 3 ? '…' : ''}`);
     if (encounter.status === 'fled') recordEvent(`${group ? 'El grupo huye' : 'Huye'} de un combate`);
 
-    const result = finishFight(partyRef.current, encounter, { loot: won ? loot : null, receiverId: receiver.id });
+    const result = finishFight(fightParty, encounter, { loot: won ? loot : null, receiverId: receiver.id });
     let next = result.party;
     result.ended.forEach(e => pushSystemMessage(`🩹 Al acabar el combate, ${e.name} deja de estar ${e.conditions.join(', ')}.`));
     if (group && result.fallen.length && encounter.status !== 'defeat') {
@@ -742,7 +850,7 @@ export default function TavernApp({
       recordEvent(`${group ? 'El grupo cayó' : `${heroes[0]?.name || character.name} cayó`} en combate y Duncan ${group ? 'los' : 'lo'} curó`);
       pushSystemMessage(`💀 Cae ${who}. Maese Duncan ${group ? 'los arrastra' : 'lo arrastra'} junto a la chimenea y ${group ? 'los remienda' : 'lo remienda'}: ${group ? 'despiertan' : 'despierta'} con la mitad de sus PG${result.rescue.goldLost > 0 ? ` y ${result.rescue.goldLost} monedas de oro menos en la bolsa por los cuidados` : ''}.`);
     }
-    setParty(next);
+    setSceneParty(fighterId, next);
     setEncounter(null);
     // Duncan narrates the outcome (and any loot) from the result the game computed
     handleSendAction('Narra el final del combate', { sheet: activeSheet(next), combatResult: `${line}${questLine}`, loot: won ? loot : null });
@@ -879,14 +987,14 @@ export default function TavernApp({
         await animateRoll({ dice: toDice(cast.heal), modifier: cast.heal.bonus, label: `${spell.name} · curación` });
       }
 
-      const ally = cast.heal ? findMemberByName(partyRef.current, target) : null;
+      const ally = cast.heal ? findMemberByName(sceneParty(character.id), target) : null;
       let sheet = result.character;
       let castForDuncan = cast;
       if (ally && ally.id !== character.id) {
         // The caster keeps their own HP; the ally gets the healing
         sheet = { ...result.character, hp: character.hp };
         const healed = Math.min(ally.maxHp, ally.hp + cast.heal.total) - ally.hp;
-        setParty(p => updateMember(updateMember(p, character.id, sheet), ally.id, a => ({ ...a, hp: Math.min(a.maxHp, a.hp + cast.heal.total) })));
+        setParty(p => inScope(p, character.id, s => updateMember(updateMember(s, character.id, sheet), ally.id, a => ({ ...a, hp: Math.min(a.maxHp, a.hp + cast.heal.total) }))));
         castForDuncan = { ...cast, heal: { ...cast.heal, applied: healed } };
         pushSystemMessage(`✨ ${character.name} cura a ${ally.name}: recupera ${healed} PG.`);
       } else {
@@ -916,7 +1024,8 @@ export default function TavernApp({
   // Short rest (an hour by the fire) or long rest (a night, a room each): the whole party rests
   const handleRest = (kind) => {
     if (isGenerating || isRollingCheckRef.current) return;
-    const result = restParty(partyRef.current, kind, sides => rollDie(sides, { silent: true }));
+    // Only those who are here rest (their scene's purse pays the rooms)
+    const result = restParty(sceneParty(), kind, sides => rollDie(sides, { silent: true }));
     if (!result.ok) {
       pushSystemMessage(`🛏️ ${result.error}`);
       return;
@@ -940,7 +1049,7 @@ export default function TavernApp({
       }
     });
     const extra = extras.length ? ` Además, ${extras.join('; ')}.` : '';
-    setParty(result.party);
+    setSceneParty(partyRef.current.activeId, result.party);
     setMobileTab('story');
     const sheet = activeSheet(result.party);
     if (kind === 'long') {
@@ -1031,7 +1140,7 @@ export default function TavernApp({
     if (!quest) return;
     setQuests(next);
     recordEvent(questFact(quest));
-    pushSystemMessage(`🏳 ${membersOf(party).length > 1 ? 'El grupo abandona' : `${character.name} abandona`} la misión «${quest.title}».`);
+    pushSystemMessage(`🏳 ${membersOf(scene).length > 1 ? 'El grupo abandona' : `${character.name} abandona`} la misión «${quest.title}».`);
   };
 
   const handleQuestSeen = id => {
@@ -1042,6 +1151,31 @@ export default function TavernApp({
 
   // When traveling to another node on the world map
   const handleTravelToNode = (node) => {
+    // Apart: only this scene's group travels; arriving where another group is, they meet
+    const p = partyRef.current;
+    if (isSplit(p)) {
+      if (isGenerating || encounter) return;
+      const moving = groupOf(p, p.activeId);
+      if (!moving || moving.nodeId === node.id) return;
+      const names = groupNames(p, moving);
+      const many = moving.memberIds.length > 1;
+      const placeOf = id => worldState.mapNodes?.find(n => n.id === id)?.name || '';
+      const res = moveGroup(p, moving.id, node.id, { placeOf });
+      setActiveShopKey(null);
+      setParty(res.party);
+      if (res.ended) setWorld(w => withCurrentNode(w, node.id));
+      recordEvent(`${names} ${many ? 'viajan' : 'viaja'} a ${node.name}`);
+      const sheet = activeSheet(scopeParty(res.party, moving.memberIds[0]));
+      if (!res.met) {
+        return handleSendAction(`${many ? `${names} deciden` : `${names} decide`} abandonar la posición y viajar hacia: "${node.name}".`, { sheet });
+      }
+      const who = joinNames(res.met.joined.map(j => j.names));
+      recordEvent(`En ${node.name} se cruzan los caminos de ${who}: forman un grupo`);
+      pushSystemMessage(`🤝 ¡Encuentro en ${node.name}! Se cruzan los caminos de ${who}.${res.ended ? ' A partir de ahora jugáis juntos: una sola crónica, una sola bolsa. Los prólogos de cada uno quedan en el historial.' : ' Siguen siendo un grupo aparte de los que aún no han llegado.'}`);
+      return handleSendAction(`${names} ${many ? 'llegan' : 'llega'} a "${node.name}" y ${many ? 'se encuentran' : 'se encuentra'} con ${joinNames(res.met.joined.filter(j => j.id !== moving.id).map(j => j.names))}.`, {
+        sheet, meeting: { joined: res.met.joined, place: node.name }
+      });
+    }
     setWorld(prev => ({
       ...prev,
       mapNodes: prev.mapNodes.map(n => ({
@@ -1051,7 +1185,7 @@ export default function TavernApp({
     }));
 
     recordEvent(`Viaja a ${node.name}`);
-    handleSendAction(`El grupo decide abandonar la posición y viajar hacia: "${node.name}".`);
+    return handleSendAction(`El grupo decide abandonar la posición y viajar hacia: "${node.name}".`);
   };
 
   // When rolling from the floating tray
@@ -1068,6 +1202,8 @@ export default function TavernApp({
   };
 
   const heroes = memberSheets(party);
+  // Those in the scene being played (all of them when the party is together); in a fight, those who fight
+  const sceneHeroes = memberSheets(encounter?.heroIds?.length ? scopeParty(party, encounter.heroIds[0]) : scene);
   const inCombat = Boolean(encounter && encounter.status === 'active');
 
   // ---------------------------------------------------------------- online room
@@ -1086,6 +1222,7 @@ export default function TavernApp({
     onDirect: (direct, playerId) => directIntentRef.current(direct, playerId)
   });
   const room = online.status === 'open' ? online.room : null;
+  roomRef.current = room;
   const [isRoomOpen, setIsRoomOpen] = useState(false);
   const [onlineNotice, setOnlineNotice] = useState(null);
   const [queueRunning, setQueueRunning] = useState(false);
@@ -1099,7 +1236,12 @@ export default function TavernApp({
     inCombat,
     turnCharacterId: turnUid,
     combatBusy,
-    labelFor: (kind, payload, characterId) => labelFor(kind, payload, heroes.find(h => h.id === characterId))
+    // Apart, each player moves their own group on the map (together, the host decides the travels)
+    apart: isSplit(party),
+    nodeIds: (worldState.mapNodes || []).filter(n => n.status !== 'locked').map(n => n.id),
+    labelFor: (kind, payload, characterId) => (kind === 'travel'
+      ? worldState.mapNodes?.find(n => n.id === payload.nodeId)?.name || ''
+      : labelFor(kind, payload, heroes.find(h => h.id === characterId)))
   };
   // A combat action from a player whose turn it is (already checked by the room)
   combatIntentRef.current = (characterId, action) => {
@@ -1110,7 +1252,7 @@ export default function TavernApp({
   // checked by the room: they control it and there is no fight); the rules decide the rest
   directIntentRef.current = (direct, playerId) => {
     if (direct.kind === 'create') {
-      addPlayerHero(direct.draft, playerId);
+      addPlayerHero(direct.draft, playerId, direct.zoneId);
       return;
     }
     const sheet = memberSheet(partyRef.current, direct.characterId);
@@ -1130,7 +1272,9 @@ export default function TavernApp({
   // A player without a character creates one (the room checked: room in the party, no fight,
   // no character of their own). The host builds the sheet with the rules, at the party's
   // level and without gold for the purse (see newHero.js); Duncan narrates the arrival.
-  const addPlayerHero = (draft, playerId) => {
+  // In a campaign that started apart, the new hero starts in their origin zone (`zoneId`,
+  // or the one that fits them): alone there, they play their own prologue.
+  const addPlayerHero = (draft, playerId, zoneId = null) => {
     const built = buildPlayerHero(draft, { level: partyLevel(partyRef.current), rollD6: () => rollDie(6, { silent: true }) });
     if (!built.ok) {
       tell(playerId, built.error);
@@ -1141,13 +1285,36 @@ export default function TavernApp({
       tell(playerId, res.error);
       return;
     }
-    setParty(res.party);
     const hero = res.member;
+    let nextParty = res.party;
+    if (isOriginsCampaign(nextParty)) {
+      const zones = zonesFor(worldState).filter(z => worldState.mapNodes?.some(n => n.id === z.id));
+      const zone = zones.find(z => z.id === zoneId) || suggestZone(built.character, zones);
+      const together = !isSplit(nextParty) ? currentNode(worldState)?.id : null;
+      nextParty = placeNewMember(nextParty, hero.id, zone?.id, { hereNodeId: together, meetingNodeId: together });
+    } else if (isSplit(nextParty)) {
+      nextParty = placeNewMember(nextParty, hero.id, groupOf(nextParty, nextParty.activeId)?.nodeId);
+    }
+    setParty(nextParty);
     const who = playerName(room, playerId);
-    const ids = membersOf(res.party).map(m => m.id);
-    recordEvent(`${hero.name} (${hero.race} · ${hero.className}) se une al grupo; lo juega ${who}`);
-    pushSystemMessage(`🧭 ${hero.name} (${hero.race} · ${hero.className} de nivel ${hero.level}) se une al grupo: lo juega ${who}.${built.rolled ? ` Sus características se tiraron en la mesa del anfitrión (4d6): ${built.rolled.join(', ')}.` : ''}`);
-    const place = currentNode(world)?.name;
+    const ids = membersOf(nextParty).map(m => m.id);
+    const own = groupOf(nextParty, hero.id);
+    const alone = Boolean(own && own.memberIds.length === 1);
+    recordEvent(`${hero.name} (${hero.race} · ${hero.className}) ${alone ? 'empieza su historia' : 'se une al grupo'}; lo juega ${who}`);
+    pushSystemMessage(`🧭 ${hero.name} (${hero.race} · ${hero.className} de nivel ${hero.level}) ${alone ? 'entra en la historia' : 'se une al grupo'}: lo juega ${who}.${built.rolled ? ` Sus características se tiraron en la mesa del anfitrión (4d6): ${built.rolled.join(', ')}.` : ''}`);
+    if (alone) {
+      // Their own scene, in their zone: Duncan opens it; they will meet the others later
+      const zone = zonesFor(worldState).find(z => z.id === own.nodeId) || { name: worldState.mapNodes?.find(n => n.id === own.nodeId)?.name || 'El camino' };
+      pushSceneMessage(own.id, `🧭 ${hero.name} empieza lejos del resto.`);
+      setMessagesState(prev => [...prev, { sender: 'duncan', text: zoneIntro(zone, [hero], worldState), timestamp: now(), groupId: own.id }]);
+      setParty(p => setSuggestions(p, own.id, zone.suggestions || []));
+      online.update(r => {
+        const claimed = claimCharacter(r, playerId, hero.id, ids);
+        return claimed.ok ? claimed.room : r;
+      });
+      return;
+    }
+    const place = (own ? worldState.mapNodes?.find(n => n.id === own.nodeId) : currentNode(worldState))?.name;
     online.update(r => {
       const claimed = claimCharacter(r, playerId, hero.id, ids);
       const next = claimed.ok ? claimed.room : r;
@@ -1184,12 +1351,12 @@ export default function TavernApp({
   useEffect(() => {
     if (!roomIsOpen) return;
     online.publish(buildSections({
-      title: campaignTitle, world, party, messages, suggestedActions, encounter, quests, events, summary,
+      title: campaignTitle, world: worldState, party, messages, suggestedActions, encounter, quests, events, summary,
       isGenerating: isGenerating || queueRunning, combatBusy, pendingRecruit, aiActive: geminiKeys.length > 0
     }));
     // `online.publish` is stable; the room itself is added by the session
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomIsOpen, campaignTitle, world, party, messages, suggestedActions, encounter, quests, events, summary, isGenerating, queueRunning, combatBusy, pendingRecruit, geminiKeys.length]);
+  }, [roomIsOpen, campaignTitle, worldState, party, messages, suggestedActions, encounter, quests, events, summary, isGenerating, queueRunning, combatBusy, pendingRecruit, geminiKeys.length]);
 
   // Each member records who plays it (`controlledBy`): a player id, or the local one for the host
   const ownersKey = room ? heroIds.map(id => `${id}:${ownerOf(room, id)}`).join('|') : `off:${heroIds.join('|')}`;
@@ -1237,6 +1404,10 @@ export default function TavernApp({
       return handleRollCheck({ label: ABILITY_NAMES[payload.ability], modifier: getModifierNumber(sheet.stats?.[payload.ability] ?? 10), ability: payload.ability });
     }
     if (kind === 'attack') return handleAttack({ optionId: payload.optionId, target: payload.target, targetAC: payload.targetAC || undefined, raging: payload.raging });
+    if (kind === 'travel') {
+      const node = worldState.mapNodes?.find(n => n.id === payload.nodeId && n.status !== 'locked');
+      return node ? handleTravelToNode(node) : pushSystemMessage('🗺️ Ese lugar ya no está en el mapa.');
+    }
     if (kind === 'spell') return handleCastSpell(payload.spellId, payload.target);
     const item = (sheet.inventory || []).find(i => i.id === payload.itemId);
     if (!item) return pushSystemMessage(`🎒 ${sheet.name} ya no tiene ese objeto.`);
@@ -1244,7 +1415,9 @@ export default function TavernApp({
   };
 
   // The queue: one action at a time, when Duncan is free (paused during a fight)
-  const queueHead = room?.queue[0] || null;
+  // Apart, the queue alternates between the groups (see nextQueued in splitParty.js)
+  const lastSceneRef = useRef(null);
+  const queueHead = room ? nextQueued(room.queue, party, lastSceneRef.current) : null;
   useEffect(() => {
     if (!room || !queueHead || queueRunning || isGenerating || combatBusy || encounter || isRollingCheckRef.current) return;
     const check = stillValid(room, gameRef.current, queueHead);
@@ -1259,6 +1432,7 @@ export default function TavernApp({
     }
     online.update(r => dequeueAction(r, queueHead.id));
     setQueueRunning(true);
+    lastSceneRef.current = sceneIdOf(partyRef.current, queueHead.characterId);
     authorRef.current = playerName(room, queueHead.playerId);
     Promise.resolve()
       .then(() => runQueued(queueHead))
@@ -1283,8 +1457,11 @@ export default function TavernApp({
     quickCheck: skillId => submit(mine.check({ skillId })),
     spell: (spellId, target) => submit(mine.spell(spellId, target)),
     item: item => submit(mine.item(item)),
-    combat: action => submit({ type: 'combat', characterId: turnUid, action })
+    combat: action => submit({ type: 'combat', characterId: turnUid, action }),
+    // Apart, travelling is a scene action too: it waits its turn in the queue
+    travel: node => (isSplit(party) ? submit(mine.travel(node)) : handleTravelToNode(node))
   } : {
+    travel: handleTravelToNode,
     send: handleSendAction,
     check: handleRollCheck,
     quickCheck: handleQuickCheck,
@@ -1317,9 +1494,35 @@ export default function TavernApp({
     closeRoom: () => {
       online.close();
       setIsRoomOpen(false);
-    }
+    },
+    setShareScenes: on => online.update(r => setShareScenes(r, on))
   } : null;
   const unreadChat = room ? Math.max(0, room.chat.length - chatSeen) : 0;
+
+  // ---------------------------------------------------------------- scenes (a party apart)
+  // Alone, the player follows every scene (they play everyone); online, only the scenes
+  // and prologues of the characters this screen plays, unless the host lets everyone
+  // read the others' scenes. Together, there is a single chronicle (the common one).
+  const apart = isSplit(party);
+  const viewerIds = room && !room.shareScenes ? (hostActors || []).map(h => h.id) : null;
+  const scenes = visibleScenes(party, worldState, viewerIds);
+  const shownScene = !apart ? null : scenes.some(s => s.id === sceneId) ? sceneId : scenes[0]?.id || sceneId;
+  const chronicle = sceneMessages(messages, shownScene);
+  const prologues = readablePrologues(party, viewerIds).map(p => ({ id: p.id, label: `Prólogo de ${p.names}${p.place ? ` (${p.place})` : ''}`, messages: sceneMessages(messages, p.id) }));
+  const sceneSuggestions = sceneId ? groupById(party, sceneId)?.suggestions || [] : suggestedActions;
+  const placeOfMember = id => worldState.mapNodes?.find(n => n.id === groupOf(party, id)?.nodeId)?.name || '';
+  const chooseScene = id => {
+    const g = groupById(party, id);
+    const who = g?.memberIds.find(m => !viewerIds || viewerIds.includes(m));
+    if (who) handleSelectMember(who);
+  };
+  const elsewhere = apart
+    ? heroes.filter(h => !sceneHeroes.some(s => s.id === h.id) && (!viewerIds || viewerIds.includes(h.id))).map(h => ({ ...h, place: placeOfMember(h.id) }))
+    : [];
+  const memberPlaces = apart ? Object.fromEntries(heroes.map(h => [h.id, placeOfMember(h.id)])) : null;
+  const mapMarkers = scenes.map(s => ({ nodeId: s.nodeId, label: s.names, current: s.id === sceneId }));
+  const meetingNodeId = apart && groupById(party, sceneId)?.hook ? party.split.meetingNodeId : null;
+  const sceneTabs = apart && scenes.length > 1 ? scenes.map(s => ({ id: s.id, label: s.names, place: s.place, active: s.id === shownScene, spotlight: s.spotlight })) : [];
   const chatLength = room?.chat.length || 0;
   useEffect(() => {
     if (isRoomOpen) setChatSeen(chatLength);
@@ -1406,12 +1609,13 @@ export default function TavernApp({
         <div className={`w-full ${encounter ? 'lg:w-60 xl:w-64' : 'lg:w-72 xl:w-80 2xl:w-88'} shrink-0 ${mobileTab === 'party' ? 'block' : 'hidden lg:block'}`}>
           <PartyPanel
             character={character}
-            party={heroes}
-            purse={party.gold}
+            party={sceneHeroes}
+            elsewhere={elsewhere}
+            purse={scene.gold}
             onSelectMember={handleSelectMember}
             onDismissMember={handleDismissMember}
             onTransferItem={handleTransferItem}
-            longRestCost={longRestCost(party)}
+            longRestCost={longRestCost(scene)}
             onUpdateCharacter={next => (notMine() ? null : setCharacter(normalizeEquipment(next)))}
             onOrderDrink={handleOrderDrink}
             onRollCheck={act.check}
@@ -1431,7 +1635,7 @@ export default function TavernApp({
             <Suspense fallback={null}>
               <CombatView
                 encounter={encounter}
-                heroes={heroes}
+                heroes={sceneHeroes}
                 onAction={act.combat}
                 onFinish={handleFinishEncounter}
                 busy={combatBusy}
@@ -1449,12 +1653,16 @@ export default function TavernApp({
             </Suspense>
           ) : (
             <StoryStream
-              messages={messages}
+              messages={chronicle}
               isGenerating={isGenerating}
-              suggestedActions={suggestedActions}
+              suggestedActions={sceneSuggestions}
               character={character}
               party={heroes}
               onSelectMember={handleSelectMember}
+              scenes={sceneTabs}
+              onSelectScene={chooseScene}
+              prologues={prologues}
+              memberPlaces={memberPlaces}
               pendingRecruit={pendingRecruit}
               onAnswerRecruit={handleAnswerRecruit}
               world={world}
@@ -1479,7 +1687,10 @@ export default function TavernApp({
         >
           <WorldMapPanel
             world={world}
-            onTravelToNode={handleTravelToNode}
+            onTravelToNode={act.travel}
+            markers={apart ? mapMarkers : []}
+            meetingNodeId={meetingNodeId}
+            travelLocked={apart && (isGenerating || Boolean(encounter)) ? 'Espera a que Duncan termine para viajar.' : null}
             summary={summary}
             events={events}
             quests={quests}
@@ -1537,7 +1748,7 @@ export default function TavernApp({
         onChange={setMobileTab}
         tabs={[
           { id: 'story', label: encounter ? 'Combate' : 'Crónica', icon: encounter ? Swords : ScrollText },
-          { id: 'party', label: heroes.length > 1 ? `Grupo (${heroes.length})` : `Ficha · ${character.hp} PG`, icon: Shield },
+          { id: 'party', label: sceneHeroes.length > 1 ? `Grupo (${sceneHeroes.length})` : `Ficha · ${character.hp} PG`, icon: Shield },
           { id: 'map', label: 'Mapa', icon: MapIcon, badge: unseenQuestCount(quests) }
         ]}
       />

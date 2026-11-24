@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, Suspense } from 'react';
 import RichText from '../RichText';
-import { Send, Dice5, Sparkles, ShieldAlert, Eye, MessageCircle, Search, Footprints, Brain } from 'lucide-react';
+import { Send, Dice5, Sparkles, ShieldAlert, Eye, MessageCircle, Search, Footprints, Brain, Clapperboard, ScrollText } from 'lucide-react';
 import MenuButton from '../MenuButton';
 import { DiceRollerTray } from './lazyParts';
 import { currentNode } from '../../utils/shops';
@@ -34,10 +34,21 @@ export default function StoryStream({
   // locked (default: while Duncan writes) and a line above it (whose turn, etc.)
   actors = null,
   inputLocked = null,
-  inputNotice = null
+  inputNotice = null,
+  // A party apart (see splitParty.js): the scenes this screen follows ({ id, label, place,
+  // active, spotlight }), the prologues it may read ({ id, label, messages }) and where
+  // each member is ({ [id]: place }, for the selector)
+  scenes = [],
+  onSelectScene = () => {},
+  prologues = [],
+  memberPlaces = null
 }) {
   const canPick = actors || party;
-  const locked = inputLocked ?? isGenerating;
+  // A prologue being read (history of a scene that already joined another one)
+  const [readingId, setReadingId] = useState(null);
+  const reading = prologues.find(p => p.id === readingId) || null;
+  const shown = reading ? reading.messages : messages;
+  const locked = Boolean(reading) || (inputLocked ?? isGenerating);
   const [inputText, setInputText] = useState('');
   const [trayOpen, setTrayOpen] = useState(false);
   const place = currentNode(world)?.name || world.initialLocation;
@@ -49,7 +60,7 @@ export default function StoryStream({
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isGenerating]);
+  }, [shown, isGenerating]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -94,9 +105,58 @@ export default function StoryStream({
         </button>
       </div>
 
+      {/* A party apart: its scenes and the prologues kept as history */}
+      {(scenes.length > 0 || prologues.length > 0) && (
+        <div className="px-2 sm:px-3 py-1.5 bg-[#110e17] border-b border-amber-950/50 flex items-center gap-1.5 overflow-x-auto text-[11px]" role="tablist" aria-label="Escenas y prólogos">
+          {scenes.map(s => (
+            <button
+              key={s.id}
+              type="button"
+              role="tab"
+              aria-selected={!reading && s.active}
+              disabled={!s.active && isGenerating}
+              onClick={() => {
+                setReadingId(null);
+                if (!s.active) onSelectScene(s.id);
+              }}
+              title={`${s.label}${s.place ? ` · ${s.place}` : ''}${s.spotlight ? ' (le toca ahora)' : ''}`}
+              className={`shrink-0 flex items-center gap-1 px-2 py-1 rounded-full border transition-colors disabled:opacity-40 ${
+                !reading && s.active ? 'bg-amber-500/15 border-amber-500 text-amber-200' : 'bg-[#17131f] border-stone-800 text-stone-300 hover:border-amber-700'
+              }`}
+            >
+              <Clapperboard className="w-3 h-3" />
+              <span className="max-w-[9rem] truncate">{s.label}</span>
+              {s.place && <span className="text-stone-500 max-w-[7rem] truncate">· {s.place}</span>}
+              {s.spotlight && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" aria-label="le toca ahora" />}
+            </button>
+          ))}
+          {prologues.map(p => (
+            <button
+              key={p.id}
+              type="button"
+              role="tab"
+              aria-selected={readingId === p.id}
+              onClick={() => setReadingId(readingId === p.id ? null : p.id)}
+              className={`shrink-0 flex items-center gap-1 px-2 py-1 rounded-full border transition-colors ${
+                readingId === p.id ? 'bg-sky-500/15 border-sky-500 text-sky-200' : 'bg-[#17131f] border-stone-800 text-stone-400 hover:border-sky-700'
+              }`}
+            >
+              <ScrollText className="w-3 h-3" />
+              <span className="max-w-[12rem] truncate">{p.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {reading && (
+        <div className="px-3 py-1.5 bg-sky-950/40 border-b border-sky-900/50 flex items-center justify-between gap-2 text-[11px] text-sky-100" role="status">
+          <span className="truncate">Estás leyendo el {reading.label.toLowerCase()}: es historia ya pasada.</span>
+          <button type="button" onClick={() => setReadingId(null)} className="shrink-0 px-2 py-0.5 rounded border border-sky-700 hover:bg-sky-900/50">Volver a la escena</button>
+        </div>
+      )}
+
       {/* Main Narrative Feed */}
       <div className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-6 bg-[radial-gradient(ellipse_at_top,_#161220_0%,_#0b0a0e_100%)]">
-        {messages.map((msg, idx) => (
+        {shown.map((msg, idx) => (
           <div
             key={idx}
             className={`flex gap-3 sm:gap-4 ${msg.sender === 'player' ? 'justify-end' : 'justify-start'}`}
@@ -199,7 +259,7 @@ export default function StoryStream({
       </div>
 
       {/* Suggested Action Chips */}
-      {suggestedActions && suggestedActions.length > 0 && !isGenerating && (
+      {!reading && suggestedActions && suggestedActions.length > 0 && !isGenerating && (
         <div className="px-4 py-2.5 bg-[#14101c] border-t border-amber-950/60 flex items-center gap-2 overflow-x-auto text-xs">
           <span className="text-[11px] font-mono text-stone-400 shrink-0">Opciones:</span>
           {suggestedActions.map((act, i) => (
@@ -265,7 +325,7 @@ export default function StoryStream({
                 aria-label="Personaje que actúa"
               >
                 {canPick.map(m => (
-                  <option key={m.id} value={m.id} className="bg-[#1a1523]">{m.name}{m.hp <= 0 ? ' (inconsciente)' : ''}</option>
+                  <option key={m.id} value={m.id} className="bg-[#1a1523]">{m.name}{memberPlaces?.[m.id] ? ` · ${memberPlaces[m.id]}` : ''}{m.hp <= 0 ? ' (inconsciente)' : ''}</option>
                 ))}
               </select>
             </label>

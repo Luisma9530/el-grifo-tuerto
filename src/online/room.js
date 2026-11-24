@@ -16,6 +16,7 @@
 //     ties:    { [characterId]: [playerId, ...] }   // a tied vote: the host decides
 //     queue:   [{ id, playerId, characterId, kind, payload, label }]
 //     chat:    [{ id, playerId, name, text, at }]
+//     shareScenes: false   // while the party is apart, players may read the others' scenes (host's choice)
 //   }
 //
 // Who controls a character: whoever claimed it, else whoever won its vote, else the
@@ -62,9 +63,13 @@ export function createRoom({ code, hostId, hostName }) {
     votes: {},
     ties: {},
     queue: [],
-    chat: []
+    chat: [],
+    shareScenes: false
   };
 }
+
+/** The host lets the players read the scenes of the others (or not) while the party is apart. */
+export const setShareScenes = (room, on) => ({ ...room, shareScenes: Boolean(on) });
 
 /** A room saved by an earlier session of the host: everyone else starts disconnected. */
 export function restoreRoom(saved, { hostId, hostName } = {}) {
@@ -77,7 +82,7 @@ export function restoreRoom(saved, { hostId, hostName } = {}) {
   });
   if (hostId && hostId !== room.hostId) return null;
   if (hostName) players[room.hostId] = { ...players[room.hostId], name: cleanName(hostName) };
-  return { ...room, players, queue: [], ties: saved.ties || {}, chat: Array.isArray(saved.chat) ? saved.chat.slice(-MAX_CHAT) : [] };
+  return { ...room, players, queue: [], ties: saved.ties || {}, chat: Array.isArray(saved.chat) ? saved.chat.slice(-MAX_CHAT) : [], shareScenes: saved.shareScenes === true };
 }
 
 export const playerList = room => Object.values(room?.players || {});
@@ -323,5 +328,6 @@ export const lastChatAt = chat => (chat || []).reduce((max, line) => Math.max(ma
 
 /** What a saved room keeps between sessions of the host (no queue: it was for that session). */
 export const roomToSave = room => ({
-  code: room.code, hostId: room.hostId, players: room.players, claims: room.claims, voted: room.voted, votes: room.votes, ties: room.ties, chat: room.chat.slice(-30)
+  code: room.code, hostId: room.hostId, players: room.players, claims: room.claims, voted: room.voted, votes: room.votes, ties: room.ties, chat: room.chat.slice(-30),
+  shareScenes: Boolean(room.shareScenes)
 });
