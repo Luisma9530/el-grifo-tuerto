@@ -56,6 +56,13 @@ export const stripRollTags = text => text.replace(/\s*\[🎲[^\]]*\]/gu, '').rep
 // Module-level rotation pointer for Round-Robin multi-player token pool
 let currentKeyRotationIndex = 0;
 
+// Gemini's per-minute limit: how many times a scene waits and tries again, and how long
+const QUOTA_RETRIES = 2;
+const QUOTA_WAIT_DEFAULT_MS = 20_000;
+const QUOTA_WAIT_MIN_MS = 5_000;
+const QUOTA_WAIT_MAX_MS = 40_000;
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 // Procedural AI Story Master (Maese Duncan's brain)
 // Analyzes player natural language input, character, world and produces vivid narrative responses
 // `playerRoll` (optional): a check the player already rolled, { rawRoll, total, success, isNat20, isNat1 }.
@@ -76,12 +83,16 @@ export async function generateDMResponse({
   // `meetingHook` { place, names, force }: this group still has no reason to go to the
   // meeting point (Duncan may give one; with `force`, the local engine gives it if he didn't);
   // `meeting` { joined, place }: groups that just met here (the meeting is narrated)
-  sceneNote = '', meetingHook = null, meeting = null
+  sceneNote = '', meetingHook = null, meeting = null,
+  // A party apart calls Duncan from several scenes at once: on Gemini's per-minute
+  // limit this scene waits and retries, and `onQuotaWait(seconds)` tells it
+  onQuotaWait = null, quotaSleep = undefined
 }) {
   const reply = await dmResponse({
     playerAction, character, world, history, apiKey, apiKeys, playerRoll, spellCast, rest, effectsApplied, weaponAttack,
     summary, events, requestSummary, bestiary, combatResult, allowShop, shopsHere, shopTypesHere, loot, quests, here,
-    companions, partySize, partyNames, allowRecruit, allowDeparture, lastWasAmbush, sceneNote, meetingHook, meeting
+    companions, partySize, partyNames, allowRecruit, allowDeparture, lastWasAmbush, sceneNote, meetingHook, meeting,
+    onQuotaWait, ...(quotaSleep ? { quotaSleep } : {})
   });
   // A reason to go to the meeting point: Duncan's, or the local engine's when it is due
   // (never in the reply that starts a fight or closes one)
@@ -98,7 +109,8 @@ async function dmResponse({
   summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null,
   allowShop = false, shopsHere = '', shopTypesHere = [], loot = null, quests = [], here = null,
   companions = '', partySize = 1, partyNames = [], allowRecruit = false, allowDeparture = false,
-  lastWasAmbush = false, sceneNote = '', meetingHook = null, meeting = null
+  lastWasAmbush = false, sceneNote = '', meetingHook = null, meeting = null,
+  onQuotaWait = null, quotaSleep = sleep
 }) {
   // Rests, finished fights and spells without an attack or a saving throw involve no d20 at all
   const needsNoRoll = Boolean(rest) || Boolean(weaponAttack) || Boolean(combatResult)
@@ -129,6 +141,16 @@ async function dmResponse({
     // action needs a roll, and the UI shows the 3D die if he did.
     const d20 = playerRoll ? playerRoll.rawRoll : rollDie(20, { silent: true });
 
+    // Per-minute limit (several scenes calling at once): wait as long as Google asks
+    // (within limits) and try again, telling only this scene (`onQuotaWait`)
+    let retryAfterMs = 0;
+    for (let round = 0; round <= (onQuotaWait ? QUOTA_RETRIES : 0); round++) {
+    if (round > 0) {
+      if (aiFailure !== 'quota') break;
+      const waitMs = Math.min(QUOTA_WAIT_MAX_MS, Math.max(QUOTA_WAIT_MIN_MS, retryAfterMs || QUOTA_WAIT_DEFAULT_MS));
+      onQuotaWait(Math.round(waitMs / 1000), round);
+      await quotaSleep(waitMs);
+    }
     for (let attempt = 0; attempt < pool.length; attempt++) {
       const activeIdx = (startIndex + attempt) % pool.length;
       const keyToUse = pool[activeIdx];
@@ -188,6 +210,7 @@ async function dmResponse({
           aiFailure = 'overloaded'; // answered, but with nothing usable
         } else {
           aiFailure = reply.reason;
+          if (reply.retryAfterMs) retryAfterMs = reply.retryAfterMs;
           console.warn(`[Duncan Engine] Clave ${activeIdx + 1}/${pool.length} falló (${reply.reason}, HTTP ${reply.status}).`);
           // Google's side is saturated or unreachable: the other keys won't fare better
           if (reply.reason === 'overloaded' || reply.reason === 'network') break;
@@ -196,6 +219,7 @@ async function dmResponse({
         aiFailure = 'network';
         console.warn(`[Duncan Engine] Error de conexión con clave ${activeIdx + 1}:`, e);
       }
+    }
     }
 
     console.warn('[Duncan Engine] Gemini no está disponible ahora. Activando motor procedural de respaldo.');

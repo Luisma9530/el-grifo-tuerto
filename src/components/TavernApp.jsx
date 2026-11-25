@@ -54,11 +54,12 @@ import {
 } from '../utils/partyActions';
 import { makeRecruitOffer, departingMember } from '../utils/recruit';
 import {
-  isSplit, groupOf, groupById, sceneIdOf, chronicleKey, chronicleKeyOf, scopeParty, unscopeParty, inScope, sceneWorld, withCurrentNode,
-  sceneMessages, tagNewMessages, moveGroup, meetingNames, setHook, setSuggestions, countSceneTurn, nextQueued, joinNames, groupNames,
+  isSplit, groupOf, groupById, groupsOf, sceneIdOf, chronicleKey, chronicleKeyOf, scopeParty, unscopeParty, inScope, sceneWorld, withCurrentNode,
+  sceneMessages, tagNewMessages, moveGroup, meetingNames, setHook, setSuggestions, countSceneTurn, laneQueue, joinNames, groupNames,
   readablePrologues, visibleScenes, placeNewMember, isOriginsCampaign
 } from '../utils/splitParty';
 import { sceneNoteFor, hookLabel, zonesFor, suggestZone, zoneIntro } from '../utils/origins';
+import { sceneApiKeys } from '../utils/sceneKeys';
 import { LOCAL_CONTROLLER } from '../utils/party';
 import { onlineConfig, roomLink } from '../online/transport';
 import { useHostRoom, wasOnline, storedPlayerName, storePlayerName } from '../online/useOnlineRoom';
@@ -129,10 +130,16 @@ export default function TavernApp({
     const value = typeof next === 'function' ? next(before) : next;
     partyRef.current = value;
     setPartyState(value);
-    // The last ones apart got together (or the others left): the party is where that group was
+    // The last ones apart got together (or the others left): the party is where that group was,
+    // and a fight of that group (if any) is now the party's
     if (isSplit(before) && !isSplit(value)) {
-      const node = groupOf(before, value.members[0]?.id)?.nodeId;
-      if (node) setWorld(w => withCurrentNode(w, node));
+      const last = groupOf(before, value.members[0]?.id);
+      if (last?.nodeId) setWorld(w => withCurrentNode(w, last.nodeId));
+      const fight = last ? encountersRef.current[last.id] : null;
+      if (fight) {
+        setEncounterIn(last.id, null);
+        setEncounterIn('', fight);
+      }
     }
   };
   // The party may be apart (see splitParty.js): each group plays its own scene. The
@@ -153,8 +160,21 @@ export default function TavernApp({
   const [, setAudioTick] = useState(0);
   const isAudioActive = Boolean(tavernAudio.isAmbiencePlaying);
   const [mobileTab, setMobileTab] = useState('story'); // 'story' | 'party' | 'map'
-  const [isGenerating, setIsGenerating] = useState(false);
   const [geminiKeys, setGeminiKeys] = useState(() => getStoredGeminiKeys());
+
+  // Lanes. While the party is apart, each group is a "system" of its own running in
+  // parallel: its call to Duncan, its dice, its fight, its queue online. A lane is a
+  // group's id, or '' for the party together. Within a lane, one thing at a time.
+  //   { [lane]: { generating, rolling, combat } }  (combat: a fight's dice are rolling)
+  const [lanes, setLanes] = useState({});
+  const lanesRef = useRef({});
+  const laneOf = (memberId = partyRef.current.activeId) => sceneIdOf(partyRef.current, memberId) || '';
+  const laneFlag = (lane, flag) => Boolean(lanesRef.current[lane]?.[flag]);
+  const setLaneFlag = (lane, flag, on) => {
+    const next = { ...lanesRef.current, [lane]: { ...lanesRef.current[lane], [flag]: on } };
+    lanesRef.current = next;
+    setLanes(next);
+  };
 
   const [suggestedActions, setSuggestedActions] = useState(() => {
     const camp = storedCampaign();
@@ -173,34 +193,52 @@ export default function TavernApp({
     return [{ sender: 'duncan', text: activeWorld.initialStory, timestamp: 'Inicio de Campaña' }];
   });
   // While the party is apart, every new message belongs to a scene (its group's
-  // chronicle): the scene of the action being narrated, else the one of whoever acts
-  const sceneRef = useRef(undefined);
+  // chronicle). Handlers of a lane write in theirs (`setMessagesIn`, `sayTo`); the
+  // plain ones write in the scene of whoever acts on this screen.
+  const setMessagesIn = (key, next) => setMessagesState(prev => tagNewMessages(prev, typeof next === 'function' ? next(prev) : next, key));
+  const setMessages = next => setMessagesIn(chronicleKeyOf(partyRef.current), next);
   // The online room open now (for handlers that run after a reply)
   const roomRef = useRef(null);
-  const setMessages = next => {
-    const key = sceneRef.current !== undefined ? sceneRef.current : chronicleKeyOf(partyRef.current);
-    setMessagesState(prev => tagNewMessages(prev, typeof next === 'function' ? next(prev) : next, key));
-  };
   // A line for a given scene (the one the spotlight passes to, for example)
   const pushSceneMessage = (key, text) => setMessagesState(prev => [...prev, { sender: 'system', text, timestamp: now(), ...(key ? { groupId: key } : {}) }]);
+  // A line in the chronicle of a member's scene
+  const sayTo = memberId => text => pushSceneMessage(chronicleKeyOf(partyRef.current, memberId), text);
 
   const [summary, setSummary] = useState(() => storedCampaign()?.summary || '');
   const [summaryCoverage, setSummaryCoverage] = useState(() => storedCampaign()?.summaryCoverage || 0);
   const [events, setEvents] = useState(() => storedCampaign()?.events || []);
   const recordEvent = text => setEvents(prev => addEvent(prev, text));
 
-  // Combat encounter in progress (null outside combat); saved with the campaign
-  const [encounter, setEncounter] = useState(() => {
+  // Fights in progress, one per lane (the party's is saved as `encounter`, those of the
+  // groups apart as `encounters`). The ref holds the latest for handlers that wait on dice.
+  const encountersFrom = camp => {
+    const out = { ...(camp?.encounters || {}) };
+    if (camp?.encounter) out[''] = camp.encounter;
+    return out;
+  };
+  const [encounters, setEncountersState] = useState(() => {
     const camp = storedCampaign();
-    return camp ? migrateCampaign(camp).encounter || null : null;
+    return camp ? encountersFrom(migrateCampaign(camp)) : {};
   });
+  const encountersRef = useRef(encounters);
+  const encounterOf = lane => encountersRef.current[lane] || null;
+  const setEncounterIn = (lane, update) => {
+    const prev = encountersRef.current;
+    const value = typeof update === 'function' ? update(prev[lane] || null) : update;
+    const next = { ...prev };
+    if (value) next[lane] = value;
+    else delete next[lane];
+    encountersRef.current = next;
+    setEncountersState(next);
+  };
+  // The lane of a fight (of the scene of those who fight)
+  const laneOfFight = fight => laneOf((fight?.heroIds || []).find(id => membersOf(partyRef.current).some(m => m.id === id)));
   // How each recent fight started (the last MAX_SNAPSHOTS), to replay it in the simulator
   const [combatSnapshots, setCombatSnapshots] = useState(() => normalizeSnapshots(storedCampaign()?.combatSnapshots));
 
   // Shops visited (their stock is kept) and the one open now; saved with the campaign
   const [shops, setShops] = useState(() => normalizeShops(storedCampaign()?.shops));
   const [activeShopKey, setActiveShopKey] = useState(null);
-  const [combatBusy, setCombatBusy] = useState(false);
 
   // A companion who offered to join (by the story), waiting for the player's answer
   const [pendingRecruit, setPendingRecruit] = useState(() => storedCampaign()?.pendingRecruit || null);
@@ -217,9 +255,15 @@ export default function TavernApp({
   };
 
   const [saveStatus, setSaveStatus] = useState('saved'); // 'saved' | 'error' | 'quota'
-  const isRollingCheckRef = useRef(false); // a stat check die is on the table
-  // Online: the player whose queued action is being played (shown in the chronicle)
-  const authorRef = useRef(null);
+  // Online: the player whose queued action is being played in each lane (shown in the chronicle)
+  const authorsRef = useRef({});
+  // What this screen shows: the lane of whoever acts here
+  const viewLane = sceneIdOf(party) || '';
+  const encounter = encounters[viewLane] || null;
+  const isGenerating = Boolean(lanes[viewLane]?.generating);
+  const combatBusy = Boolean(lanes[viewLane]?.combat);
+  // Dice on the table: the 3D dice are shown for the lane on screen, the others roll unseen
+  const diceFor = lane => roll => (lane === (sceneIdOf(partyRef.current) || '') ? animateRoll(roll) : Promise.resolve());
   const [isLevelUpOpen, setIsLevelUpOpen] = useState(false);
 
   // Guards against double-creation under React.StrictMode (effects run twice in dev)
@@ -264,7 +308,8 @@ export default function TavernApp({
       setSummary(camp.summary || '');
       setSummaryCoverage(camp.summaryCoverage || 0);
       setEvents(camp.events || []);
-      setEncounter(camp.encounter || null);
+      encountersRef.current = encountersFrom(camp);
+      setEncountersState(encountersRef.current);
       setCombatSnapshots(normalizeSnapshots(camp.combatSnapshots));
       setShops(normalizeShops(camp.shops));
       setQuests(normalizeQuests(camp.quests));
@@ -275,6 +320,8 @@ export default function TavernApp({
         setSuggestedActions(camp.suggestedActions);
       }
     }
+    // Only when another campaign is loaded
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCampaign]);
 
   // Keep world synced if activeWorld prop changes from modal
@@ -301,7 +348,8 @@ export default function TavernApp({
       summary,
       summaryCoverage,
       events,
-      encounter,
+      encounter: encounters[''] || null,
+      encounters: Object.fromEntries(Object.entries(encounters).filter(([lane]) => lane)),
       shops,
       combatSnapshots,
       quests,
@@ -313,7 +361,7 @@ export default function TavernApp({
     } else {
       setSaveStatus(isQuotaError(getLastSaveError()) ? 'quota' : 'error');
     }
-  }, [messages, party, worldState, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounter, shops, combatSnapshots, quests, pendingRecruit, lastAmbush]);
+  }, [messages, party, worldState, campaignTitle, currentCampaignId, suggestedActions, summary, summaryCoverage, events, encounters, shops, combatSnapshots, quests, pendingRecruit, lastAmbush]);
 
   const toggleSound = () => {
     tavernAudio.toggleTavernAmbience();
@@ -334,8 +382,10 @@ export default function TavernApp({
     playerRoll = null, sheet = character, spellCast = null, rest = null, effectsApplied = false,
     weaponAttack = null, combatResult = null, loot = null, meeting = null
   } = {}) => {
-    if (!actionText || isGenerating) return;
     const actorId = sheet.id;
+    // Each lane narrates one action at a time; other groups' lanes go on in parallel
+    const lane = laneOf(actorId);
+    if (!actionText || laneFlag(lane, 'generating')) return;
     // Only the members of the actor's scene take part (all of them when the party is together)
     const partyFull = partyRef.current;
     const partyNow = scopeParty(partyFull, actorId);
@@ -345,17 +395,20 @@ export default function TavernApp({
     const ownChronicle = chronicleKey(group);
     // The world from this scene's place (it may have just travelled)
     const world = sceneWorld(worldState, partyFull, actorId);
-    sceneRef.current = ownChronicle;
+    // This scene's lines and its fight (another scene may be on screen meanwhile)
+    const pushSystemMessage = text => pushSceneMessage(ownChronicle, text);
+    const setMessages = next => setMessagesIn(ownChronicle, next);
+    const encounter = encounterOf(lane);
 
     // Add the action to messages, with who did it (not for the narration after a fight)
     const playerMessage = {
       sender: 'player', actor: sheet.name, avatar: sheet.avatar, text: actionText, timestamp: now(),
-      ...(authorRef.current ? { by: authorRef.current } : {}), ...(ownChronicle ? { groupId: ownChronicle } : {})
+      ...(authorsRef.current[lane] ? { by: authorsRef.current[lane] } : {}), ...(ownChronicle ? { groupId: ownChronicle } : {})
     };
     const newMsgList = combatResult ? messages : [...messages, playerMessage];
     // (lines just added with functional updates, like the fight's or a rest's, are kept)
     if (!combatResult) setMessages(prev => [...prev, playerMessage]);
-    setIsGenerating(true);
+    setLaneFlag(lane, 'generating', true);
 
     try {
       const currentKeys = getStoredGeminiKeys();
@@ -398,7 +451,10 @@ export default function TavernApp({
         sceneNote: apart || meeting ? sceneNoteFor(partyFull, actorId, worldState, { meeting }) : '',
         meetingHook: askHook,
         meeting,
-        apiKeys: currentKeys,
+        // (prepared: each group may call Duncan with a key of its own, see sceneKeys.js)
+        apiKeys: sceneApiKeys(currentKeys, { sceneId: group?.id || null }),
+        // Several scenes call at once: on the per-minute limit this one waits and tells its players
+        onQuotaWait: apart ? seconds => pushSystemMessage(`⏳ Gemini ha llegado a su límite de peticiones por minuto: Duncan lo intenta de nuevo en ${seconds} s (las demás escenas siguen).`) : null,
         playerRoll,
         spellCast,
         rest,
@@ -588,13 +644,16 @@ export default function TavernApp({
       }
 
       if (fightGroups.length) startEncounter(fightGroups, { byDuncan: true, start: response.combat, actionText, actorId });
-      else if (response.shop && SHOP_TYPES[response.shop]) handleOpenShop(response.shop, { byDuncan: true });
+      else if (response.shop && SHOP_TYPES[response.shop]) {
+        // The shop window opens on this screen only for the scene on it
+        if (lane === laneOf()) handleOpenShop(response.shop, { byDuncan: true });
+        else pushSystemMessage(`🛒 Aquí hay ${SHOP_TYPES[response.shop].name.toLowerCase()}: las compras las hace el anfitrión desde esta escena.`);
+      }
       else if (sceneNow && !combatResult) passSpotlight(sceneNow);
     } catch (err) {
       console.error(err);
     } finally {
-      sceneRef.current = undefined;
-      setIsGenerating(false);
+      setLaneFlag(lane, 'generating', false);
     }
   };
 
@@ -619,8 +678,8 @@ export default function TavernApp({
     setPendingRecruit(null);
     // The companion joins the group of whoever met them, wherever it is
     const withId = membersOf(partyRef.current).some(m => m.id === offer.withId) ? offer.withId : partyRef.current.activeId;
-    sceneRef.current = chronicleKeyOf(partyRef.current, withId);
-    try {
+    const pushSystemMessage = sayTo(withId);
+    {
       if (!accept) {
         recordEvent(`El grupo rechaza la compañía de ${offer.character.name}`);
         pushSystemMessage(`🙅 ${offer.character.name} no se une al grupo.`);
@@ -634,8 +693,6 @@ export default function TavernApp({
       setSceneParty(withId, res.party);
       recordEvent(`${res.member.name} (${res.member.className}) se une al grupo`);
       pushSystemMessage(`🤝 ${res.member.name} se une al grupo: ${res.member.race} · ${res.member.className} de nivel ${res.member.level}, con su equipo inicial. Selecciónalo en la ficha para verlo o hacerlo actuar.`);
-    } finally {
-      sceneRef.current = undefined;
     }
   };
 
@@ -665,11 +722,13 @@ export default function TavernApp({
     return null;
   };
 
-  // Choosing someone of another scene switches to that scene (not while Duncan narrates or in a fight)
+  // Choosing someone of another scene switches to that scene. Alone, not while Duncan
+  // narrates or in a fight (one scene at a time, the focus passes); online the scenes
+  // run in parallel, so the host may look at any of theirs.
   const handleSelectMember = id => {
     const p = partyRef.current;
     if (sceneIdOf(p, id) !== sceneIdOf(p)) {
-      if (isGenerating || encounter) return;
+      if (!roomRef.current && (isGenerating || encounter)) return;
       setActiveShopKey(null);
     }
     setParty(prev => setActiveMember(prev, id));
@@ -681,8 +740,15 @@ export default function TavernApp({
   // `start`: how the fight starts (see readCombatStart in surprise.js): `surprise` (who is
   // caught off guard) and `heroAttacks` (the action of `actorId` was an attack: the opening strike)
   const startEncounter = (groups, { byDuncan = false, start = null, actionText = '', actorId = null } = {}) => {
-    // Only those who are there fight (the whole party when it is together)
-    const heroes = memberSheets(sceneParty(actorId || partyRef.current.activeId));
+    // Only those who are there fight (the whole party when it is together): the fight is
+    // of their lane, with its own initiative, view and resolution
+    const who0 = actorId || partyRef.current.activeId;
+    const lane = laneOf(who0);
+    const onScreen = lane === laneOf();
+    const pushSystemMessage = sayTo(who0);
+    const setEncounter = update => setEncounterIn(lane, update);
+    const world = sceneWorld(worldState, partyRef.current, who0);
+    const heroes = memberSheets(sceneParty(who0));
     const surprise = start?.surprise || null;
     // How the fight starts (the whole party), kept so it can be fought again in the simulator
     const snapshot = makeSnapshot({ party: heroes, groups, world, place: currentNode(world)?.name || '', byDuncan, surprise: surprise?.side || null });
@@ -714,14 +780,14 @@ export default function TavernApp({
     }).join(', ');
     const who = heroes.length > 1 ? 'El grupo' : heroes[0].name;
     pushSystemMessage(`⚔️ ¡Combate! ${who} se enfrenta a: ${names}.`);
-    setActiveShopKey(null);
+    if (onScreen) setActiveShopKey(null);
     setEncounter(next);
     setParty(p => {
       const merged = mergeHeroes(p, after.heroes);
       const turn = currentHeroUid(next);
-      return turn ? setActiveMember(merged, turn) : merged;
+      return turn && followsTurns() ? setActiveMember(merged, turn) : merged;
     });
-    setMobileTab('story');
+    if (onScreen) setMobileTab('story');
     // Everything about the opening strike is clear: the game rolls it now
     if (openingPending(next) && openingReady(next.opening)) playCombatAction(next, next.opening.suggest);
   };
@@ -730,6 +796,10 @@ export default function TavernApp({
   // what happened, and Duncan narrates it from the result (never his own numbers)
   const afterOpening = (before, after, heroes) => {
     if (!openingPending(before) || openingPending(after)) return after;
+    const lane = laneOfFight(after);
+    const pushSystemMessage = sayTo(heroes[0]?.id);
+    const setEncounter = update => setEncounterIn(lane, update);
+    const world = sceneWorld(worldState, partyRef.current, heroes[0]?.id);
     const fact = describeSurprise(after, heroes);
     if (fact) recordEvent(fact.replace(/\.$/, ''));
     const result = after.opening?.result;
@@ -750,6 +820,9 @@ export default function TavernApp({
   // at most MAX_MOMENTS times per fight. The fight never waits for it.
   const narrateKeyMoments = (before, after, hero) => {
     if (after.status !== 'active' || (after.narrated || 0) >= MAX_MOMENTS) return after;
+    const lane = laneOfFight(after);
+    const setEncounter = update => setEncounterIn(lane, update);
+    const world = sceneWorld(worldState, partyRef.current, hero?.id);
     const moments = keyMoments(after.log.slice(before.log.length));
     const key = getStoredGeminiKeys()[0]?.key;
     if (!moments.length || !key) return after;
@@ -771,8 +844,16 @@ export default function TavernApp({
     await playCombatAction(encounter, action);
   };
 
+  // Alone (or together), the acting member follows the turns of the fight; online with
+  // the party apart, each fight runs on its own and the host keeps their own character
+  const followsTurns = () => !roomRef.current || !isSplit(partyRef.current);
+
   // Play an action on this encounter (the one in state, or one just started)
   const playCombatAction = async (encounter, action) => {
+    const lane = laneOfFight(encounter);
+    if (laneFlag(lane, 'combat')) return;
+    const setEncounter = update => setEncounterIn(lane, update);
+    const animateRoll = diceFor(lane);
     const heroes = memberSheets(sceneParty(encounter.heroIds?.[0]));
     const result = playerAction(encounter, heroes, action, combatDie);
     if (!result.ok) {
@@ -783,7 +864,7 @@ export default function TavernApp({
     if (result.encounter.status !== 'active' && encounter.snapshotId) {
       setCombatSnapshots(prev => setSnapshotResult(prev, encounter.snapshotId, result.encounter));
     }
-    setCombatBusy(true);
+    setLaneFlag(lane, 'combat', true);
     try {
       for (const roll of result.animations) {
         await animateRoll(roll);
@@ -793,15 +874,21 @@ export default function TavernApp({
       setParty(p => {
         const merged = mergeHeroes(p, result.heroes);
         const turn = currentHeroUid(result.encounter);
-        return turn ? setActiveMember(merged, turn) : merged;
+        return turn && followsTurns() ? setActiveMember(merged, turn) : merged;
       });
-      setCombatBusy(false);
+      setLaneFlag(lane, 'combat', false);
     }
   };
 
   // Close a finished fight: chronicle line, shared XP, loot, recorded facts, rescue if everyone fell
-  const handleFinishEncounter = () => {
+  // (`fight`: the one on screen, or that of another lane, closed by its players online)
+  const handleFinishEncounter = (fight = encounter) => {
+    const encounter = fight;
     if (!encounter || encounter.status === 'active') return;
+    const lane = laneOfFight(encounter);
+    if (laneFlag(lane, 'generating')) return;
+    const pushSystemMessage = sayTo(encounter.heroIds?.[0]);
+    const world = sceneWorld(worldState, partyRef.current, encounter.heroIds?.[0]);
     const loot = generateLoot(encounter);
     const won = encounter.status === 'victory';
     // The fight was of one scene: its purse, its members
@@ -852,30 +939,46 @@ export default function TavernApp({
       pushSystemMessage(`💀 Cae ${who}. Maese Duncan ${group ? 'los arrastra' : 'lo arrastra'} junto a la chimenea y ${group ? 'los remienda' : 'lo remienda'}: ${group ? 'despiertan' : 'despierta'} con la mitad de sus PG${result.rescue.goldLost > 0 ? ` y ${result.rescue.goldLost} monedas de oro menos en la bolsa por los cuidados` : ''}.`);
     }
     setSceneParty(fighterId, next);
-    setEncounter(null);
+    setEncounterIn(lane, null);
     // Duncan narrates the outcome (and any loot) from the result the game computed
     handleSendAction('Narra el final del combate', { sheet: activeSheet(next), combatResult: `${line}${questLine}`, loot: won ? loot : null });
   };
 
   // Paralyzed, stunned, petrified...: no attacks or spells outside a fight either
-  const blockedByConditions = () => {
+  const blockedByConditions = (character, pushSystemMessage) => {
     if (!isIncapacitated(character)) return false;
     const why = ['petrificado', 'paralizado', 'aturdido', 'incapacitado'].find(id => activeIds(character).has(id));
     pushSystemMessage(`⛔ ${character.name} está ${conditionName(why || 'incapacitado').toLowerCase()} y no puede actuar.`);
     return true;
   };
 
+  // The pieces a sheet action needs for the member who acts (`actorId`, from this screen
+  // or from the online queue): their sheet with their scene's purse, their lane, their
+  // scene's chronicle and dice. Several lanes may roll at once.
+  const actorTools = actorId => {
+    const lane = laneOf(actorId);
+    return {
+      lane,
+      character: memberSheet(sceneParty(actorId), actorId),
+      setCharacter: update => updateMemberState(actorId, update),
+      pushSystemMessage: sayTo(actorId),
+      animateRoll: diceFor(lane),
+      busy: () => laneFlag(lane, 'generating') || laneFlag(lane, 'rolling') || Boolean(encounterOf(lane))
+    };
+  };
+
   // Weapon attack resolved by the game: Duncan only narrates the result
-  const handleAttack = async ({ optionId, target = '', targetAC, raging = false }) => {
-    if (isGenerating || isRollingCheckRef.current) return;
-    if (blockedByConditions()) return;
+  const handleAttack = async ({ optionId, target = '', targetAC, raging = false }, actorId = character.id) => {
+    const { lane, character, pushSystemMessage, animateRoll, busy } = actorTools(actorId);
+    if (!character || busy()) return;
+    if (blockedByConditions(character, pushSystemMessage)) return;
     const result = resolveAttack(character, optionId, sides => rollDie(sides, { silent: true }), { targetAC, raging });
     if (!result.ok) {
       pushSystemMessage(`⚔️ ${result.error}`);
       return;
     }
 
-    isRollingCheckRef.current = true;
+    setLaneFlag(lane, 'rolling', true);
     try {
       const { attack } = result;
       const label = attack.option.name;
@@ -899,10 +1002,11 @@ export default function TavernApp({
         await animateRoll({ dice: damageDice, modifier: attack.totalDamage - diceTotal, label: `${label} · daño` });
       }
 
-      setMobileTab('story');
-      handleSendAction(describeAttack(attack, target), { weaponAttack: attack });
+      if (lane === laneOf()) setMobileTab('story');
+      setLaneFlag(lane, 'rolling', false);
+      handleSendAction(describeAttack(attack, target), { sheet: character, weaponAttack: attack });
     } finally {
-      isRollingCheckRef.current = false;
+      setLaneFlag(lane, 'rolling', false);
     }
   };
 
@@ -914,9 +1018,10 @@ export default function TavernApp({
 
   // When rolling an ability or skill check from the character sheet
   // `ability` / `skillId`: the armor may give Disadvantage (no training, or Stealth in heavy armor)
-  const handleRollCheck = async ({ label, modifier, ability = null, skillId = null }) => {
-    if (isGenerating || isRollingCheckRef.current) return;
-    isRollingCheckRef.current = true;
+  const handleRollCheck = async ({ label, modifier, ability = null, skillId = null }, actorId = character.id) => {
+    const { lane, character, animateRoll, busy } = actorTools(actorId);
+    if (!character || busy()) return;
+    setLaneFlag(lane, 'rolling', true);
 
     try {
       // Armor without training, poisoned, frightened, exhausted... (see checkModifiers)
@@ -942,17 +1047,19 @@ export default function TavernApp({
 
       const tired = mods.penalty ? ` (agotamiento: −${mods.penalty})` : '';
       const textDesc = `Realizo una tirada de ${label}${disadvantage ? ` con desventaja (${disadvantage})` : advantage ? ` con ventaja (${advantage})` : ''}${tired} [🎲 D20: ${check.rawRoll} (${check.modifier >= 0 ? `+${check.modifier}` : check.modifier}) = ${check.total} vs CD ${check.dc}].`;
-      handleSendAction(textDesc, { playerRoll: check });
+      setLaneFlag(lane, 'rolling', false);
+      handleSendAction(textDesc, { sheet: character, playerRoll: check });
     } finally {
-      isRollingCheckRef.current = false;
+      setLaneFlag(lane, 'rolling', false);
     }
   };
 
   // Casting a spell from the sheet: roll its dice, spend the slot and tell the Dungeon Master.
   // A healing spell whose target is a member of the party heals that member.
-  const handleCastSpell = async (spellId, target = '') => {
-    if (isGenerating || isRollingCheckRef.current) return;
-    if (blockedByConditions()) return;
+  const handleCastSpell = async (spellId, target = '', actorId = character.id) => {
+    const { lane, character, setCharacter, pushSystemMessage, animateRoll, busy } = actorTools(actorId);
+    if (!character || busy()) return;
+    if (blockedByConditions(character, pushSystemMessage)) return;
 
     const result = castSpell(character, spellId, sides => rollDie(sides, { silent: true }));
     if (!result.ok) {
@@ -960,7 +1067,7 @@ export default function TavernApp({
       return;
     }
 
-    isRollingCheckRef.current = true;
+    setLaneFlag(lane, 'rolling', true);
     try {
       const { cast } = result;
       const { spell } = cast;
@@ -1002,7 +1109,8 @@ export default function TavernApp({
         setCharacter(sheet);
       }
       if (cast.cured?.length) pushSystemMessage(`✨ ${character.name} se libra de: ${cast.cured.join(', ')}.`);
-      setMobileTab('story');
+      if (lane === laneOf()) setMobileTab('story');
+      setLaneFlag(lane, 'rolling', false);
       handleSendAction(describeCast(castForDuncan, { target, dc: SPELL_ATTACK_DC }), {
         sheet,
         playerRoll,
@@ -1010,7 +1118,7 @@ export default function TavernApp({
         effectsApplied: Boolean(cast.heal)
       });
     } finally {
-      isRollingCheckRef.current = false;
+      setLaneFlag(lane, 'rolling', false);
     }
   };
 
@@ -1024,7 +1132,7 @@ export default function TavernApp({
 
   // Short rest (an hour by the fire) or long rest (a night, a room each): the whole party rests
   const handleRest = (kind) => {
-    if (isGenerating || isRollingCheckRef.current) return;
+    if (isGenerating || laneFlag(viewLane, 'rolling')) return;
     // Only those who are here rest (their scene's purse pays the rooms)
     const result = restParty(sceneParty(), kind, sides => rollDie(sides, { silent: true }));
     if (!result.ok) {
@@ -1110,16 +1218,17 @@ export default function TavernApp({
 
   // Using a consumable from the sheet (outside combat): potions roll their healing,
   // anything else is told to Duncan
-  const handleUseItem = async (item) => {
-    if (isGenerating || isRollingCheckRef.current) return;
+  const handleUseItem = async (item, actorId = character.id) => {
+    const { lane, character, setCharacter, pushSystemMessage, animateRoll, busy } = actorTools(actorId);
+    if (!character || busy()) return;
     if (healingDice(item)) {
       const result = drinkPotion(character, item.id, sides => rollDie(sides, { silent: true }));
       if (!result.ok) { pushSystemMessage(`🧪 ${result.error}`); return; }
-      isRollingCheckRef.current = true;
+      setLaneFlag(lane, 'rolling', true);
       try {
         await animateRoll({ dice: result.roll.dice.map(value => ({ sides: result.roll.sides, value })), modifier: result.roll.bonus, label: `${item.name} · curación` });
       } finally {
-        isRollingCheckRef.current = false;
+        setLaneFlag(lane, 'rolling', false);
       }
       setCharacter(result.character);
       pushSystemMessage(`🧪 ${character.name} bebe ${item.name} y recupera ${result.healed} puntos de golpe (${result.character.hp}/${result.character.maxHp}).`);
@@ -1151,13 +1260,21 @@ export default function TavernApp({
   };
 
   // When traveling to another node on the world map
-  const handleTravelToNode = (node) => {
+  const handleTravelToNode = (node, actorId = partyRef.current.activeId) => {
     // Apart: only this scene's group travels; arriving where another group is, they meet
     const p = partyRef.current;
     if (isSplit(p)) {
-      if (isGenerating || encounter) return;
-      const moving = groupOf(p, p.activeId);
+      const lane = laneOf(actorId);
+      if (laneFlag(lane, 'generating') || laneFlag(lane, 'rolling') || encounterOf(lane)) return;
+      const moving = groupOf(p, actorId);
       if (!moving || moving.nodeId === node.id) return;
+      const pushSystemMessage = sayTo(actorId);
+      // A fight going on there: they meet once it is over
+      const busyThere = groupsOf(p).find(g => g.id !== moving.id && g.nodeId === node.id && (encounterOf(g.id) || laneFlag(g.id, 'generating')));
+      if (busyThere) {
+        pushSystemMessage(`🗺️ En ${node.name} ${encounterOf(busyThere.id) ? 'hay un combate en marcha' : 'está pasando algo ahora mismo'}: espera un momento antes de llegar.`);
+        return;
+      }
       const names = groupNames(p, moving);
       const many = moving.memberIds.length > 1;
       const placeOf = id => worldState.mapNodes?.find(n => n.id === id)?.name || '';
@@ -1226,17 +1343,25 @@ export default function TavernApp({
   roomRef.current = room;
   const [isRoomOpen, setIsRoomOpen] = useState(false);
   const [onlineNotice, setOnlineNotice] = useState(null);
-  const [queueRunning, setQueueRunning] = useState(false);
   const [chatSeen, setChatSeen] = useState(0);
   const turnUid = inCombat ? currentHeroUid(encounter) : null;
   const heroIds = heroes.map(h => h.id);
 
+  // Each character's lane: its fight, whose turn it is there, its dice (see protocol.js)
+  const laneState = characterId => {
+    const l = sceneIdOf(party, characterId) || '';
+    const fight = encounters[l] || null;
+    const active = Boolean(fight && fight.status === 'active');
+    return { inCombat: active, turnCharacterId: active ? currentHeroUid(fight) : null, combatBusy: Boolean(lanes[l]?.combat), finished: Boolean(fight && !active) };
+  };
   gameRef.current = {
     characterIds: heroIds,
     names: Object.fromEntries(heroes.map(h => [h.id, h.name])),
-    inCombat,
-    turnCharacterId: turnUid,
-    combatBusy,
+    // (the party's fight; with the party apart, each character's in `sceneOf`)
+    inCombat: Boolean(encounters['']?.status === 'active'),
+    turnCharacterId: encounters['']?.status === 'active' ? currentHeroUid(encounters['']) : null,
+    combatBusy: Boolean(lanes['']?.combat),
+    sceneOf: laneState,
     // Apart, each player moves their own group on the map (together, the host decides the travels)
     apart: isSplit(party),
     nodeIds: (worldState.mapNodes || []).filter(n => n.status !== 'locked').map(n => n.id),
@@ -1244,9 +1369,10 @@ export default function TavernApp({
       ? worldState.mapNodes?.find(n => n.id === payload.nodeId)?.name || ''
       : labelFor(kind, payload, heroes.find(h => h.id === characterId)))
   };
-  // A combat action from a player whose turn it is (already checked by the room)
+  // A combat action from a player whose turn it is in their lane's fight (already checked by the room)
   combatIntentRef.current = (characterId, action) => {
-    if (encounter && currentHeroUid(encounter) === characterId) handleCombatAction(action);
+    const fight = encounterOf(laneOf(characterId));
+    if (fight && fight.status === 'active' && currentHeroUid(fight) === characterId) playCombatAction(fight, action);
   };
 
   // A player changes the equipment of their own character, or levels it up (already
@@ -1254,6 +1380,12 @@ export default function TavernApp({
   directIntentRef.current = (direct, playerId) => {
     if (direct.kind === 'create') {
       addPlayerHero(direct.draft, playerId, direct.zoneId);
+      return;
+    }
+    // A finished fight of their group, closed by one of its players
+    if (direct.kind === 'finish') {
+      const fight = encounterOf(laneOf(direct.characterId));
+      if (fight && fight.status !== 'active') handleFinishEncounter(fight);
       return;
     }
     const sheet = memberSheet(partyRef.current, direct.characterId);
@@ -1352,12 +1484,14 @@ export default function TavernApp({
   useEffect(() => {
     if (!roomIsOpen) return;
     online.publish(buildSections({
-      title: campaignTitle, world: worldState, party, messages, suggestedActions, encounter, quests, events, summary,
-      isGenerating: isGenerating || queueRunning, combatBusy, pendingRecruit, aiActive: geminiKeys.length > 0
+      title: campaignTitle, world: worldState, party, messages, suggestedActions, encounter: encounters[''] || null,
+      encounters: Object.fromEntries(Object.entries(encounters).filter(([l]) => l)),
+      lanes, isGenerating: Boolean(lanes['']?.generating), combatBusy: Boolean(lanes['']?.combat),
+      pendingRecruit, aiActive: geminiKeys.length > 0
     }));
     // `online.publish` is stable; the room itself is added by the session
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomIsOpen, campaignTitle, worldState, party, messages, suggestedActions, encounter, quests, events, summary, isGenerating, queueRunning, combatBusy, pendingRecruit, geminiKeys.length]);
+  }, [roomIsOpen, campaignTitle, worldState, party, messages, suggestedActions, encounters, quests, events, summary, lanes, pendingRecruit, geminiKeys.length]);
 
   // Each member records who plays it (`controlledBy`): a player id, or the local one for the host
   const ownersKey = room ? heroIds.map(id => `${id}:${ownerOf(room, id)}`).join('|') : `off:${heroIds.join('|')}`;
@@ -1393,30 +1527,31 @@ export default function TavernApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presenceKey]);
 
-  // Play a queued action with the usual handlers (the acting member was selected first)
+  // Play a queued action with the usual handlers, for the character who acts (in their lane)
   const runQueued = ({ kind, payload, characterId }) => {
-    const sheet = memberSheet(partyRef.current, characterId);
-    if (kind === 'text') return handleSendAction(payload.text);
+    const sheet = memberSheet(sceneParty(characterId), characterId);
+    const say = sayTo(characterId);
+    if (kind === 'text') return handleSendAction(payload.text, { sheet });
     if (kind === 'check') {
       if (payload.skillId) {
         const skill = getSkill(payload.skillId);
-        return skill ? handleRollCheck({ label: skill.name, modifier: skillModifier(sheet, skill.id), ability: skill.ability, skillId: skill.id }) : null;
+        return skill ? handleRollCheck({ label: skill.name, modifier: skillModifier(sheet, skill.id), ability: skill.ability, skillId: skill.id }, characterId) : null;
       }
-      return handleRollCheck({ label: ABILITY_NAMES[payload.ability], modifier: getModifierNumber(sheet.stats?.[payload.ability] ?? 10), ability: payload.ability });
+      return handleRollCheck({ label: ABILITY_NAMES[payload.ability], modifier: getModifierNumber(sheet.stats?.[payload.ability] ?? 10), ability: payload.ability }, characterId);
     }
-    if (kind === 'attack') return handleAttack({ optionId: payload.optionId, target: payload.target, targetAC: payload.targetAC || undefined, raging: payload.raging });
+    if (kind === 'attack') return handleAttack({ optionId: payload.optionId, target: payload.target, targetAC: payload.targetAC || undefined, raging: payload.raging }, characterId);
     if (kind === 'travel') {
       const node = worldState.mapNodes?.find(n => n.id === payload.nodeId && n.status !== 'locked');
-      return node ? handleTravelToNode(node) : pushSystemMessage('🗺️ Ese lugar ya no está en el mapa.');
+      return node ? handleTravelToNode(node, characterId) : say('🗺️ Ese lugar ya no está en el mapa.');
     }
-    if (kind === 'spell') return handleCastSpell(payload.spellId, payload.target);
+    if (kind === 'spell') return handleCastSpell(payload.spellId, payload.target, characterId);
     const item = (sheet.inventory || []).find(i => i.id === payload.itemId);
-    if (!item) return pushSystemMessage(`🎒 ${sheet.name} ya no tiene ese objeto.`);
-    return handleUseItem(item);
+    if (!item) return say(`🎒 ${sheet.name} ya no tiene ese objeto.`);
+    return handleUseItem(item, characterId);
   };
 
-  // The member the host chose on screen: the queue selects whoever acts, and once it is
-  // empty the host gets their own character back (a party apart: their own scene)
+  // The member the host chose on screen: a fight's turns may select whoever acts, and
+  // once the table is quiet the host gets their own character back
   const hostPickRef = useRef(null);
   const chooseMember = id => {
     hostPickRef.current = id;
@@ -1425,43 +1560,46 @@ export default function TavernApp({
   const queueEmpty = !room || room.queue.length === 0;
   useEffect(() => {
     const back = hostPickRef.current || heroes.find(h => room && canControl(room, room.hostId, h.id))?.id;
-    if (!room || !queueEmpty || queueRunning || isGenerating || encounter || !back || party.activeId === back) return;
+    if (!room || !queueEmpty || isGenerating || encounter || !back || party.activeId === back) return;
     if (!membersOf(party).some(m => m.id === back) || canControl(room, room.hostId, party.activeId)) return;
     if (canControl(room, room.hostId, back)) setParty(p => setActiveMember(p, back));
     // Only when the table goes quiet
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queueEmpty, queueRunning, isGenerating, encounter, party.activeId]);
+  }, [queueEmpty, isGenerating, encounter, party.activeId]);
 
-  // The queue: one action at a time, when Duncan is free (paused during a fight)
-  // Apart, the queue alternates between the groups (see nextQueued in splitParty.js)
-  const lastSceneRef = useRef(null);
-  const queueHead = room ? nextQueued(room.queue, party, lastSceneRef.current) : null;
+  // The queue, one per lane (see laneQueue in splitParty.js): in each group one action at a
+  // time, when its Duncan is free and it is not fighting; the groups apart run in parallel
+  // (the host calls Duncan for several scenes at once). Together, a single lane as always.
+  const runningRef = useRef(new Set()); // lanes playing a queued action now
+  const startedRef = useRef(new Set()); // queued actions already taken (the room updates later)
+  const [queueTick, setQueueTick] = useState(0);
+  const queueKey = room ? room.queue.map(q => q.id).join('|') : '';
   useEffect(() => {
-    if (!room || !queueHead || queueRunning || isGenerating || combatBusy || encounter || isRollingCheckRef.current) return;
-    const check = stillValid(room, gameRef.current, queueHead);
-    if (!check.ok) {
-      online.update(r => dequeueAction(r, queueHead.id));
-      tell(queueHead.playerId, `Se descarta «${queueHead.label}»: ${check.error}.`);
-      return;
-    }
-    if (partyRef.current.activeId !== queueHead.characterId) {
-      handleSelectMember(queueHead.characterId);
-      return;
-    }
-    online.update(r => dequeueAction(r, queueHead.id));
-    setQueueRunning(true);
-    lastSceneRef.current = sceneIdOf(partyRef.current, queueHead.characterId);
-    authorRef.current = playerName(room, queueHead.playerId);
-    Promise.resolve()
-      .then(() => runQueued(queueHead))
-      .catch(err => console.error(err))
-      .finally(() => {
-        authorRef.current = null;
-        setQueueRunning(false);
-      });
+    if (!room) return;
+    const busyLane = l => runningRef.current.has(l) || laneFlag(l, 'generating') || laneFlag(l, 'rolling') || laneFlag(l, 'combat') || Boolean(encounterOf(l));
+    laneQueue(room.queue.filter(q => !startedRef.current.has(q.id)), partyRef.current, busyLane).forEach(item => {
+      startedRef.current.add(item.id);
+      online.update(r => dequeueAction(r, item.id));
+      const check = stillValid(room, gameRef.current, item);
+      if (!check.ok) {
+        tell(item.playerId, `Se descarta «${item.label}»: ${check.error}.`);
+        return;
+      }
+      const lane = laneOf(item.characterId);
+      runningRef.current.add(lane);
+      authorsRef.current[lane] = playerName(room, item.playerId);
+      Promise.resolve()
+        .then(() => runQueued(item))
+        .catch(err => console.error(err))
+        .finally(() => {
+          delete authorsRef.current[lane];
+          runningRef.current.delete(lane);
+          setQueueTick(t => t + 1);
+        });
+    });
     // The handlers read the latest state from this render
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queueHead?.id, roomIsOpen, queueRunning, isGenerating, combatBusy, encounter, party.activeId]);
+  }, [queueKey, roomIsOpen, lanes, encounters, queueTick, party]);
 
   // In a room, the host's own actions also go through the room (checks and queue)
   const submit = intent => {
@@ -1497,7 +1635,7 @@ export default function TavernApp({
   const turnPlayer = room && turnUid && controllerOf(room, turnUid) !== room.hostId ? playerName(room, controllerOf(room, turnUid)) : null;
   const storyNotice = !room ? null
     : !canControl(room, room.hostId, character.id) ? `${character.name} lo juega ${playerName(room, controllerOf(room, character.id))}: elige a uno de los tuyos para actuar.`
-      : isGenerating || queueRunning ? 'Duncan está respondiendo: lo que escribas esperará en la cola de la sala.' : null;
+      : isGenerating ? 'Duncan está respondiendo: lo que escribas esperará en la cola de la sala.' : null;
   const hostOps = room ? {
     assign: (characterId, playerId) => online.update(r => (playerId
       ? claimCharacter(r, playerId, characterId, heroIds, { byHost: true })
@@ -1655,7 +1793,7 @@ export default function TavernApp({
                 encounter={encounter}
                 heroes={sceneHeroes}
                 onAction={act.combat}
-                onFinish={handleFinishEncounter}
+                onFinish={() => handleFinishEncounter()}
                 busy={combatBusy}
                 waitingFor={turnPlayer}
                 endActions={encounter.snapshotId && combatSnapshots.some(s => s.id === encounter.snapshotId) ? (

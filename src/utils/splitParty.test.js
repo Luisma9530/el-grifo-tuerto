@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createParty, normalizeParty, removeMember, addMember, memberSheet } from './party';
 import { restParty, applySceneEffects, finishFight } from './partyActions';
 import {
-  startApart, isSplit, groupOf, scopeParty, unscopeParty, inScope, moveGroup, countSceneTurn, nextQueued,
+  startApart, isSplit, groupOf, scopeParty, unscopeParty, inScope, moveGroup, countSceneTurn, laneQueue,
   sceneWorld, sceneMessages, tagNewMessages, readablePrologues, visibleScenes, placeNewMember, setHook,
   normalizeSplit, SCENE_TURNS, sceneIdOf, chronicleKeyOf
 } from './splitParty';
@@ -146,14 +146,15 @@ describe('turnos entre escenas', () => {
     expect(groupOf(res.party, 'a').turns).toBe(SCENE_TURNS);
   });
 
-  it('la cola online alterna entre grupos', () => {
+  it('online, cada grupo tiene su propia cola: una acción por grupo a la vez, en paralelo', () => {
     const party = apart();
     const ga = groupOf(party, 'a').id;
-    const queue = [{ id: 1, characterId: 'a' }, { id: 2, characterId: 'a' }, { id: 3, characterId: 'c' }];
-    expect(nextQueued(queue, party, null).id).toBe(1);
-    expect(nextQueued(queue, party, ga).id).toBe(3);
-    expect(nextQueued([{ id: 1, characterId: 'a' }], party, ga).id).toBe(1);
-    expect(nextQueued(queue, createParty([hero('a', 'Ana')]), ga).id).toBe(1);
+    const queue = [{ id: 1, characterId: 'a' }, { id: 2, characterId: 'a' }, { id: 3, characterId: 'c' }, { id: 4, characterId: 'b' }];
+    expect(laneQueue(queue, party).map(q => q.id)).toEqual([1, 3]);
+    // un grupo ocupado (Duncan narrando, combate...) no frena a los demás
+    expect(laneQueue(queue, party, lane => lane === ga).map(q => q.id)).toEqual([3]);
+    // juntos, un solo carril como siempre
+    expect(laneQueue(queue, createParty([hero('a', 'Ana'), hero('c', 'Cira')])).map(q => q.id)).toEqual([1]);
   });
 });
 

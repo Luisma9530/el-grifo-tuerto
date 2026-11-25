@@ -101,7 +101,10 @@ export async function requestGemini(key, { prompt, generationConfig }) {
 
       const error = data.error?.message || `Código HTTP ${status}`;
       const reason = classifyGeminiError(status, error);
-      failure = { status, reason, error };
+      // How long Google asks to wait (RetryInfo, "21s"), for the per-minute limit
+      const delay = (data.error?.details || []).find(d => typeof d?.retryDelay === 'string')?.retryDelay;
+      const retryAfterMs = delay && /^\d+(\.\d+)?s$/.test(delay) ? Math.round(parseFloat(delay) * 1000) : 0;
+      failure = { status, reason, error, ...(retryAfterMs ? { retryAfterMs } : {}) };
       // The key or the request itself is the problem: another model won't fix it
       if (reason === 'key' || reason === 'bad-request') return { ok: false, ...failure };
       if (reason === 'overloaded' || reason === 'network') sawTransient = true;

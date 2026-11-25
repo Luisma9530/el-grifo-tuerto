@@ -70,11 +70,21 @@ export function migrateCampaign(campaign) {
       renamed.members.map(m => m.id)
     )
     : campaign.encounter;
+  // Fights of the groups of a party apart (one per group), checked the same way
+  const encounters = campaign.encounters && typeof campaign.encounters === 'object'
+    ? Object.fromEntries(Object.entries(campaign.encounters)
+      .filter(([lane, fight]) => lane && fight && Array.isArray(fight.enemies))
+      .map(([lane, fight]) => [lane, normalizeEncounter(
+        { ...fight, enemies: fight.enemies.map(e => ({ ...e, conditions: normalizeConditions(e?.conditions) })) },
+        renamed.members.map(m => m.id)
+      )]))
+    : undefined;
   return {
     ...campaign,
     party: renamed,
     character: memberSheet(renamed, renamed.members[0].id),
     encounter,
+    ...(encounters ? { encounters } : {}),
     shops: normalizeShops(campaign.shops),
     combatSnapshots: normalizeSnapshots(campaign.combatSnapshots),
     quests: normalizeQuests(campaign.quests)

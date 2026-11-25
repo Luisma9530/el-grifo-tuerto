@@ -55,10 +55,15 @@ export default function GuestTable({ code, name, kind, onLeave }) {
   const heroes = useMemo(() => (view.party ? memberSheets(view.party) : []), [view.party]);
   const mine = shared ? heroes.filter(h => canControl(shared, playerId, h.id)) : [];
   const character = heroes.find(h => h.id === selectedId) || mine[0] || heroes[0] || null;
-  const encounter = view.encounter || null;
+  const meta = view.meta || {};
+  // With the party apart each group is a system of its own: its fight, its Duncan
+  const lane = view.party && character ? sceneIdOf(view.party, character.id) || '' : '';
+  const encounter = (lane ? view.encounters?.[lane] : view.encounter) || null;
+  const laneNow = lane ? meta.lanes?.[lane] || {} : { generating: meta.isGenerating, combat: meta.combatBusy };
   const inCombat = Boolean(encounter && encounter.status === 'active');
   const turnUid = inCombat ? currentHeroUid(encounter) : null;
-  const meta = view.meta || {};
+  // A finished fight of their group: its players close it (the host may be watching another scene)
+  const finisher = lane && encounter ? mine.find(h => (encounter.heroIds || []).includes(h.id)) : null;
 
   // New chat lines: seen while the chat is on screen (a phone on its tab; a computer
   // with the column open, which in a fight means the rail opened)
@@ -155,7 +160,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
       ? 'Aún no juegas con ningún personaje: crea el tuyo («Crear mi personaje») o elige uno libre en la pestaña «Sala».'
       : 'Aún no juegas con ningún personaje: el grupo está completo, así que elige uno libre en la pestaña «Sala» o espera a la votación.')
     : !mayAct ? `${character.name} lo juega ${playerName(shared, controllerOf(shared, character.id))}: elige a uno de los tuyos para actuar.`
-      : meta.isGenerating ? 'Duncan está respondiendo: lo que escribas esperará en la cola de la sala.' : null;
+      : laneNow.generating ? 'Duncan está respondiendo: lo que escribas esperará en la cola de la sala.' : null;
   const tabClass = on => `flex-1 py-2 text-center border-b-2 ${on ? 'border-amber-500 text-amber-300 bg-amber-500/10' : 'border-transparent text-stone-400'}`;
 
   return (
@@ -217,16 +222,16 @@ export default function GuestTable({ code, name, kind, onLeave }) {
                 encounter={encounter}
                 heroes={sceneHeroes}
                 onAction={action => send({ type: 'combat', characterId: turnUid, action })}
-                onFinish={() => {}}
-                canFinish={false}
-                busy={Boolean(meta.combatBusy)}
+                onFinish={() => (finisher ? send({ type: 'finish', characterId: finisher.id }) : null)}
+                canFinish={Boolean(finisher)}
+                busy={Boolean(laneNow.combat)}
                 waitingFor={turnPlayer}
               />
             </Suspense>
           ) : (
             <StoryStream
               messages={chronicle}
-              isGenerating={Boolean(meta.isGenerating)}
+              isGenerating={Boolean(laneNow.generating)}
               suggestedActions={suggestions}
               character={character}
               party={heroes}
@@ -272,7 +277,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
                 onTravelToNode={apart ? actFor(acts.travel) : hostOnly}
                 markers={apart ? mapMarkers : []}
                 meetingNodeId={meetingNodeId}
-                travelLocked={apart && (meta.isGenerating || inCombat) ? 'Espera a que Duncan termine para viajar.' : null}
+                travelLocked={apart && (laneNow.generating || inCombat) ? 'Espera a que Duncan termine para viajar.' : null}
                 summary={view.journal?.summary || ''}
                 events={view.journal?.events || []}
                 quests={view.journal?.quests || []}

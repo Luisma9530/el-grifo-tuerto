@@ -65,13 +65,16 @@ export const publicRoom = room => ({
 
 /**
  * Every section of the shared state.
- * @param game the host's state: { title, world, party, messages, suggestedActions, encounter,
+ * @param game the host's state: { title, world, party, messages, suggestedActions, encounter, encounters, lanes,
  *   quests, events, summary, isGenerating, combatBusy, pendingRecruit, room, aiActive }
  */
 export function buildSections(game) {
-  const encounter = game.encounter
-    ? { ...game.encounter, log: (game.encounter.log || []).slice(-MAX_COMBAT_LOG) }
-    : null;
+  const trimFight = fight => (fight ? { ...fight, log: (fight.log || []).slice(-MAX_COMBAT_LOG) } : null);
+  const encounter = trimFight(game.encounter);
+  // The fights of the groups apart, one per group ({ [groupId]: encounter })
+  const encounters = Object.fromEntries(Object.entries(game.encounters || {}).filter(([, f]) => f).map(([lane, f]) => [lane, trimFight(f)]));
+  // What each group apart is doing now: Duncan narrating, dice rolling
+  const lanes = Object.fromEntries(Object.entries(game.lanes || {}).filter(([lane]) => lane).map(([lane, l]) => [lane, { generating: Boolean(l?.generating), combat: Boolean(l?.combat) }]));
   return {
     meta: {
       title: game.title || '',
@@ -79,11 +82,13 @@ export function buildSections(game) {
       combatBusy: Boolean(game.combatBusy),
       suggestedActions: Array.isArray(game.suggestedActions) ? game.suggestedActions.slice(0, 6) : [],
       pendingRecruit: game.pendingRecruit ? { character: pickRecruit(game.pendingRecruit.character), reason: game.pendingRecruit.reason || '' } : null,
-      aiActive: Boolean(game.aiActive)
+      aiActive: Boolean(game.aiActive),
+      lanes
     },
     party: game.party || null,
     world: game.world || null,
     encounter,
+    encounters,
     journal: {
       quests: game.quests || [],
       events: (game.events || []).slice(-MAX_EVENTS),

@@ -27,9 +27,10 @@
 // Turns between scenes (the criterion): a scene keeps the spotlight for
 // SCENE_TURNS narrated actions in a row; then it passes to the next group
 // (in order). Alone, the game switches to the next scene by itself (the player
-// can also switch at any moment by choosing a character). Online, the queue of
-// actions alternates between groups: the next action played is the oldest one
-// of a group different from the last one that played, if there is any.
+// can also switch at any moment by choosing a character). Online there are no
+// turns between groups: each group is a "system" of its own running in parallel
+// (its own queue, its call to Duncan, its fight; see laneQueue), one action at a
+// time within the group.
 //
 // When a group arrives where another one is, both become a single group (the
 // purses are added up). When only one group is left, the split ends and the
@@ -317,14 +318,22 @@ export function countSceneTurn(party, groupId) {
 }
 
 /**
- * The next action of the online queue to play: the oldest one of a group other
- * than the one that played last, if any; otherwise the oldest.
+ * The actions of the online queue to play now, one per lane: in each lane (a group
+ * apart, or '' for the party together) its oldest action, unless that lane is busy
+ * (`busy(lane)`: Duncan is narrating there, dice are rolling, a fight is on). The
+ * groups apart run in parallel; within a group, one action at a time, in order.
  * @param queue items with `characterId`
  */
-export function nextQueued(queue, party, lastGroupId = null) {
-  if (!queue?.length) return null;
-  if (!isSplit(party) || !lastGroupId) return queue[0];
-  return queue.find(item => sceneIdOf(party, item.characterId) !== lastGroupId) || queue[0];
+export function laneQueue(queue, party, busy = () => false) {
+  const seen = new Set();
+  const out = [];
+  (queue || []).forEach(item => {
+    const lane = sceneIdOf(party, item.characterId) || '';
+    if (seen.has(lane)) return;
+    seen.add(lane);
+    if (!busy(lane)) out.push(item);
+  });
+  return out;
 }
 
 // ---------------------------------------------------------------- the world and the chronicle
