@@ -5,7 +5,7 @@ import { buildCharacter, randomDraft } from '../../utils/characterBuilder';
 import { MAX_PARTY } from '../../utils/party';
 import { formatCoins } from '../../utils/items';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
-import { worldZones, zonesFor, suggestZone, fitLabel, generateZonesWithAI, START_MODES } from '../../utils/origins';
+import { worldZones, zonesFor, suggestZones, fitLabel, generateZonesWithAI, START_MODES } from '../../utils/origins';
 import { getStoredGeminiKeys } from '../../utils/geminiKeys';
 
 /**
@@ -26,8 +26,7 @@ const START_OPTIONS = world => [
 ];
 
 /** Where a character starts: the suggested zone or another one of the list. */
-function ZonePicker({ member, zones, zone, onPick }) {
-  const suggested = suggestZone(member, zones);
+function ZonePicker({ member, zones, zone, suggested, onPick }) {
   const why = zone ? fitLabel(member, zone) : '';
   return (
     <label className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-stone-300">
@@ -45,13 +44,22 @@ function ZonePicker({ member, zones, zone, onPick }) {
   );
 }
 
-export default function PartySetup({ world, members, onAddWithWizard, onChange, onStart, onCancel }) {
+// How the story starts, before anything is chosen
+const EMPTY_START = { mode: START_MODES.together, picked: {}, aiZones: null };
+
+/**
+ * `start` / `onStartChange(patch)`: how it starts ({ mode, picked, aiZones }), kept by the
+ * parent. This window closes while the creation wizard is open: without them, the choice
+ * would be lost each time a character is added with the wizard (everyone back to «juntos»).
+ */
+export default function PartySetup({ world, members, onAddWithWizard, onChange, onStart, onCancel, start = null, onStartChange = null }) {
   const [presetId, setPresetId] = useState('');
-  const [mode, setMode] = useState(START_MODES.together);
+  const [ownStart, setOwnStart] = useState(EMPTY_START);
+  const { mode, picked, aiZones } = { ...EMPTY_START, ...(start || ownStart) };
+  const updateStart = patch => (onStartChange ? onStartChange(patch) : setOwnStart(prev => ({ ...prev, ...patch })));
+  const setMode = value => updateStart({ mode: value });
   // The zone each character chose (by id); missing: the suggested one
-  const [picked, setPicked] = useState({});
-  // Zones of a forged world drawn by Duncan: null while there are none (the template is used)
-  const [aiZones, setAiZones] = useState(null);
+  const setPicked = next => updateStart({ picked: typeof next === 'function' ? next(picked) : next });
   const [drawing, setDrawing] = useState(false);
   const full = members.length >= MAX_PARTY;
   const purse = members.reduce((sum, m) => sum + (Number(m.gold) || 0), 0);
@@ -59,7 +67,9 @@ export default function PartySetup({ world, members, onAddWithWizard, onChange, 
   const zones = useMemo(() => aiZones || zonesFor(world), [aiZones, world]);
   const origins = mode === START_MODES.origins;
   const keyOf = (m, index) => m.id || `i${index}`;
-  const zoneFor = (m, index) => zones.find(z => z.id === picked[keyOf(m, index)]) || suggestZone(m, zones);
+  // Suggested zones for the whole party (equally good zones are spread between them)
+  const suggested = useMemo(() => suggestZones(members, zones), [members, zones]);
+  const zoneFor = (m, index) => zones.find(z => z.id === picked[keyOf(m, index)]) || suggested[index];
 
   // A forged world without zones: Duncan draws them from its description (once), if the AI is connected
   const needsZones = origins && !ownZones.length && !aiZones;
@@ -72,18 +82,17 @@ export default function PartySetup({ world, members, onAddWithWizard, onChange, 
     generateZonesWithAI(world, key).then(found => {
       if (!alive) return;
       setDrawing(false);
-      if (found) {
-        setAiZones(found);
-        setPicked({});
-      }
+      if (found) updateStart({ aiZones: found, picked: {} });
     });
     return () => {
       alive = false;
       setDrawing(false);
     };
+    // Once per world without zones (updateStart only writes the result)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsZones, world]);
 
-  const start = () => {
+  const begin = () => {
     if (!origins) {
       onStart(members, { mode: START_MODES.together });
       return;
@@ -142,6 +151,7 @@ export default function PartySetup({ world, members, onAddWithWizard, onChange, 
                       member={m}
                       zones={zones}
                       zone={zoneFor(m, index)}
+                      suggested={suggested[index]}
                       onPick={id => setPicked(prev => ({ ...prev, [keyOf(m, index)]: id }))}
                     />
                   )}
@@ -217,7 +227,7 @@ export default function PartySetup({ world, members, onAddWithWizard, onChange, 
         <div className="max-w-3xl mx-auto flex items-center justify-end gap-3">
           <button
             type="button"
-            onClick={start}
+            onClick={begin}
             disabled={!members.length || (origins && drawing)}
             className="px-5 py-2.5 rounded-xl text-sm font-cinzel font-bold flex items-center gap-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:brightness-110 text-stone-950 shadow-lg shadow-amber-900/40 disabled:opacity-40"
           >

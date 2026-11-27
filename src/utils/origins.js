@@ -64,6 +64,24 @@ export function suggestZone(character, zones) {
   return zones.reduce((best, zone) => (zoneScore(character, zone) > zoneScore(character, best) ? zone : best), zones[0]);
 }
 
+/**
+ * The suggested zone of each character of a party (same order). Each one gets a zone
+ * that fits them best; among equally good zones, one nobody else has yet, so a party
+ * of different origins spreads over the map (characters of the same origin still
+ * share their zone when it is clearly theirs).
+ */
+export function suggestZones(characters, zones) {
+  if (!zones?.length) return (characters || []).map(() => null);
+  const used = new Map();
+  return (characters || []).map(character => {
+    const best = Math.max(...zones.map(z => zoneScore(character, z)));
+    const top = zones.filter(z => zoneScore(character, z) === best);
+    const zone = top.find(z => !used.has(z.id)) || top.reduce((a, b) => ((used.get(b.id) || 0) < (used.get(a.id) || 0) ? b : a), top[0]);
+    used.set(zone.id, (used.get(zone.id) || 0) + 1);
+    return zone;
+  });
+}
+
 /** Why a zone fits: "Acólito · Humano" (what of the character matches it), or ''. */
 export function fitLabel(character, zone) {
   const bg = backgroundOf(character);
@@ -214,9 +232,10 @@ export function startFromOrigins(world, characters, choices = [], zones = zonesF
   const party = createParty(characters);
   const assignments = {};
   const gold = {};
+  const suggested = suggestZones(characters, list);
   party.members.forEach((m, i) => {
     const wanted = list.find(z => z.id === choices[i]);
-    assignments[m.id] = (wanted || suggestZone(characters[i], list))?.id || null;
+    assignments[m.id] = (wanted || suggested[i])?.id || null;
     gold[m.id] = Number(characters[i]?.gold) || 0;
   });
   const meetingNodeId = meetingNodeOf(prepared, list);

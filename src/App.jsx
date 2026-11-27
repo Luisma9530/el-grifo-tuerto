@@ -102,8 +102,13 @@ export default function App() {
   };
 
   // A hero made with the wizard joins the party being formed
+  // (each one with an id of their own: the zone chosen for them is kept by it)
   const handleHeroCreated = (character) => {
-    setPendingCampaign(prev => ({ ...prev, members: [...prev.members, character], wizard: false }));
+    setPendingCampaign(prev => ({
+      ...prev,
+      members: [...prev.members, { ...character, id: character.id || `hero_${Date.now()}_${prev.members.length}` }],
+      wizard: false
+    }));
   };
 
   // The party is ready: the campaign starts
@@ -380,6 +385,8 @@ export default function App() {
               onChange={members => setPendingCampaign(prev => ({ ...prev, members }))}
               onStart={handlePartyReady}
               onCancel={() => setPendingCampaign(null)}
+              start={pendingCampaign.start || null}
+              onStartChange={patch => setPendingCampaign(prev => ({ ...prev, start: { ...(prev.start || {}), ...patch } }))}
             />
           )}
         </Suspense>
