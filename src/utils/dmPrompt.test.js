@@ -13,21 +13,25 @@ const world = {
 };
 
 describe('buildDMPrompt', () => {
-  it('gives the model the character sheet, location and the die already rolled', () => {
+  it('gives the model the character sheet and location, and asks for a check without showing the die', () => {
     const prompt = buildDMPrompt({ playerAction: 'Trepo el muro', character, world, history: [], d20: 14 });
     expect(prompt).toContain('Kaelen');
     expect(prompt).toContain('12/28');
     expect(prompt).toContain('Destreza 17 (+3)');
     expect(prompt).toContain('Daga de Acero');
     expect(prompt).toContain('Viejo Molino');
-    expect(prompt).toContain('ha salido: 14');
+    // Duncan sets the DC before the roll: he never sees the d20
+    expect(prompt).not.toContain('ha salido: 14');
+    expect(prompt).toContain('devuelve "prueba"');
+    expect(prompt).toContain('5 muy fácil, 10 fácil, 15 media, 20 difícil, 25 muy difícil, 30 casi imposible');
     expect(prompt).toContain('"usaTirada"');
     expect(prompt).toContain('Trepo el muro');
   });
 
-  it('flags natural 20s and 1s', () => {
-    expect(buildDMPrompt({ playerAction: 'x', character, world, d20: 20 })).toContain('20 (crítico natural)');
-    expect(buildDMPrompt({ playerAction: 'x', character, world, d20: 1 })).toContain('1 (pifia natural)');
+  it('flags natural 20s and 1s in the plain-text format (which still gets the die)', () => {
+    expect(buildDMPrompt({ playerAction: 'x', character, world, d20: 20, structured: false })).toContain('20 (crítico natural)');
+    expect(buildDMPrompt({ playerAction: 'x', character, world, d20: 1, structured: false })).toContain('1 (pifia natural)');
+    expect(buildDMPrompt({ playerAction: 'x', character, world, d20: 7, structured: false })).toContain('15 media');
   });
 
   it("uses the player's own check when there is one", () => {
@@ -102,7 +106,8 @@ describe('parseDMReply', () => {
       questChanges: [],
       recruit: null,
       departure: null,
-      meetingHook: null
+      meetingHook: null,
+      check: null
     });
     expect(parseDMReply(reply({ experiencia: 60 }), character).xpEarned).toBe(60);
     expect(parseDMReply(reply({ experiencia: 5000 }), character).xpEarned).toBe(300);
