@@ -237,6 +237,18 @@ describe('checks in the game engine', () => {
     expect(res.text).toContain('Engaño D20: **11** +4 = 15 contra Perspicacia del erudito 16');
   });
 
+  it('picking the lock of a merchant is a check, not a shop', async () => {
+    forceD20(10);
+    const res = await generateDMResponse({
+      playerAction: 'Fuerzo la cerradura de calidad del cofre del mercader', character: hero, world,
+      allowShop: true, shopTypesHere: ['general']
+    });
+    expect(res.shop).toBeNull();
+    expect(res.check).toMatchObject({ dc: 20, label: 'Destreza (ganzúas)' });
+    expect(res.text).toContain('contra CD 20 (difícil)');
+    expect(res.text).toContain('obra de calidad');
+  });
+
   it('the local engine uses its table for a check asked for from the sheet', async () => {
     forceD20(12);
     const res = await generateDMResponse({

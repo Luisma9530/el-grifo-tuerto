@@ -356,7 +356,8 @@ La prueba de ${stat} no sale: te quedas corto por poco y la ocasión se te escap
   }
 
   // Shops: the game opens the counter with its own prices
-  else if (allowShop && (shop = shopForAction(actionLower, shopTypesHere))) {
+  // (not when the action is clearly a check against someone: "forzar el cofre del mercader")
+  else if (allowShop && !isCheckAgainstSomeone(playerAction) && (shop = shopForAction(actionLower, shopTypesHere))) {
     ({ text, suggestedActions } = narrateShopOpening(shop, { character, world }));
     spellXp = 0;
   }
@@ -520,6 +521,10 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     check: localCheck
   };
 }
+
+/** Kinds of check that never open a shop, even when the action names a merchant. */
+const NOT_SHOPPING = ['lock', 'pickpocket', 'hide', 'deceive', 'intimidate', 'grapple', 'force', 'climb'];
+const isCheckAgainstSomeone = action => NOT_SHOPPING.includes(planLocalCheck(action)?.kind);
 
 /** Armor Class of a brawl the local engine narrates without the fight system. */
 const BRAWL_AC = 12;
