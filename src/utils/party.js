@@ -23,6 +23,7 @@ import { normalizeConditions } from './conditions';
 import { addItem, roundCoins, formatCoins } from './items';
 import { addXp, canLevelUp } from './leveling';
 import { characterLevel } from './characterLevel';
+import { normalizeSplit, tidySplit } from './splitParty';
 
 export const MAX_PARTY = 4;
 /** Who controls a member: today always the local player. */
@@ -72,7 +73,8 @@ export function normalizeParty(campaign) {
     saved.members.filter(m => m && typeof m === 'object').slice(0, MAX_PARTY)
       .forEach(m => members.push(toMember(m, members.map(x => x.id))));
     const activeId = members.some(m => m.id === saved.activeId) ? saved.activeId : members[0].id;
-    return { members, activeId, gold: roundCoins(Math.max(0, Number(saved.gold) || 0)) };
+    // Parties that started apart (see splitParty.js): their groups, checked against the members
+    return normalizeSplit({ members, activeId, gold: roundCoins(Math.max(0, Number(saved.gold) || 0)) }, saved);
   }
   const character = campaign?.character;
   if (!character || typeof character !== 'object') return null;
@@ -145,7 +147,7 @@ export function removeMember(party, id) {
   if (!member) return { ok: false, error: 'Ese personaje no está en el grupo.' };
   if (members(party).length <= 1) return { ok: false, error: 'El grupo no puede quedarse sin nadie.' };
   const rest = party.members.filter(m => m.id !== id);
-  return { ok: true, party: { ...party, members: rest, activeId: party.activeId === id ? rest[0].id : party.activeId }, member };
+  return { ok: true, party: tidySplit({ ...party, members: rest, activeId: party.activeId === id ? rest[0].id : party.activeId }), member };
 }
 
 /** Find a member by name (as Duncan writes it): exact, then by first word. */

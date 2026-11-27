@@ -21,7 +21,8 @@ export const MAX_ID = 80;
 export const MAX_INTENT_BYTES = 8000;
 
 const ABILITIES = ['fue', 'des', 'con', 'int', 'sab', 'car'];
-const ACT_KINDS = ['text', 'check', 'attack', 'spell', 'item'];
+// 'travel': while the party is apart, a player moves their own group on the map
+const ACT_KINDS = ['text', 'check', 'attack', 'spell', 'item', 'travel'];
 const COMBAT_TYPES = ['attack', 'spell', 'equip', 'dodge', 'flee', 'escape', 'potion', 'endTurn'];
 
 // eslint-disable-next-line no-control-regex -- control characters are what it removes
@@ -77,6 +78,10 @@ export function sanitizeIntent(raw) {
         const spellId = id(p.spellId);
         if (!spellId) return bad;
         payload = { spellId, target: str(p.target, 60) };
+      } else if (raw.kind === 'travel') {
+        const nodeId = id(p.nodeId);
+        if (!nodeId) return bad;
+        payload = { nodeId };
       } else {
         const itemId = id(p.itemId);
         if (!itemId) return bad;
@@ -92,9 +97,14 @@ export function sanitizeIntent(raw) {
     }
     case 'create': {
       // A new character for this player: the wizard's choices (the host builds the sheet)
+      // (and, in a campaign that started apart, the zone where they start)
       const draft = cleanDraft(raw.draft);
-      return draft ? { ok: true, intent: { type: 'create', draft } } : { ok: false, error: 'La ficha que llegó no es válida.' };
+      if (raw.zoneId != null && !id(raw.zoneId)) return bad;
+      return draft ? { ok: true, intent: { type: 'create', draft, zoneId: raw.zoneId ?? null } } : { ok: false, error: 'La ficha que llegó no es válida.' };
     }
+    case 'finish':
+      // A finished fight of the player's group (a party apart): the host closes it
+      return characterId ? { ok: true, intent: { type: 'finish', characterId } } : bad;
     case 'levelUp': {
       const choices = sanitizeLevelUpChoices(raw.choices);
       return characterId && choices ? { ok: true, intent: { type: 'levelUp', characterId, choices } } : bad;
@@ -159,12 +169,15 @@ export function describeQueued(name, kind, payload, extra = {}) {
   if (kind === 'check') return `${name}: tirada de ${extra.label || payload.skillId || payload.ability}`;
   if (kind === 'attack') return `${name}: ataque${payload.target ? ` a ${payload.target}` : ''}`;
   if (kind === 'spell') return `${name}: conjuro${extra.label ? ` ${extra.label}` : ''}${payload.target ? ` sobre ${payload.target}` : ''}`;
+  if (kind === 'travel') return `${name}: viaja a ${extra.label || 'otro lugar'}`;
   return `${name}: usa ${extra.label || 'un objeto'}`;
 }
 
 /**
  * Check an intent from `playerId` and apply it.
- * @param game { characterIds, names: {id: name}, inCombat, turnCharacterId, combatBusy, labelFor?(kind, payload, characterId) }
+ * @param game { characterIds, names: {id: name}, inCombat, turnCharacterId, combatBusy, labelFor?(kind, payload, characterId),
+ *   sceneOf?(characterId) }  sceneOf: with the party apart each group has its own fight
+ *   ({ inCombat, turnCharacterId, combatBusy, finished }); without it, the party's (the fields above)
  * @returns {{ ok: true, room, combat?: { characterId, action }, queued?: item }
  *         | { ok: false, error }}
  *   (also `direct`, see below)
@@ -177,6 +190,8 @@ export function applyIntent(room, game, playerId, intent) {
   if (!isConnected(room, playerId)) return { ok: false, error: 'No estás conectado a la sala.' };
   const { characterIds = [], names = {} } = game;
   const known = cid => characterIds.includes(cid);
+  // The fight that matters for a character: their group's (party apart) or the party's
+  const sceneOf = cid => (game.sceneOf ? game.sceneOf(cid) : game);
   const nameOf = cid => names[cid] || 'ese personaje';
   const wrap = res => (res.ok ? { ok: true, room: res.room } : res);
 
@@ -196,7 +211,11 @@ export function applyIntent(room, game, playerId, intent) {
     case 'act': {
       if (!known(intent.characterId)) return { ok: false, error: 'Ese personaje no está en el grupo.' };
       if (!canControl(room, playerId, intent.characterId)) return { ok: false, error: `No controlas a ${nameOf(intent.characterId)}.` };
-      if (game.inCombat) return { ok: false, error: 'En combate se juega por turnos: espera al turno de tu personaje.' };
+      if (sceneOf(intent.characterId).inCombat) return { ok: false, error: 'En combate se juega por turnos: espera al turno de tu personaje.' };
+      if (intent.kind === 'travel') {
+        if (!game.apart && playerId !== room.hostId) return { ok: false, error: 'Los viajes del grupo los decide el anfitrión.' };
+        if (!(game.nodeIds || []).includes(intent.payload.nodeId)) return { ok: false, error: 'Ese lugar no está en el mapa.' };
+      }
       const extra = { label: game.labelFor?.(intent.kind, intent.payload, intent.characterId) || '' };
       const res = enqueueAction(room, {
         playerId,
@@ -213,14 +232,14 @@ export function applyIntent(room, game, playerId, intent) {
       if (game.inCombat) return { ok: false, error: 'Espera a que acabe el combate para unirte al grupo.' };
       const own = claimOf(room, playerId);
       if (own) return { ok: false, error: `Ya juegas con ${nameOf(own)}: suéltalo antes de crear otro personaje.` };
-      return { ok: true, room, direct: { kind: 'create', draft: intent.draft } };
+      return { ok: true, room, direct: { kind: 'create', draft: intent.draft, zoneId: intent.zoneId || null } };
     }
     case 'equip':
     case 'levelUp': {
       // The player's own character, applied by the host right away (no Duncan involved)
       if (!known(intent.characterId)) return { ok: false, error: 'Ese personaje no está en el grupo.' };
       if (!canControl(room, playerId, intent.characterId)) return { ok: false, error: `No controlas a ${nameOf(intent.characterId)}.` };
-      if (game.inCombat) {
+      if (sceneOf(intent.characterId).inCombat) {
         return { ok: false, error: intent.type === 'equip'
           ? 'En combate, cambia de arma desde la vista de combate en tu turno: gasta tu acción.'
           : 'Sube de nivel cuando acabe el combate.' };
@@ -229,14 +248,22 @@ export function applyIntent(room, game, playerId, intent) {
       return { ok: true, room, direct: { kind: type, ...rest } };
     }
     case 'combat': {
-      if (!game.inCombat) return { ok: false, error: 'No hay ningún combate en marcha.' };
       if (!known(intent.characterId)) return { ok: false, error: 'Ese personaje no está en el grupo.' };
-      if (game.turnCharacterId !== intent.characterId) {
-        return { ok: false, error: game.turnCharacterId ? `Ahora es el turno de ${nameOf(game.turnCharacterId)}.` : 'Ahora actúan los enemigos.' };
+      const fight = sceneOf(intent.characterId);
+      if (!fight.inCombat) return { ok: false, error: 'No hay ningún combate en marcha.' };
+      if (fight.turnCharacterId !== intent.characterId) {
+        return { ok: false, error: fight.turnCharacterId ? `Ahora es el turno de ${nameOf(fight.turnCharacterId)}.` : 'Ahora actúan los enemigos.' };
       }
       if (!canControl(room, playerId, intent.characterId)) return { ok: false, error: `No controlas a ${nameOf(intent.characterId)}.` };
-      if (game.combatBusy) return { ok: false, error: 'Espera a que terminen de rodar los dados.' };
+      if (fight.combatBusy) return { ok: false, error: 'Espera a que terminen de rodar los dados.' };
       return { ok: true, room, combat: { characterId: intent.characterId, action: intent.action } };
+    }
+    case 'finish': {
+      // Close the finished fight of the player's group (a party apart: the host may not be watching it)
+      if (!known(intent.characterId)) return { ok: false, error: 'Ese personaje no está en el grupo.' };
+      if (!canControl(room, playerId, intent.characterId)) return { ok: false, error: `No controlas a ${nameOf(intent.characterId)}.` };
+      if (!sceneOf(intent.characterId).finished) return { ok: false, error: 'Ese combate aún no ha terminado.' };
+      return { ok: true, room, direct: { kind: 'finish', characterId: intent.characterId } };
     }
     default:
       return { ok: false, error: 'Mensaje no válido.' };

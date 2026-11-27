@@ -13,6 +13,8 @@ import { QUEST_REPLY_ACTIONS, QUEST_IMPORTANCE, cleanQuestChanges, questGoldCap 
 import { cleanRecruitOffer, cleanDeparture, RECRUIT_CLASS_NAMES } from './recruit';
 import { MAX_PARTY } from './party';
 import { SURPRISE_REPLY_SIDES } from './surprise';
+import { cleanMeetingHook } from './origins';
+import { HOOK_KINDS } from './splitParty';
 
 /** Limb ids and states in the reply (Spanish, as the model writes them) -> sheet values. */
 export const LIMB_REPLY_IDS = { brazoDerecho: 'rightArm', brazoIzquierdo: 'leftArm', piernaDerecha: 'rightLeg', piernaIzquierda: 'leftLeg' };
@@ -181,6 +183,17 @@ const DEPARTURE_SCHEMA = {
   required: ['nombre']
 };
 
+const MEETING_HOOK_SCHEMA = {
+  type: 'OBJECT',
+  nullable: true,
+  description: 'Solo mientras el grupo está separado: el motivo (una misión, un rumor o un encargo) que lleva a los de esta escena al punto de encuentro.',
+  properties: {
+    tipo: { type: 'STRING', enum: HOOK_KINDS },
+    motivo: { type: 'STRING', description: 'Qué los lleva allí, en una o dos frases.' }
+  },
+  required: ['tipo', 'motivo']
+};
+
 const SHOP_SCHEMA = {
   type: 'OBJECT',
   nullable: true,
@@ -196,8 +209,8 @@ const SHOP_SCHEMA = {
  * summary, with `allowCombat` it accepts an optional fight to start, with
  * `allowShop` an optional shop to open.
  */
-export function dmResponseSchema(requestSummary = false, allowCombat = false, allowShop = false, { allowRecruit = false, allowDeparture = false } = {}) {
-  if (!requestSummary && !allowCombat && !allowShop && !allowRecruit && !allowDeparture) return DM_RESPONSE_SCHEMA;
+export function dmResponseSchema(requestSummary = false, allowCombat = false, allowShop = false, { allowRecruit = false, allowDeparture = false, allowMeetingHook = false } = {}) {
+  if (!requestSummary && !allowCombat && !allowShop && !allowRecruit && !allowDeparture && !allowMeetingHook) return DM_RESPONSE_SCHEMA;
   const properties = { ...DM_RESPONSE_SCHEMA.properties };
   const required = [...DM_RESPONSE_SCHEMA.required];
   if (requestSummary) {
@@ -208,6 +221,7 @@ export function dmResponseSchema(requestSummary = false, allowCombat = false, al
   if (allowShop) properties.tienda = SHOP_SCHEMA;
   if (allowRecruit) properties.reclutar = RECRUIT_SCHEMA;
   if (allowDeparture) properties.abandona = DEPARTURE_SCHEMA;
+  if (allowMeetingHook) properties.reunion = MEETING_HOOK_SCHEMA;
   return { ...DM_RESPONSE_SCHEMA, properties, required };
 }
 
@@ -301,13 +315,15 @@ function formatHistory(history, characterName) {
  * @param {number} [params.partySize]    how many members the party has (1 to 4)
  * @param {boolean} [params.allowRecruit]   the model may offer a companion with "reclutar"
  * @param {boolean} [params.allowDeparture] the model may make a member leave with "abandona"
+ * @param {string} [params.sceneNote]    the party is apart: who is in this scene, who is elsewhere, a meeting (see splitParty.js)
+ * @param {string} [params.meetingPlace] the model may give this scene a reason ("reunion") to go to this place
  */
 export function buildDMPrompt({
   playerAction, character, world, history, d20, playerRoll = null, structured = true,
   spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
   summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null,
   allowShop = false, shopsHere = '', quests = '', companions = '', partySize = 1,
-  allowRecruit = false, allowDeparture = false
+  allowRecruit = false, allowDeparture = false, sceneNote = '', meetingPlace = ''
 }) {
   const name = character.name || 'Aventurero';
   const group = partySize > 1;
@@ -357,7 +373,8 @@ ${bestiary ? `
 - "tienda": SOLO si ${name} entra en una tienda, va al mercado o habla con un mercader para comprar o vender: {"tipo": "herrero" (armas y armaduras) | "alquimista" (pociones) | "general" (equipo de aventurero)}. El juego abrirá la tienda con sus propios precios y su género: tú no cobras ni pagas nada ("oro": 0), no inventas precios ni das objetos; narra solo la llegada y al tendero. ${shopsHere || 'Aquí no hay tiendas fijas: sería un buhonero o un puesto improvisado.'} Si el jugador intenta comprar o vender equipo, usa "tienda" en vez de "oro". Si no, omite "tienda".` : ''}
 ${allowRecruit ? `
 - "reclutar": SOLO si en esta escena un personaje no jugador se ofrece de verdad a unirse al grupo (lo contratan, le salvan la vida, comparte su causa...): {"nombre", "clase": ${RECRUIT_CLASS_NAMES.map(c => `"${c}"`).join(' | ')}, "especie", "motivo"}. No lo sumes tú: el juego pregunta al jugador si acepta y crea su ficha con las reglas. El grupo tiene ${partySize} de ${MAX_PARTY} miembros. Raro: no más de uno cada muchas escenas. Si no, omite "reclutar".` : ''}${allowDeparture ? `
-- "abandona": SOLO si la historia hace que un compañero deje el grupo (traición, una deuda, una despedida, lo raptan): {"nombre": uno de los compañeros, "motivo"}. Muy raro; nunca por capricho. Si no, omite "abandona".` : ''}
+- "abandona": SOLO si la historia hace que un compañero deje el grupo (traición, una deuda, una despedida, lo raptan): {"nombre": uno de los compañeros, "motivo"}. Muy raro; nunca por capricho. Si no, omite "abandona".` : ''}${meetingPlace ? `
+- "reunion": los de esta escena aún no tienen motivo para ir a ${meetingPlace}, donde la historia juntará al grupo. En esta escena o en la siguiente, haz que surja de forma natural un motivo ligado a lo que está pasando (una misión que alguien les encarga, un rumor que oyen, un encargo que aceptan) y devuélvelo: {"tipo": "mision" | "rumor" | "encargo", "motivo": "una o dos frases"}. Nárralo también. El juego no los mueve: irán cuando el jugador decida viajar. Si en esta escena aún no encaja, omite "reunion".` : ''}
 
 - "misiones": casi siempre una lista vacía. Las misiones solo nacen y terminan en la historia, nunca porque el jugador lo pida fuera de ella.
   · "abrir": cuando alguien encarga de verdad un trabajo a ${name} y lo acepta (un PNJ, un tablón de anuncios, un contrato): {"accion": "abrir", "titulo", "quienEncarga", "lugar", "objetivo", "recompensa": {"oro", "objeto", "experiencia": true, "importancia": "menor" | "normal" | "mayor"}} o {"soloHistoria": true} si no hay pago. Para el nivel ${characterLevel(character)} el oro más el valor del objeto no pasa de ${formatCoins(questGoldCap(characterLevel(character)))}; el juego ajusta lo que se pase y calcula la experiencia por la importancia. Promete en la narración lo mismo que pongas aquí.
@@ -373,6 +390,8 @@ Estás dirigiendo una partida de rol estilo D&D 5e en el mundo: "${world.name}" 
 
 ${group ? `El jugador controla a un grupo de ${partySize} personajes. Actúa ahora: ${name}. Sus compañeros: ${companions}.
 Narra para todo el grupo, pero esta acción la hace ${name}. Por defecto "danio", "curacion", "condiciones" y "extremidades" se aplican solo a ${name}; si la escena alcanza a otros (una trampa, una explosión, un derrumbe, un veneno en la comida, una bendición para todos), di a quién con "afectadosDanio" y "afectadosCuracion" (y "afectados" dentro de cada cambio de "condiciones" o "extremidades"): una lista de nombres del grupo o ["todos"]. Cada afectado recibe la cantidad completa de "danio" o "curacion". El oro es común del grupo.
+
+` : ''}${sceneNote ? `${sceneNote}
 
 ` : ''}Personaje${group ? ' que actúa' : ' del jugador'}: ${name}, ${character.race || ''} ${character.class || ''}.
 - Puntos de golpe: ${character.hp}/${character.maxHp}. Armadura (CA): ${character.ac ?? '?'}. Dinero${group ? ' del grupo' : ''}: ${formatCoins(character.gold)} (po = oro, pp = plata, pc = cobre).
@@ -531,7 +550,8 @@ export function parseDMReply(raw, character = {}) {
         conditionChanges: cleanConditionChanges(data.condiciones),
         questChanges: cleanQuestChanges(data.misiones),
         recruit: cleanRecruitOffer(data.reclutar),
-        departure: cleanDeparture(data.abandona)
+        departure: cleanDeparture(data.abandona),
+        meetingHook: cleanMeetingHook(data.reunion)
       };
     } catch {
       // Not valid JSON: treat it as plain text below
@@ -563,6 +583,7 @@ export function parseDMReply(raw, character = {}) {
     questChanges: [],
     recruit: null,
     departure: null,
+    meetingHook: null,
     // Plain text can't tell us reliably; look for the dice marker the prompt asks for
     usedRoll: text.includes('🎲')
   };

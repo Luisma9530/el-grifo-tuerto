@@ -11,7 +11,7 @@ import { MAX_CHAT_TEXT } from '../../online/protocol';
  * queue of actions waiting for Duncan and the players' chat (Duncan never reads it).
  *
  * onIntent(intent): what this player asks (the host's own go through the same checks).
- * hostOps (host only): { assign(characterId, playerId|null), breakTie, closeVote, remove(playerId), closeRoom() }
+ * hostOps (host only): { assign(characterId, playerId|null), breakTie, closeVote, remove(playerId), closeRoom(), setShareScenes(on) }
  */
 export default function RoomPanel({ room, me, isHost = false, characters = [], link = '', onIntent, hostOps = null, compact = false }) {
   const [copied, setCopied] = useState(false);
@@ -217,6 +217,21 @@ export default function RoomPanel({ room, me, isHost = false, characters = [], l
           </button>
         </form>
       </section>
+
+      {hostOps?.setShareScenes && (
+        <label className="flex items-start gap-2 p-2 rounded-lg bg-[#17131f] border border-stone-800 text-[11px] text-stone-300">
+          <input
+            type="checkbox"
+            checked={Boolean(room.shareScenes)}
+            onChange={e => hostOps.setShareScenes(e.target.checked)}
+            className="mt-0.5 accent-amber-500"
+          />
+          <span>
+            Los jugadores pueden leer las escenas de los demás
+            <span className="block text-[10px] text-stone-500">Mientras el grupo está separado, cada uno ve solo la crónica de su grupo (para que haya sorpresa al encontrarse). Marca esto para que todos lo vean todo.</span>
+          </span>
+        </label>
+      )}
 
       {hostOps?.closeRoom && (
         <button onClick={hostOps.closeRoom} className="mt-1 py-2 rounded-lg border border-red-900/60 text-red-200 hover:bg-red-950/40 text-xs font-semibold">

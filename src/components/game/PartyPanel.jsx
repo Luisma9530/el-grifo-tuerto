@@ -57,6 +57,35 @@ function PartyRoster({ party, activeId, onSelect, busy }) {
   );
 }
 
+/**
+ * The party apart: the members who are somewhere else (their own scene). Choosing
+ * one switches to their scene.
+ */
+function Elsewhere({ members, onSelect, busy }) {
+  if (!members.length) return null;
+  return (
+    <div className="px-2 pb-2 pt-1 border-b border-amber-950/60 bg-[#100d15]">
+      <p className="text-[10px] font-mono uppercase tracking-wider text-stone-500 mb-1">Lejos de aquí</p>
+      <div className="flex flex-wrap gap-1">
+        {members.map(m => (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => onSelect(m.id)}
+            disabled={busy}
+            title={`${m.name} está en ${m.place || 'otro lugar'}: elígelo para ir a su escena`}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-[#17131f] border border-stone-800 hover:border-amber-700/60 text-[10px] text-stone-300 disabled:opacity-50"
+          >
+            <span>{m.avatar || '🛡️'}</span>
+            <span className="font-semibold">{m.name}</span>
+            {m.place && <span className="text-stone-500">· {m.place}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** Give an item to another member (outside combat). */
 function GiveItem({ item, character, party, onTransfer }) {
   const [error, setError] = useState(null);
@@ -84,6 +113,8 @@ function GiveItem({ item, character, party, onTransfer }) {
 export default function PartyPanel({
   character,
   party = [character],
+  // A party apart: members who are in another scene ({ ...sheet, place })
+  elsewhere = [],
   purse = character.gold,
   onSelectMember = () => {},
   onDismissMember = () => {},
@@ -130,6 +161,7 @@ export default function PartyPanel({
     <div className="h-full flex flex-col bg-[#120f18] border-r border-amber-950/60 overflow-hidden text-stone-200">
       
       {(group || inCombat) && <PartyRoster party={party} activeId={character.id} onSelect={onSelectMember} busy={false} />}
+      {!inCombat && <Elsewhere members={elsewhere} onSelect={onSelectMember} busy={busy} />}
 
       {inCombat && (
         <button

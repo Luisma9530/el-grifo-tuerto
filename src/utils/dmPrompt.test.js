@@ -101,7 +101,8 @@ describe('parseDMReply', () => {
       conditionChanges: [],
       questChanges: [],
       recruit: null,
-      departure: null
+      departure: null,
+      meetingHook: null
     });
     expect(parseDMReply(reply({ experiencia: 60 }), character).xpEarned).toBe(60);
     expect(parseDMReply(reply({ experiencia: 5000 }), character).xpEarned).toBe(300);

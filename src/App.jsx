@@ -42,7 +42,7 @@ const CombatSimulator = lazy(() => import('./components/simulator/CombatSimulato
 // A player's table in someone else's online room
 const GuestTable = lazyWithPreload(() => import('./components/online/GuestTable'));
 // Starting a campaign needs the party and the saving rules (part of the game screen)
-const loadCampaignTools = () => Promise.all([import('./utils/party'), import('./utils/campaignStorage')]);
+const loadCampaignTools = () => Promise.all([import('./utils/party'), import('./utils/campaignStorage'), import('./utils/origins')]);
 
 // A shared link: ?sala=CODE opens the "join" window with the code filled in
 const linkedRoom = () => {
@@ -102,13 +102,19 @@ export default function App() {
   };
 
   // A hero made with the wizard joins the party being formed
+  // (each one with an id of their own: the zone chosen for them is kept by it)
   const handleHeroCreated = (character) => {
-    setPendingCampaign(prev => ({ ...prev, members: [...prev.members, character], wizard: false }));
+    setPendingCampaign(prev => ({
+      ...prev,
+      members: [...prev.members, { ...character, id: character.id || `hero_${Date.now()}_${prev.members.length}` }],
+      wizard: false
+    }));
   };
 
   // The party is ready: the campaign starts
   const startingRef = useRef(false);
-  const handlePartyReady = async (list) => {
+  // `start`: how the story starts (see PartySetup): together, or each one from their origin zone
+  const handlePartyReady = async (list, start = {}) => {
     if (startingRef.current) return;
     startingRef.current = true;
     const { world, title } = pendingCampaign;
@@ -121,13 +127,15 @@ export default function App() {
       return;
     }
     startingRef.current = false;
-    const [{ createParty }, { createNewCampaign }] = tools;
-    const party = createParty(list);
+    const [{ createParty }, { createNewCampaign }, { startFromOrigins, START_MODES }] = tools;
+    const apart = start.mode === START_MODES.origins ? startFromOrigins(world, list, start.choices, start.zones) : null;
+    const party = apart ? apart.party : createParty(list);
     const character = list[0];
     const names = list.map(m => m.name);
     const newCamp = createNewCampaign({
-      world,
+      world: apart ? apart.world : world,
       party,
+      ...(apart ? { messages: apart.messages, suggestedActions: apart.suggestedActions } : {}),
       title: title.trim() || `${names.length > 1 ? `${names.slice(0, -1).join(', ')} y ${names.at(-1)}` : character.name} — ${world.name}`
     });
     setPendingCampaign(null);
@@ -135,7 +143,7 @@ export default function App() {
       window.alert('No se pudo guardar la campaña: el almacenamiento del navegador está lleno. Exporta o borra partidas antiguas en el Grimorio.');
       return;
     }
-    setActiveWorld(world);
+    setActiveWorld(newCamp.world);
     setActiveCharacter(character);
     setActiveCampaign(newCamp);
     refreshCampaignsCount();
@@ -377,6 +385,8 @@ export default function App() {
               onChange={members => setPendingCampaign(prev => ({ ...prev, members }))}
               onStart={handlePartyReady}
               onCancel={() => setPendingCampaign(null)}
+              start={pendingCampaign.start || null}
+              onStartChange={patch => setPendingCampaign(prev => ({ ...prev, start: { ...(prev.start || {}), ...patch } }))}
             />
           )}
         </Suspense>

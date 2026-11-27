@@ -18,11 +18,15 @@ import { memberSheets, MAX_PARTY } from '../../utils/party';
 import { currentHeroUid } from '../../utils/encounter';
 import { longRestCost } from '../../utils/partyActions';
 import { canLevelUp } from '../../utils/leveling';
+import {
+  isSplit, sceneIdOf, chronicleKey, scopeParty, sceneWorld, sceneMessages, readablePrologues, visibleScenes, groupById, groupOf, isOriginsCampaign
+} from '../../utils/splitParty';
+import { zonesFor, suggestZone, fitLabel } from '../../utils/origins';
 
 // The creation wizard: only loaded if this player creates a character
 const CharacterWizard = lazy(() => import('../wizard/CharacterWizard'));
 
-const HOST_ONLY = 'Esto lo decide el anfitrión (descansos, tiendas, viajes, compañeros y repartir objetos se hacen en su pantalla).';
+const HOST_ONLY = 'Esto lo decide el anfitrión (descansos, tiendas, viajes, compañeros y repartir objetos se hacen en su pantalla). Si el grupo está separado, cada uno viaja con el suyo desde el mapa.';
 
 /**
  * A player's table in someone else's room: the game as the host shares it, and
@@ -44,15 +48,22 @@ export default function GuestTable({ code, name, kind, onLeave }) {
   const [localNotice, setLocalNotice] = useState(null);
   const [levelUpId, setLevelUpId] = useState(null);
   const [creating, setCreating] = useState(false);
+  // A campaign that started apart: the new character's choices wait for where they start
+  const [pendingDraft, setPendingDraft] = useState(null); // { character, draft, zoneId }
 
   const shared = view.room || null;
   const heroes = useMemo(() => (view.party ? memberSheets(view.party) : []), [view.party]);
   const mine = shared ? heroes.filter(h => canControl(shared, playerId, h.id)) : [];
   const character = heroes.find(h => h.id === selectedId) || mine[0] || heroes[0] || null;
-  const encounter = view.encounter || null;
+  const meta = view.meta || {};
+  // With the party apart each group is a system of its own: its fight, its Duncan
+  const lane = view.party && character ? sceneIdOf(view.party, character.id) || '' : '';
+  const encounter = (lane ? view.encounters?.[lane] : view.encounter) || null;
+  const laneNow = lane ? meta.lanes?.[lane] || {} : { generating: meta.isGenerating, combat: meta.combatBusy };
   const inCombat = Boolean(encounter && encounter.status === 'active');
   const turnUid = inCombat ? currentHeroUid(encounter) : null;
-  const meta = view.meta || {};
+  // A finished fight of their group: its players close it (the host may be watching another scene)
+  const finisher = lane && encounter ? mine.find(h => (encounter.heroIds || []).includes(h.id)) : null;
 
   // New chat lines: seen while the chat is on screen (a phone on its tab; a computer
   // with the column open, which in a fight means the rail opened)
@@ -93,6 +104,33 @@ export default function GuestTable({ code, name, kind, onLeave }) {
   const send = intent => {
     room.send(intent);
   };
+
+  // A party apart (see splitParty.js): this player follows the scenes of the characters
+  // they play (all of them if the host lets everyone read the others' scenes)
+  const apart = isSplit(view.party);
+  const viewerIds = shared?.shareScenes ? null : mine.map(h => h.id);
+  const scenes = visibleScenes(view.party, view.world, viewerIds);
+  const ownScene = sceneIdOf(view.party, character.id);
+  const shownScene = !apart ? null : scenes.some(s => s.id === ownScene) ? ownScene : scenes[0]?.id || null;
+  const shownLead = apart ? (groupById(view.party, shownScene)?.memberIds || []).find(id => heroes.some(h => h.id === id)) || character.id : character.id;
+  const scope = scopeParty(view.party, shownLead);
+  const sceneHeroes = memberSheets(encounter?.heroIds?.length ? scopeParty(view.party, encounter.heroIds[0]) : scope);
+  const sceneWorldView = sceneWorld(view.world, view.party, shownLead);
+  const chronicle = sceneMessages(view.chronicle || [], chronicleKey(groupById(view.party, shownScene)));
+  const prologues = readablePrologues(view.party, viewerIds).map(p => ({ id: p.id, label: `Prólogo de ${p.names}${p.place ? ` (${p.place})` : ''}`, messages: sceneMessages(view.chronicle || [], p.id) }));
+  const suggestions = shownScene ? groupById(view.party, shownScene)?.suggestions || [] : meta.suggestedActions || [];
+  const placeOf = id => view.world.mapNodes?.find(n => n.id === groupOf(view.party, id)?.nodeId)?.name || '';
+  const elsewhere = apart ? heroes.filter(h => !sceneHeroes.some(s => s.id === h.id) && (!viewerIds || viewerIds.includes(h.id))).map(h => ({ ...h, place: placeOf(h.id) })) : [];
+  const sceneTabs = apart && scenes.length > 1 ? scenes.map(s => ({ id: s.id, label: s.names, place: s.place, active: s.id === shownScene, spotlight: s.spotlight })) : [];
+  const chooseScene = id => {
+    const g = groupById(view.party, id);
+    const who = g?.memberIds.find(m => !viewerIds || viewerIds.includes(m));
+    if (who) setSelectedId(who);
+  };
+  const mapMarkers = scenes.map(s => ({ nodeId: s.nodeId, label: s.names, current: s.id === shownScene }));
+  const meetingNodeId = apart && groupById(view.party, shownScene)?.hook ? view.party.split.meetingNodeId : null;
+  // Where a new character may start (a campaign that started apart): the zones on the map
+  const startZones = isOriginsCampaign(view.party) ? zonesFor(view.world).filter(z => view.world.mapNodes?.some(n => n.id === z.id)) : [];
   const acts = sheetIntents(character.id);
   const mayAct = canControl(shared, playerId, character.id);
   const actFor = build => (...args) => {
@@ -122,7 +160,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
       ? 'Aún no juegas con ningún personaje: crea el tuyo («Crear mi personaje») o elige uno libre en la pestaña «Sala».'
       : 'Aún no juegas con ningún personaje: el grupo está completo, así que elige uno libre en la pestaña «Sala» o espera a la votación.')
     : !mayAct ? `${character.name} lo juega ${playerName(shared, controllerOf(shared, character.id))}: elige a uno de los tuyos para actuar.`
-      : meta.isGenerating ? 'Duncan está respondiendo: lo que escribas esperará en la cola de la sala.' : null;
+      : laneNow.generating ? 'Duncan está respondiendo: lo que escribas esperará en la cola de la sala.' : null;
   const tabClass = on => `flex-1 py-2 text-center border-b-2 ${on ? 'border-amber-500 text-amber-300 bg-amber-500/10' : 'border-transparent text-stone-400'}`;
 
   return (
@@ -147,12 +185,13 @@ export default function GuestTable({ code, name, kind, onLeave }) {
         <div className={`w-full ${encounter ? 'lg:w-60 xl:w-64' : 'lg:w-72 xl:w-80'} shrink-0 ${mobileTab === 'party' ? 'block' : 'hidden lg:block'}`}>
           <PartyPanel
             character={character}
-            party={heroes}
-            purse={view.party.gold}
+            party={sceneHeroes}
+            elsewhere={elsewhere}
+            purse={scope.gold}
             onSelectMember={setSelectedId}
             onDismissMember={hostOnly}
             onTransferItem={() => HOST_ONLY}
-            longRestCost={longRestCost(view.party)}
+            longRestCost={longRestCost(scope)}
             onUpdateCharacter={changeEquipment}
             onOrderDrink={hostOnly}
             onRollCheck={actFor(acts.check)}
@@ -162,7 +201,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
             onUseItem={actFor(acts.item)}
             busy={false}
             inCombat={inCombat}
-            atTavern={isAtTavern(view.world)}
+            atTavern={isAtTavern(sceneWorldView)}
           />
         </div>
 
@@ -181,25 +220,29 @@ export default function GuestTable({ code, name, kind, onLeave }) {
             <Suspense fallback={null}>
               <CombatView
                 encounter={encounter}
-                heroes={heroes}
+                heroes={sceneHeroes}
                 onAction={action => send({ type: 'combat', characterId: turnUid, action })}
-                onFinish={() => {}}
-                canFinish={false}
-                busy={Boolean(meta.combatBusy)}
+                onFinish={() => (finisher ? send({ type: 'finish', characterId: finisher.id }) : null)}
+                canFinish={Boolean(finisher)}
+                busy={Boolean(laneNow.combat)}
                 waitingFor={turnPlayer}
               />
             </Suspense>
           ) : (
             <StoryStream
-              messages={view.chronicle || []}
-              isGenerating={Boolean(meta.isGenerating)}
-              suggestedActions={meta.suggestedActions || []}
+              messages={chronicle}
+              isGenerating={Boolean(laneNow.generating)}
+              suggestedActions={suggestions}
               character={character}
               party={heroes}
               actors={mine}
               onSelectMember={setSelectedId}
+              scenes={sceneTabs}
+              onSelectScene={chooseScene}
+              prologues={prologues}
+              memberPlaces={apart ? Object.fromEntries(heroes.map(h => [h.id, placeOf(h.id)])) : null}
               pendingRecruit={null}
-              world={view.world}
+              world={sceneWorldView}
               onSendAction={actFor(acts.text)}
               onOpenGeminiConnect={() => setLocalNotice(meta.aiActive ? 'Duncan usa la clave de Gemini del anfitrión: tú no necesitas ninguna.' : 'El anfitrión juega con el motor local (sin IA). Si conecta su clave de Gemini, Duncan narrará para todos.')}
               keysCount={meta.aiActive ? 1 : 0}
@@ -230,8 +273,11 @@ export default function GuestTable({ code, name, kind, onLeave }) {
               <RoomPanel room={shared} me={playerId} characters={heroes} link={roomLink(shared.code, kind)} onIntent={send} />
             ) : (
               <WorldMapPanel
-                world={view.world}
-                onTravelToNode={hostOnly}
+                world={sceneWorldView}
+                onTravelToNode={apart ? actFor(acts.travel) : hostOnly}
+                markers={apart ? mapMarkers : []}
+                meetingNodeId={meetingNodeId}
+                travelLocked={apart && (laneNow.generating || inCombat) ? 'Espera a que Duncan termine para viajar.' : null}
                 summary={view.journal?.summary || ''}
                 events={view.journal?.events || []}
                 quests={view.journal?.quests || []}
@@ -263,14 +309,57 @@ export default function GuestTable({ code, name, kind, onLeave }) {
             world={view.world}
             completeLabel="Unirme al grupo"
             onCancel={() => setCreating(false)}
-            onComplete={(_character, draft) => {
+            onComplete={(built, draft) => {
+              setCreating(false);
+              // A campaign that started apart: first, where the character starts
+              if (startZones.length) {
+                setPendingDraft({ character: built, draft, zoneId: suggestZone(built, startZones)?.id || null });
+                return;
+              }
               // Only the choices travel: the host builds the sheet with the rules
               send({ type: 'create', draft });
-              setCreating(false);
               setLocalNotice('Ficha enviada al anfitrión: tu personaje aparecerá en el grupo en un momento.');
             }}
           />
         </Suspense>
+      )}
+
+      {pendingDraft && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby="start-zone-title">
+          <div className="max-w-md w-full rounded-2xl bg-[#141019] border border-emerald-900/60 p-5 space-y-3">
+            <h2 id="start-zone-title" className="font-cinzel font-bold text-stone-100">¿Dónde empieza {pendingDraft.character?.name || 'tu personaje'}?</h2>
+            <p className="text-xs text-stone-400">Esta campaña empezó «cada uno desde su origen»: tu personaje empieza en su tierra y la historia lo llevará hasta los demás.</p>
+            <ul className="space-y-1.5 max-h-72 overflow-y-auto">
+              {startZones.map(z => {
+                const why = fitLabel(pendingDraft.character || {}, z);
+                return (
+                  <li key={z.id}>
+                    <label className={`flex items-start gap-2 p-2 rounded-lg border text-xs cursor-pointer ${pendingDraft.zoneId === z.id ? 'border-emerald-500 bg-emerald-950/30 text-emerald-100' : 'border-stone-800 text-stone-300'}`}>
+                      <input type="radio" name="start-zone" checked={pendingDraft.zoneId === z.id} onChange={() => setPendingDraft(prev => ({ ...prev, zoneId: z.id }))} className="mt-0.5 accent-emerald-500" />
+                      <span>
+                        <span className="font-semibold">{z.name}</span>{z.id === suggestZone(pendingDraft.character || {}, startZones)?.id ? ' (sugerida)' : ''}
+                        <span className="block text-[10px] text-stone-500">{z.desc}{why ? ` · Encaja por: ${why}` : ''}</span>
+                      </span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setPendingDraft(null)} className="px-3 py-1.5 rounded-lg border border-stone-700 text-stone-300 text-xs">Cancelar</button>
+              <button
+                onClick={() => {
+                  send({ type: 'create', draft: pendingDraft.draft, zoneId: pendingDraft.zoneId });
+                  setPendingDraft(null);
+                  setLocalNotice('Ficha enviada al anfitrión: tu personaje aparecerá en su zona en un momento.');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-stone-950 text-xs font-bold"
+              >
+                Empezar aquí
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {levelingHero && (

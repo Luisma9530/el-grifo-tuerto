@@ -22,8 +22,32 @@ const publicMessage = m => ({
   timestamp: m.timestamp,
   xp: m.xp,
   source: m.source,
-  notice: m.notice
+  notice: m.notice,
+  // While the party is apart: the scene (group) the message belongs to
+  ...(m.groupId ? { groupId: m.groupId } : {})
 });
+
+/**
+ * The chronicle sent to the players: the last MAX_CHRONICLE messages of each
+ * chronicle (the common one and each scene of a party apart), in order. Each
+ * player's table shows only the chronicles they may read (see splitParty.js).
+ */
+export function chronicleForPlayers(messages = []) {
+  const counts = new Map();
+  const keep = [];
+  let chars = 0;
+  for (let i = messages.length - 1; i >= 0 && keep.length < MAX_CHRONICLE * 2; i--) {
+    const key = messages[i]?.groupId || '';
+    const n = counts.get(key) || 0;
+    if (n >= MAX_CHRONICLE) continue;
+    // (the realtime service limits the size of each message: never more text than before)
+    chars += Math.min(MAX_TEXT, String(messages[i]?.text || '').length);
+    if (chars > MAX_CHRONICLE * MAX_TEXT) break;
+    counts.set(key, n + 1);
+    keep.push(messages[i]);
+  }
+  return keep.reverse();
+}
 
 /** The room as the players see it (it holds nothing secret, see room.js). */
 export const publicRoom = room => ({
@@ -35,18 +59,22 @@ export const publicRoom = room => ({
   votes: room.votes,
   ties: room.ties,
   queue: room.queue.map(q => ({ id: q.id, playerId: q.playerId, characterId: q.characterId, kind: q.kind, label: q.label })),
-  chat: room.chat
+  chat: room.chat,
+  shareScenes: Boolean(room.shareScenes)
 });
 
 /**
  * Every section of the shared state.
- * @param game the host's state: { title, world, party, messages, suggestedActions, encounter,
+ * @param game the host's state: { title, world, party, messages, suggestedActions, encounter, encounters, lanes,
  *   quests, events, summary, isGenerating, combatBusy, pendingRecruit, room, aiActive }
  */
 export function buildSections(game) {
-  const encounter = game.encounter
-    ? { ...game.encounter, log: (game.encounter.log || []).slice(-MAX_COMBAT_LOG) }
-    : null;
+  const trimFight = fight => (fight ? { ...fight, log: (fight.log || []).slice(-MAX_COMBAT_LOG) } : null);
+  const encounter = trimFight(game.encounter);
+  // The fights of the groups apart, one per group ({ [groupId]: encounter })
+  const encounters = Object.fromEntries(Object.entries(game.encounters || {}).filter(([, f]) => f).map(([lane, f]) => [lane, trimFight(f)]));
+  // What each group apart is doing now: Duncan narrating, dice rolling
+  const lanes = Object.fromEntries(Object.entries(game.lanes || {}).filter(([lane]) => lane).map(([lane, l]) => [lane, { generating: Boolean(l?.generating), combat: Boolean(l?.combat) }]));
   return {
     meta: {
       title: game.title || '',
@@ -54,17 +82,19 @@ export function buildSections(game) {
       combatBusy: Boolean(game.combatBusy),
       suggestedActions: Array.isArray(game.suggestedActions) ? game.suggestedActions.slice(0, 6) : [],
       pendingRecruit: game.pendingRecruit ? { character: pickRecruit(game.pendingRecruit.character), reason: game.pendingRecruit.reason || '' } : null,
-      aiActive: Boolean(game.aiActive)
+      aiActive: Boolean(game.aiActive),
+      lanes
     },
     party: game.party || null,
     world: game.world || null,
     encounter,
+    encounters,
     journal: {
       quests: game.quests || [],
       events: (game.events || []).slice(-MAX_EVENTS),
       summary: game.summary || ''
     },
-    chronicle: (game.messages || []).slice(-MAX_CHRONICLE).map(publicMessage),
+    chronicle: chronicleForPlayers(game.messages || []).map(publicMessage),
     room: game.room ? publicRoom(game.room) : null
   };
 }
