@@ -428,9 +428,11 @@ export function castSpell(character, spellId, rollDie, { target = null, targetUi
 
 /**
  * The line written in the chronicle (and sent to the Dungeon Master) for a cast.
- * `dc` is the difficulty a spell attack was compared against.
+ * `dc` is the Armor Class a spell attack was compared against (`against`: how to
+ * show it, "CA 16 del guardia"); a saving throw already rolled by the game
+ * (`cast.targetSave`, see rollTargetSave in checks.js) is written with its result.
  */
-export function describeCast(cast, { target = '', dc = 12 } = {}) {
+export function describeCast(cast, { target = '', dc = 12, against = '' } = {}) {
   const { spell } = cast;
   const on = target.trim() ? ` sobre ${target.trim()}` : '';
   const what = spell.level === 0 ? 'el truco' : 'el conjuro';
@@ -443,8 +445,15 @@ export function describeCast(cast, { target = '', dc = 12 } = {}) {
   if (cast.attack) {
     const { raw, total, isNat20, isNat1 } = cast.attack;
     const hit = isNat20 || (!isNat1 && total >= dc);
-    parts.push(`[🎲 Ataque de conjuro D20: ${raw} (+${cast.attackBonus}) = ${total} vs CD ${dc}]`);
+    parts.push(`[🎲 Ataque de conjuro D20: ${raw} (+${cast.attackBonus}) = ${total} vs ${against || `CD ${dc}`}]`);
     parts.push(isNat20 ? `¡Crítico! Impacta y hace ${dmg}.` : hit ? `Impacta y hace ${dmg}.` : 'Falla.');
+  } else if (spell.kind === 'save' && cast.targetSave) {
+    const save = abilityName(spell.save);
+    const roll = cast.targetSave;
+    parts.push(`[🎲 Salvación de ${save} ${roll.of}: ${roll.raw} ${roll.bonus >= 0 ? '+' : '−'}${Math.abs(roll.bonus)} = ${roll.total} vs CD ${cast.saveDC}]`);
+    parts.push(roll.success
+      ? `Resiste${dmg && spell.half ? ` y sufre la mitad: ${Math.floor(cast.damage.total / 2)} de daño ${cast.damage.type}` : ''}.`
+      : `No resiste${dmg ? ` y sufre ${dmg}` : `: ${spell.desc}`}.`);
   } else if (spell.kind === 'save') {
     const save = abilityName(spell.save);
     parts.push(dmg

@@ -6,8 +6,9 @@ import StoryStream from './game/StoryStream';
 import WorldMapPanel from './game/WorldMapPanel';
 import { MobileTabBar, SideColumn } from './game/GameLayout';
 import { PRESET_WORLDS, PRESET_CHARACTERS } from '../data/gameData';
-import { generateDMResponse, rollCheck, rollDie, getStoredGeminiKeys, getModifierNumber } from '../utils/gameEngine';
+import { generateDMResponse, rollDie, getStoredGeminiKeys, getModifierNumber } from '../utils/gameEngine';
 import { castSpell, describeCast } from '../utils/spellcasting';
+import { opponentFromText, targetAC, rollTargetSave } from '../utils/checks';
 import {
   saveCampaign,
   createNewCampaign,
@@ -83,6 +84,9 @@ const loadBestiary = () => {
   CombatView.preload();
   return import('../utils/bestiary');
 };
+
+// Creatures of the bestiary for checks and spells against one of them (no fight on the way)
+const loadCreatures = () => import('../utils/bestiary');
 
 const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const levelReadyLine = name => `✨ ¡${name} tiene experiencia suficiente para subir de nivel! Selecciónalo y pulsa «Subir de nivel» en su ficha.`;
@@ -382,7 +386,7 @@ export default function TavernApp({
   // `meeting`: { joined, place } groups that were apart just met here (Duncan narrates the meeting)
   const handleSendAction = async (actionText, {
     playerRoll = null, sheet = character, spellCast = null, rest = null, effectsApplied = false,
-    weaponAttack = null, combatResult = null, loot = null, meeting = null
+    weaponAttack = null, combatResult = null, loot = null, meeting = null, checkIntent = null
   } = {}) => {
     const actorId = sheet.id;
     // Each lane narrates one action at a time; other groups' lanes go on in parallel
@@ -431,7 +435,7 @@ export default function TavernApp({
       const lenderNames = joinNames([...new Set(duncanKeys.map(k => k.playerId).filter(Boolean))].map(id => playerName(onlineRoom, id)));
 
       // A plain action outside combat may start a fight: Duncan gets a short list of creatures
-      const mayStartFight = !encounter && !combatResult && !playerRoll && !spellCast && !rest && !weaponAttack && !meeting;
+      const mayStartFight = !encounter && !combatResult && !playerRoll && !spellCast && !rest && !weaponAttack && !meeting && !checkIntent;
       // ...or open a shop (the game sets the prices), or bring in a companion
       const here = currentNode(world);
       const levels = membersOf(partyNow).map(m => m.level || 1);
@@ -459,7 +463,13 @@ export default function TavernApp({
       const askHook = group && !group.hook && meetingNode && group.nodeId !== meetingNode.id && !combatResult && !meeting
         ? { place: meetingNode.name, names: groupNames(partyFull, group), force: (group.turns || 0) >= 1 }
         : null;
+      // A check against a creature of the bestiary uses its sheet (loaded once, no fight)
+      const creatures = bestiaryModule || (!combatResult ? await loadCreatures().catch(() => null) : null);
       const response = await askWithKeyFallback(apiKeys => generateDMResponse({
+        checkIntent,
+        getMonster: creatures?.getMonster || null,
+        // What the player is trying when the check comes from the sheet
+        contextText: history.slice(-3).map(m => String(m.text || '')).join(' ').slice(-600),
         playerAction: actionText,
         character: sheet,
         world,
@@ -529,9 +539,11 @@ export default function TavernApp({
       }
 
       // Duncan rolled behind the screen: show the die before his narration
+      // (a check shows its DC or who resists: «Engaño 14 contra Perspicacia del erudito 17»)
       if (response.roll) {
         const isEnemySave = spellCast?.spell.kind === 'save';
-        await animateRoll({ ...response.roll, label: isEnemySave ? 'Salvación del objetivo' : 'Tirada de acción' });
+        const label = response.check ? `${sheet.name} · ${response.check.label}` : isEnemySave ? 'Salvación del objetivo' : 'Tirada de acción';
+        await animateRoll({ ...response.roll, label });
       }
 
       // Apply the consequences of the scene: to the member who acted, or to the members
@@ -1035,42 +1047,21 @@ export default function TavernApp({
     if (skill) handleRollCheck({ label: skill.name, modifier: skillModifier(character, skillId), ability: skill.ability, skillId });
   };
 
-  // When rolling an ability or skill check from the character sheet
+  // When rolling an ability or skill check from the character sheet: the DC (or who
+  // resists) depends on the situation, so Duncan (or the local table) sets it and the
+  // game rolls it with this sheet before the narration (see checks.js)
   // `ability` / `skillId`: the armor may give Disadvantage (no training, or Stealth in heavy armor)
-  const handleRollCheck = async ({ label, modifier, ability = null, skillId = null }, actorId = character.id) => {
-    const { lane, character, animateRoll, busy } = actorTools(actorId);
+  const handleRollCheck = async ({ label, ability = null, skillId = null }, actorId = character.id) => {
+    const { character, busy } = actorTools(actorId);
     if (!character || busy()) return;
-    setLaneFlag(lane, 'rolling', true);
-
-    try {
-      // Armor without training, poisoned, frightened, exhausted... (see checkModifiers)
-      const mods = checkModifiers(character, { ability, skillId });
-      const both = mods.advantage.length > 0 && mods.disadvantage.length > 0;
-      const disadvantage = !both && mods.disadvantage.length ? mods.disadvantage.join(', ') : null;
-      const advantage = !both && mods.advantage.length ? mods.advantage.join(', ') : null;
-      const check = rollCheck({
-        modifier: modifier - mods.penalty,
-        statName: disadvantage ? `${label} con desventaja` : advantage ? `${label} con ventaja` : label,
-        silent: true,
-        disadvantage: Boolean(disadvantage),
-        advantage: Boolean(advantage)
-      });
-      await animateRoll({
-        sides: 20,
-        value: check.rawRoll,
-        modifier: check.modifier,
-        dc: check.dc,
-        success: check.success,
-        label: `${character.name} · ${label}`
-      });
-
-      const tired = mods.penalty ? ` (agotamiento: −${mods.penalty})` : '';
-      const textDesc = `Realizo una tirada de ${label}${disadvantage ? ` con desventaja (${disadvantage})` : advantage ? ` con ventaja (${advantage})` : ''}${tired} [🎲 D20: ${check.rawRoll} (${check.modifier >= 0 ? `+${check.modifier}` : check.modifier}) = ${check.total} vs CD ${check.dc}].`;
-      setLaneFlag(lane, 'rolling', false);
-      handleSendAction(textDesc, { sheet: character, playerRoll: check });
-    } finally {
-      setLaneFlag(lane, 'rolling', false);
-    }
+    // Armor without training, poisoned, frightened, exhausted... (applied when it is rolled)
+    const mods = checkModifiers(character, { ability, skillId });
+    const both = mods.advantage.length > 0 && mods.disadvantage.length > 0;
+    const disadvantage = !both && mods.disadvantage.length ? mods.disadvantage.join(', ') : null;
+    const advantage = !both && mods.advantage.length ? mods.advantage.join(', ') : null;
+    const tired = mods.penalty ? ` (agotamiento: −${mods.penalty})` : '';
+    const textDesc = `Intento una prueba de ${label}${disadvantage ? ` con desventaja (${disadvantage})` : advantage ? ` con ventaja (${advantage})` : ''}${tired}.`;
+    handleSendAction(textDesc, { sheet: character, checkIntent: { skillId, ability, label } });
   };
 
   // Casting a spell from the sheet: roll its dice, spend the slot and tell the Dungeon Master.
@@ -1090,7 +1081,13 @@ export default function TavernApp({
     try {
       const { cast } = result;
       const { spell } = cast;
-      const SPELL_ATTACK_DC = 12;
+      // Who it is cast on: a creature of the bestiary or an NPC profile ("el guardia")
+      // gives its Armor Class and saving throws; unknown targets use AC 12 and +1
+      const needsTarget = cast.attack || spell.kind === 'save';
+      const creatures = needsTarget && target.trim() ? await loadCreatures().catch(() => null) : null;
+      const opponent = needsTarget ? opponentFromText(target, creatures?.MONSTERS || []) : null;
+      const SPELL_ATTACK_DC = targetAC(opponent);
+      const acLabel = opponent ? `CA ${SPELL_ATTACK_DC} ${opponent.of}` : `CA ${SPELL_ATTACK_DC}`;
       const toDice = roll => roll.dice.map(value => ({ sides: roll.sides, value }));
 
       let playerRoll = null;
@@ -1099,11 +1096,11 @@ export default function TavernApp({
         const success = isNat20 || (!isNat1 && total >= SPELL_ATTACK_DC);
         await animateRoll({
           sides: 20, value: raw, modifier: cast.attackBonus, dc: SPELL_ATTACK_DC, success,
-          label: `${spell.name} · ataque`
+          against: acLabel, label: `${spell.name} · ataque`
         });
         playerRoll = {
           rawRoll: raw, modifier: cast.attackBonus, total, dc: SPELL_ATTACK_DC, success, isNat20, isNat1,
-          statName: `ataque de conjuro (${spell.name})`
+          against: acLabel, statName: `ataque de conjuro (${spell.name})`
         };
         if (success && cast.damage?.dice.length) {
           await animateRoll({ dice: toDice(cast.damage), modifier: cast.damage.bonus, label: `${spell.name} · daño` });
@@ -1117,6 +1114,15 @@ export default function TavernApp({
       const ally = cast.heal ? findMemberByName(sceneParty(character.id), target) : null;
       let sheet = result.character;
       let castForDuncan = cast;
+      // A saving throw: the caster's DC (8 + proficiency + spellcasting ability), the target rolls with its own
+      if (spell.kind === 'save' && !cast.attack) {
+        const targetSave = rollTargetSave({ opponent, ability: spell.save, dc: cast.saveDC, rollDie: sides => rollDie(sides, { silent: true }) });
+        await animateRoll({
+          sides: 20, value: targetSave.raw, modifier: targetSave.bonus, success: targetSave.success,
+          dc: cast.saveDC, label: `${spell.name} · salvación ${targetSave.of}`
+        });
+        castForDuncan = { ...cast, targetSave };
+      }
       if (ally && ally.id !== character.id) {
         // The caster keeps their own HP; the ally gets the healing
         sheet = { ...result.character, hp: character.hp };
@@ -1130,7 +1136,7 @@ export default function TavernApp({
       if (cast.cured?.length) pushSystemMessage(`✨ ${character.name} se libra de: ${cast.cured.join(', ')}.`);
       if (lane === laneOf()) setMobileTab('story');
       setLaneFlag(lane, 'rolling', false);
-      handleSendAction(describeCast(castForDuncan, { target, dc: SPELL_ATTACK_DC }), {
+      handleSendAction(describeCast(castForDuncan, { target, dc: SPELL_ATTACK_DC, against: acLabel }), {
         sheet,
         playerRoll,
         spellCast: castForDuncan,

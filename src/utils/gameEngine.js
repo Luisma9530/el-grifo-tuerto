@@ -11,6 +11,8 @@ import { rollDie } from './dice';
 import { getStoredGeminiKeys } from './geminiKeys';
 import { readCombatStart, localSurprise, localAmbush, isWildExploration } from './surprise';
 import { localHook, hookParagraph, narrateMeeting } from './origins';
+import { planLocalCheck, resolveCheck, resolveOpponent, findCheck } from './checks';
+import { narrateLocalCheck, narrateDuncanCheck } from './checkNarration';
 
 // Dice, modifiers and the stored Gemini keys live in their own small modules
 // (re-exported here so every existing import keeps working)
@@ -86,13 +88,18 @@ export async function generateDMResponse({
   sceneNote = '', meetingHook = null, meeting = null,
   // A party apart calls Duncan from several scenes at once: on Gemini's per-minute
   // limit this scene waits and retries, and `onQuotaWait(seconds)` tells it
-  onQuotaWait = null, quotaSleep = undefined
+  onQuotaWait = null, quotaSleep = undefined,
+  // A check the player asked for from the sheet ({ skillId, ability, label }): the DC (or
+  // who resists) comes from Duncan or the local table, and the game rolls it here.
+  // `getMonster(id)`: the bestiary, for checks against a creature of it.
+  // `contextText`: the last lines of the chronicle (what the player is trying)
+  checkIntent = null, getMonster = null, contextText = ''
 }) {
   const reply = await dmResponse({
     playerAction, character, world, history, apiKey, apiKeys, playerRoll, spellCast, rest, effectsApplied, weaponAttack,
     summary, events, requestSummary, bestiary, combatResult, allowShop, shopsHere, shopTypesHere, loot, quests, here,
     companions, partySize, partyNames, allowRecruit, allowDeparture, lastWasAmbush, sceneNote, meetingHook, meeting,
-    onQuotaWait, ...(quotaSleep ? { quotaSleep } : {})
+    onQuotaWait, ...(quotaSleep ? { quotaSleep } : {}), checkIntent, getMonster, contextText
   });
   // A reason to go to the meeting point: Duncan's, or the local engine's when it is due
   // (never in the reply that starts a fight or closes one)
@@ -110,11 +117,16 @@ async function dmResponse({
   allowShop = false, shopsHere = '', shopTypesHere = [], loot = null, quests = [], here = null,
   companions = '', partySize = 1, partyNames = [], allowRecruit = false, allowDeparture = false,
   lastWasAmbush = false, sceneNote = '', meetingHook = null, meeting = null,
-  onQuotaWait = null, quotaSleep = sleep
+  onQuotaWait = null, quotaSleep = sleep, checkIntent = null, getMonster = null, contextText = ''
 }) {
   // Rests, finished fights and spells without an attack or a saving throw involve no d20 at all
   const needsNoRoll = Boolean(rest) || Boolean(weaponAttack) || Boolean(combatResult)
-    || (spellCast && !spellCast.attack && spellCast.spell.kind !== 'save');
+    || (spellCast && !spellCast.attack && (spellCast.spell.kind !== 'save' || Boolean(spellCast.targetSave)));
+  // Every check of this scene is rolled the same way (with the acting member's sheet)
+  const die = sides => rollDie(sides, { silent: true });
+  const asked = checkIntent ? findCheck(checkIntent.skillId) || findCheck(checkIntent.ability) : null;
+  const intent = asked ? { ...asked, label: checkIntent.label || asked.label } : null;
+  const sceneText = [here?.name, here?.desc].filter(Boolean).join('. ');
 
   // Build active keys pool (from params or persistent storage)
   let pool = [];
@@ -160,7 +172,7 @@ async function dmResponse({
           playerAction, character, world, history, d20, playerRoll, spellCast, rest, effectsApplied,
           weaponAttack, summary, events, requestSummary, bestiary, combatResult, allowShop, shopsHere,
           quests: describeQuestsForPrompt(quests), companions, partySize, allowRecruit, allowDeparture,
-          sceneNote, meetingPlace: meetingHook?.place || ''
+          sceneNote, meetingPlace: meetingHook?.place || '', checkIntent: intent
         });
 
         if (reply.ok) {
@@ -172,8 +184,13 @@ async function dmResponse({
             const startsFight = Boolean(bestiary && parsed.combat);
             // A shop opens: the game sets prices and gold, so the narration moves no money
             const shop = allowShop && !startsFight ? parsed.shop : null;
+            // A check: Duncan set the DC (or who resists), the game rolls it and keeps his outcome
+            const rolled = !needsNoRoll && !playerRoll && !startsFight && !combatResult
+              ? rollSceneCheck(parsed.check, { character, intent, getMonster, playerAction, contextText, sceneText, die })
+              : null;
+            if (rolled) Object.assign(parsed, rolled.effects);
             return {
-              text: startsFight ? stripRollTags(parsed.text) : parsed.text,
+              text: startsFight ? stripRollTags(parsed.text) : rolled ? narrateDuncanCheck(stripRollTags(parsed.text), rolled.check, rolled.outcome) : parsed.text,
               suggestedActions: parsed.suggestedActions,
               // After a finished fight: no damage, healing or XP from the narration (already resolved)
               damageTaken: combatResult ? 0 : parsed.damageTaken,
@@ -200,8 +217,11 @@ async function dmResponse({
               recruit: allowRecruit && !startsFight && !combatResult ? parsed.recruit : null,
               departure: allowDeparture && !combatResult ? parsed.departure : null,
               meetingHook: parsed.meetingHook || null,
-              // A fight that starts is rolled by the game, not by Duncan
-              roll: parsed.usedRoll && !playerRoll && !needsNoRoll && !startsFight ? { sides: 20, value: d20 } : null,
+              // The check the game rolled for Duncan (none when a fight starts: the game rolls it)
+              // (plain-text replies, and old saves of a spell, still use the d20 sent in the prompt)
+              roll: rolled ? checkRoll(rolled.check)
+                : parsed.usedRoll && !playerRoll && !needsNoRoll && !startsFight && (parsed.plain || spellCast?.spell.kind === 'save') ? { sides: 20, value: d20 } : null,
+              check: rolled ? rolled.check : null,
               source: 'gemini',
               keyIndex: activeIdx,
               totalKeys: pool.length
@@ -230,7 +250,8 @@ async function dmResponse({
   const actionLower = playerAction.toLowerCase();
   // Sounds for this roll are played by the dice animation (see `roll` in the result)
   const rollResult = playerRoll ? playerRoll.rawRoll : rollDie(20, { silent: true });
-  const isHighRoll = playerRoll ? playerRoll.success : rollResult >= 12;
+  // Brawls outside the fight system (no bestiary): the attack against an average guard
+  const isHighRoll = playerRoll ? playerRoll.success : rollResult >= BRAWL_AC;
   const isCrit = rollResult === 20;
   const isCritFail = rollResult === 1;
 
@@ -248,6 +269,9 @@ async function dmResponse({
   let recruit = null;
   let recruitScene = null;
   let ambush = null;
+  // A check of the local table (see checks.js): its DC, who resists and the roll
+  let localPlan = null;
+  let localCheck = null;
   if (combatResult) {
     ({ text, suggestedActions, goldEarned } = narrateCombatEnd(combatResult, { character, rng: Math.random, loot }));
     spellXp = 0;
@@ -324,8 +348,16 @@ La prueba de ${stat} no sale: te quedas corto por poco y la ocasión se te escap
         ];
   }
 
+  // A check the player asked for from the sheet: the local table sets its DC
+  else if (intent) {
+    localPlan = planLocalCheck(playerAction, { sceneText, intent, contextText });
+    localCheck = rollPlannedCheck(localPlan, character, die);
+    ({ text, suggestedActions, damageTaken, goldEarned } = narrateLocalCheck(localPlan, localCheck, { character, rng: Math.random }));
+  }
+
   // Shops: the game opens the counter with its own prices
-  else if (allowShop && (shop = shopForAction(actionLower, shopTypesHere))) {
+  // (not when the action is clearly a check against someone: "forzar el cofre del mercader")
+  else if (allowShop && !isCheckAgainstSomeone(playerAction) && (shop = shopForAction(actionLower, shopTypesHere))) {
     ({ text, suggestedActions } = narrateShopOpening(shop, { character, world }));
     spellXp = 0;
   }
@@ -419,36 +451,11 @@ El brebaje entra ardiendo como fuego líquido. Sientes un calor reconfortante ex
     ];
   }
 
-  // Stealth / Theft / Sneaking actions
-  else if (actionLower.includes('sigilo') || actionLower.includes('esconder') || actionLower.includes('robar') || actionLower.includes('sombras') || actionLower.includes('abrir') || actionLower.includes('ganzua') || actionLower.includes('bolsillo')) {
-    if (isHighRoll) {
-      goldEarned = 12;
-      text = `Te deslizas entre las sombras con la suavidad del humo de tabaco [🎲 Sigilo D20: **${rollResult} (Éxito)**].
-
-Nadie en la sala nota cómo tus dedos rozan el objetivo. Logras deslizar una bolsa de cuero abultada con **12 monedas de oro** sin que la víctima sospeche lo más mínimo. 
-
-Al volver a tu sitio, notas que Maese Duncan te está mirando con una ceja levantada y una sonrisa socarrona mientras limpia una copa.
-—*Buena mano, sombra. Pero como toques mi caja fuerte, te juro que la próxima jarra la serviré con arsénico.*`;
-      suggestedActions = [
-        'Examinar el contenido misterioso de la bolsa',
-        'Guardar silencio y disimular bebiendo tranquilamente',
-        'Buscar una ventana o salida secundaria',
-        'Ofrecerle a Duncan una moneda por su complicidad'
-      ];
-    } else {
-      text = `Un tablón chirría bajo tu peso con un sonido que parece un graznido de cuervo [🎲 Sigilo D20: **${rollResult} (Fallo)**]. 
-
-Varias miradas se clavan inmediatamente en ti. El sujeto al que intentabas vigilar se incorpora bruscamente, palpándose la faja con el ceño fruncido.
-
-Duncan tose ruidosamente fingiendo limpiar el mostrador para amortiguar el revuelo:
-—*¡Vaya, parece que el suelo tiene carcoma! Forastero, si buscas el retrete está al fondo a la derecha, no hace falta que vayas dando saltitos como una ardilla asustada.*`;
-      suggestedActions = [
-        'Fingir embriaguez para desviar sospechas',
-        'Afrontar la situación con una disculpa diplomática',
-        'Desenvainar el arma por si las cosas se tuercen',
-        'Preguntar la hora con descaro'
-      ];
-    }
+  // Climbing, sneaking, lying, picking a lock, remembering lore...: a check of the
+  // local table, with a DC by kind of action and context (see LOCAL_DC_TABLE)
+  else if ((localPlan = planLocalCheck(playerAction, { sceneText }))) {
+    localCheck = rollPlannedCheck(localPlan, character, die);
+    ({ text, suggestedActions, damageTaken, goldEarned } = narrateLocalCheck(localPlan, localCheck, { character, rng: Math.random }));
   }
 
   // Magic / Spells
@@ -492,7 +499,9 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
     damageTaken,
     healing: 0,
     goldEarned,
-    xpEarned: localXp({ text, rest, spellXp, isCrit, isCritFail, isHighRoll }),
+    xpEarned: localXp(localCheck
+      ? { text, rest, spellXp, isCrit: localCheck.isNat20, isCritFail: localCheck.isNat1, isHighRoll: localCheck.success }
+      : { text, rest, spellXp, isCrit, isCritFail, isHighRoll }),
     combat,
     shop,
     limbChanges: [],
@@ -507,7 +516,60 @@ Fuera, un trueno lejano retumba haciendo vibrar las botellas en la estantería. 
       : null,
     // Set when Gemini keys exist but the AI could not answer this turn
     notice: aiFailure ? AI_FAILURE_NOTICES[aiFailure] || AI_FAILURE_NOTICES.overloaded : null,
-    // Only when Duncan's own roll is mentioned in the narration
-    roll: !playerRoll && text.includes('🎲') ? { sides: 20, value: rollResult } : null
+    // Only when Duncan's own roll is mentioned in the narration (a check: with its DC or rival)
+    roll: localCheck ? checkRoll(localCheck) : !playerRoll && !spellCast?.targetSave && text.includes('🎲') ? { sides: 20, value: rollResult } : null,
+    check: localCheck
+  };
+}
+
+/** Kinds of check that never open a shop, even when the action names a merchant. */
+const NOT_SHOPPING = ['lock', 'pickpocket', 'hide', 'deceive', 'intimidate', 'grapple', 'force', 'climb'];
+const isCheckAgainstSomeone = action => NOT_SHOPPING.includes(planLocalCheck(action)?.kind);
+
+/** Armor Class of a brawl the local engine narrates without the fight system. */
+const BRAWL_AC = 12;
+
+/** Roll a check the local engine planned (see planLocalCheck). */
+function rollPlannedCheck(plan, character, die) {
+  return resolveCheck({
+    character, skillId: plan.skillId, ability: plan.ability, label: plan.checkLabel || '',
+    dc: plan.dc, opponent: plan.opponent, rollDie: die
+  });
+}
+
+/** The die the UI shows before the narration of a check (with its DC or who resists). */
+export function checkRoll(check) {
+  return {
+    sides: 20, value: check.rawRoll, modifier: check.modifier, success: check.success,
+    ...(check.dc != null ? { dc: check.dc } : {}), against: check.against, label: check.label
+  };
+}
+
+/**
+ * The check of a reply by Duncan (or the one the player asked for, if he set none):
+ * rolled with the sheet of whoever acts against his DC or the one who resists.
+ * Returns null when the scene has no check; else { check, outcome, effects }, with
+ * `effects` the numbers of the outcome that replace those of the reply.
+ */
+function rollSceneCheck(request, { character, intent, getMonster, playerAction, contextText, sceneText, die }) {
+  if (!request && !intent) return null;
+  if (!request) {
+    // He set no DC for the check the player asked for: the local table does
+    const plan = planLocalCheck(playerAction, { sceneText, intent, contextText });
+    return { check: rollPlannedCheck(plan, character, die), outcome: null, effects: {} };
+  }
+  const opponent = resolveOpponent(request.against, { getMonster });
+  const check = resolveCheck({
+    character, skillId: request.skillId, ability: request.ability, dc: request.dc,
+    opponent, opposedSkill: request.against?.skillId || null, rollDie: die
+  });
+  const outcome = check.success ? request.success : request.failure;
+  return {
+    check,
+    outcome,
+    effects: {
+      damageTaken: outcome.damageTaken, healing: outcome.healing, goldEarned: outcome.goldEarned, xpEarned: outcome.xpEarned,
+      ...(outcome.suggestedActions ? { suggestedActions: outcome.suggestedActions } : {})
+    }
   };
 }

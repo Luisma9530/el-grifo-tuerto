@@ -23,7 +23,6 @@ function describeRoll(roll, outcome) {
   else if (outcome === 'fumble') verdict = '¡Pifia!';
   else if (typeof roll.success === 'boolean') verdict = roll.success ? 'Éxito' : 'Fallo';
   else if (typeof roll.dc === 'number') verdict = total >= roll.dc ? 'Éxito' : 'Fallo';
-
   return { total, breakdown, verdict };
 }
 
@@ -181,10 +180,14 @@ export default function DiceOverlay() {
             {result.verdict && (
               <div className={`mt-1 font-cinzel font-bold text-sm uppercase tracking-wider whitespace-nowrap ${styles.number}`}>
                 {result.verdict}
-                {typeof roll.dc === 'number' && outcome === 'normal' && (
+                {outcome === 'normal' && !roll.against && typeof roll.dc === 'number' && (
                   <span className="text-stone-400 font-mono normal-case tracking-normal"> · CD {roll.dc}</span>
                 )}
               </div>
+            )}
+            {/* What a check was compared with: «contra Perspicacia del erudito 17» (own line: it can be long) */}
+            {roll.against && (
+              <div className="mt-0.5 max-w-[15rem] mx-auto text-[11px] font-mono text-stone-400 leading-snug">contra {roll.against}</div>
             )}
           </div>
         </div>
@@ -198,7 +201,7 @@ export default function DiceOverlay() {
 
       {/* Announce the result to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
-        {result && `${roll.label || `Tirada de ${roll.notation}`}: ${result.total}${result.breakdown ? ` (${result.breakdown})` : ''}${result.verdict ? `. ${result.verdict}` : ''}`}
+        {result && `${roll.label || `Tirada de ${roll.notation}`}: ${result.total}${result.breakdown ? ` (${result.breakdown})` : ''}${result.verdict ? `. ${result.verdict}` : ''}${roll.against ? `, contra ${roll.against}` : ''}`}
       </div>
     </div>
   );

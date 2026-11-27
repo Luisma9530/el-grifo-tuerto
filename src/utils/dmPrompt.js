@@ -15,6 +15,7 @@ import { MAX_PARTY } from './party';
 import { SURPRISE_REPLY_SIDES } from './surprise';
 import { cleanMeetingHook } from './origins';
 import { HOOK_KINDS } from './splitParty';
+import { CHECK_NAMES, NPC_PROFILE_IDS, NPC_PROFILES, DC_SCALE, cleanCheckRequest } from './checks';
 
 /** Limb ids and states in the reply (Spanish, as the model writes them) -> sheet values. */
 export const LIMB_REPLY_IDS = { brazoDerecho: 'rightArm', brazoIzquierdo: 'leftArm', piernaDerecha: 'rightLeg', piernaIzquierda: 'leftLeg' };
@@ -37,6 +38,46 @@ const CONDITION_CAUSE_MAX = 60;
 const HISTORY_MESSAGES = 14;
 const HISTORY_CHARS_PER_MESSAGE = 500;
 
+/** One outcome of a check Duncan asks for: what happens if it goes well (or badly). */
+const CHECK_OUTCOME_SCHEMA = description => ({
+  type: 'OBJECT',
+  description,
+  properties: {
+    narracion: { type: 'STRING', description: '1 o 2 párrafos que siguen a la narración principal con este resultado.' },
+    danio: { type: 'INTEGER', nullable: true },
+    curacion: { type: 'INTEGER', nullable: true },
+    oro: { type: 'INTEGER', nullable: true },
+    experiencia: { type: 'INTEGER', nullable: true },
+    opciones: { type: 'ARRAY', nullable: true, items: { type: 'STRING' } }
+  },
+  required: ['narracion']
+});
+
+/** The check Duncan asks for: the game rolls it and picks the outcome. */
+export const CHECK_SCHEMA = {
+  type: 'OBJECT',
+  nullable: true,
+  description: 'Solo si la acción tiene un resultado incierto: la prueba que hay que tirar. El juego tira el d20, lo compara y elige "exito" o "fallo".',
+  properties: {
+    habilidad: { type: 'STRING', enum: CHECK_NAMES, description: 'Habilidad (o característica) de la prueba.' },
+    cd: { type: 'INTEGER', nullable: true, description: 'Clase de Dificultad de 5 a 30 según la situación (si nadie se opone).' },
+    contra: {
+      type: 'OBJECT',
+      nullable: true,
+      description: 'Solo si alguien se opone (le engañan, le esquivan, le agarran): contra quién.',
+      properties: {
+        perfil: { type: 'STRING', nullable: true, enum: NPC_PROFILE_IDS, description: 'Tipo de persona, si no es una criatura de la lista.' },
+        criatura: { type: 'STRING', nullable: true, description: 'id de una criatura de la lista, si lo es.' },
+        nombre: { type: 'STRING', nullable: true, description: 'Nombre o descripción breve: "Albus", "el capitán".' },
+        habilidad: { type: 'STRING', nullable: true, enum: CHECK_NAMES, description: 'Lo que tira el otro, si no es lo habitual.' }
+      }
+    },
+    exito: CHECK_OUTCOME_SCHEMA('Lo que pasa si la supera.'),
+    fallo: CHECK_OUTCOME_SCHEMA('Lo que pasa si falla.')
+  },
+  required: ['habilidad', 'exito', 'fallo']
+};
+
 const DEFAULT_ACTIONS = [
   'Inspeccionar los alrededores',
   'Hablar con Duncan sobre el asunto',
@@ -57,6 +98,7 @@ export const DM_RESPONSE_SCHEMA = {
     oro: { type: 'INTEGER', description: 'Monedas de oro ganadas (positivo) o gastadas/perdidas (negativo).' },
     experiencia: { type: 'INTEGER', description: 'Puntos de experiencia ganados por superar un reto (0 si ninguno).' },
     opciones: { type: 'ARRAY', items: { type: 'STRING' }, description: '3 o 4 sugerencias breves de acción.' },
+    prueba: CHECK_SCHEMA,
     extremidades: {
       type: 'ARRAY',
       nullable: true,
@@ -293,6 +335,25 @@ function formatHistory(history, characterName) {
     .join('\n\n');
 }
 
+/** NPC profiles Duncan can name, with what they are good at (see NPC_PROFILES in checks.js). */
+const PROFILE_HINTS = {
+  nino: 'ingenuo', borracho: 'despistado', plebeyo: 'corriente', anciano: 'difícil de engañar', guardia: 'atento',
+  soldado: 'fuerte y curtido', bandido: 'bruto', mercader: 'regatea y caza mentiras', erudito: 'muy perspicaz y sabio',
+  noble: 'perspicaz y con labia', sacerdote: 'muy perspicaz', espia: 'lo ve todo'
+};
+
+/** How Duncan sets checks in the structured reply: the game rolls them. */
+function checkRules({ name, checkIntent, bestiary }) {
+  const profiles = NPC_PROFILE_IDS.map(id => `"${id}" (${NPC_PROFILES[id].label}, ${PROFILE_HINTS[id]})`).join(', ');
+  return `${checkIntent ? `${name} ha pedido hacer una prueba de ${checkIntent.label} desde su ficha: lo que intenta está en su acción y en la crónica reciente. Devuelve "prueba" con "habilidad": "${checkIntent.label}" y la CD (o el rival) que pida la situación.
+` : ''}- Si la acción tiene riesgo o un resultado incierto (trepar, convencer, mentir, esconderse, forzar una cerradura, recordar un saber...), NO la resuelvas tú: devuelve "prueba". El juego tira el d20 con la ficha de ${name}, lo compara y añade a tu narración el desenlace que salga. En "narracion" cuenta solo el intento, sin decir cómo acaba; en "prueba.exito" y "prueba.fallo" cuenta lo que pasa en cada caso, cada uno con su propio "danio", "oro", "experiencia" y "opciones" (los de fuera se ignoran). Marca "usaTirada": true.
+- "habilidad": la habilidad o característica que corresponde (Atletismo para trepar o nadar, Engaño para mentir, Sigilo para esconderse, Destreza para una cerradura, Historia o Arcanos para recordar...).
+- "cd": la Clase de Dificultad según la situación, con la escala de las reglas: ${DC_SCALE.map(s => `${s.dc} ${s.name}`).join(', ')}. Si dudas, 15. Ejemplos: saltar un arroyo 5; trepar una tapia con buenos asideros 10; un muro liso bajo la lluvia 20; forzar un candado oxidado 10, la cerradura de la cámara de un banquero enano 25; recordar una leyenda que se cuenta en todas las tabernas 10, un rito olvidado hace siglos 20; abrir a empujones una puerta atrancada 15; cruzar a nado un río crecido en plena tormenta 25.
+- "contra": si alguien se opone, en vez de una CD fija: engañar, persuadir o intimidar se tiran contra su Perspicacia; esconderse o robarle, contra su Percepción pasiva; agarrarlo o derribarlo, contra su Atletismo o Acrobacias. No es lo mismo engañar a un niño que a un erudito: ${bestiary ? 'si es una criatura de la lista de criaturas, pon su id en "criatura"; si es ' : 'si es '}una persona corriente, pon su "perfil": ${profiles}. Añade su "nombre" si lo tiene. El juego usa sus valores.
+- Si la acción no necesita tirada (conversar sin tensión, pedir una bebida, mirar algo evidente), omite "prueba" y pon "usaTirada": false.
+- No menciones dados, números de tirada ni la CD en tu narración: el juego los añade.`;
+}
+
 /**
  * Build the prompt for one player action.
  * @param {object} params
@@ -317,13 +378,14 @@ function formatHistory(history, characterName) {
  * @param {boolean} [params.allowDeparture] the model may make a member leave with "abandona"
  * @param {string} [params.sceneNote]    the party is apart: who is in this scene, who is elsewhere, a meeting (see splitParty.js)
  * @param {string} [params.meetingPlace] the model may give this scene a reason ("reunion") to go to this place
+ * @param {object} [params.checkIntent]  { skillId, ability, label }: the player asked for this check from the sheet
  */
 export function buildDMPrompt({
   playerAction, character, world, history, d20, playerRoll = null, structured = true,
   spellCast = null, rest = null, effectsApplied = false, weaponAttack = null,
   summary = '', events = [], requestSummary = false, bestiary = null, combatResult = null,
   allowShop = false, shopsHere = '', quests = '', companions = '', partySize = 1,
-  allowRecruit = false, allowDeparture = false, sceneNote = '', meetingPlace = ''
+  allowRecruit = false, allowDeparture = false, sceneNote = '', meetingPlace = '', checkIntent = null
 }) {
   const name = character.name || 'Aventurero';
   const group = partySize > 1;
@@ -332,6 +394,8 @@ export function buildDMPrompt({
   const inventory = (character.inventory || []).map(i => i.name).filter(Boolean).join(', ');
 
   const enemySave = spellCast && !spellCast.attack && spellCast.spell.kind === 'save';
+  // The game already rolled the target's saving throw (with its own sheet when known)
+  const savedByGame = enemySave && spellCast.targetSave;
   const noRoll = Boolean(rest) || (spellCast && !spellCast.attack && !enemySave);
   const attackDone = Boolean(weaponAttack);
   const saveAbility = enemySave ? ABILITIES.find(a => a.id === spellCast.spell.save)?.name : '';
@@ -343,21 +407,25 @@ Narra el desenlace (cómo queda el lugar, qué hacen los que se rindieron o huye
     ? 'El juego YA ha resuelto este ataque con sus propias tiradas, que aparecen en la acción del jugador: narra exactamente esos impactos, fallos y el daño que sufre el enemigo, sin cambiar ningún número ni tirar dados ("usaTirada": false). Tú solo decides cómo reacciona el enemigo: si está muy herido, si huye o se rinde, o si contraataca (en ese caso pon en "danio" lo que pierde el personaje).'
     : noRoll
     ? 'Esta acción no necesita ninguna tirada: no menciones dados y marca "usaTirada" como false.'
+    : savedByGame
+    ? `El jugador ha lanzado un conjuro que obliga a su objetivo a hacer una tirada de salvación de ${saveAbility} contra la CD ${spellCast.saveDC} (8 + competencia + característica de lanzamiento). El juego YA la ha tirado: ${spellCast.targetSave.text} → ${spellCast.targetSave.success ? 'RESISTE' : 'NO RESISTE'}${spellCast.targetSave.success && spellCast.damage && spellCast.spell.half ? ' (recibe la mitad del daño)' : ''}. Narra exactamente ese resultado, sin tirar ni mencionar otros dados ("usaTirada": false).`
     : enemySave
     ? `El jugador ha lanzado un conjuro que obliga a su objetivo a hacer una tirada de salvación. El d20 ya lanzado (${d20}) es la tirada de salvación de ${saveAbility} del OBJETIVO: súmale un modificador razonable para esa criatura (entre -1 y +4) y compárala con la CD ${spellCast.saveDC}. Si la iguala o supera, resiste el conjuro (o recibe la mitad del daño si el conjuro lo indica); si no, sufre el efecto completo. Menciónala así: [🎲 Salvación de ${saveAbility} del objetivo D20: ${d20} + mod = total vs CD ${spellCast.saveDC}] y marca "usaTirada" como true. No hagas ninguna otra tirada.`
     : playerRoll
-    ? `El jugador ya ha hecho una tirada de ${playerRoll.statName || 'habilidad'}: d20 = ${playerRoll.rawRoll}, total ${playerRoll.total} contra CD ${playerRoll.dc} → ${
+    ? `El jugador ya ha hecho una tirada de ${playerRoll.statName || 'habilidad'}: d20 = ${playerRoll.rawRoll}, total ${playerRoll.total} contra ${playerRoll.against || `CD ${playerRoll.dc}`} → ${
         playerRoll.isNat20 ? 'ÉXITO CRÍTICO' : playerRoll.isNat1 ? 'PIFIA' : playerRoll.success ? 'ÉXITO' : 'FALLO'
       }. Narra exactamente ese resultado; no hagas ni menciones ninguna otra tirada.`
+    : structured
+    ? checkRules({ name, checkIntent, bestiary })
     : `El dado de 20 caras YA se ha lanzado para esta acción y ha salido: ${d20}${d20 === 20 ? ' (crítico natural)' : d20 === 1 ? ' (pifia natural)' : ''}.
-- Si la acción tiene riesgo o un resultado incierto (combate, sigilo, persuadir, trepar, magia...), DEBES resolverla con ESE número: súmale el modificador del atributo adecuado (más su bonificador de competencia si usa una habilidad en la que es competente) y compáralo con una Clase de Dificultad razonable (8 fácil, 12 normal, 16 difícil). Un 20 natural siempre es un éxito espectacular y un 1 natural siempre un desastre. Menciona la tirada en la narración así: [🎲 Atributo D20: ${d20} + mod = total vs CD X].
+- Si la acción tiene riesgo o un resultado incierto (combate, sigilo, persuadir, trepar, magia...), DEBES resolverla con ESE número: súmale el modificador del atributo adecuado (más su bonificador de competencia si usa una habilidad en la que es competente) y compáralo con una Clase de Dificultad según la situación (${DC_SCALE.map(s => `${s.dc} ${s.name}`).join(', ')}; 15 si dudas). Un 20 natural siempre es un éxito espectacular y un 1 natural siempre un desastre. Menciona la tirada en la narración así: [🎲 Atributo D20: ${d20} + mod = total vs CD X].
 - Si la acción no necesita tirada (conversar, pedir una bebida, mirar algo evidente), ignora el dado y no lo menciones.
 - Nunca inventes una tirada distinta ni tires más dados.`;
 
   const format = structured
     ? `Responde SOLO con un objeto JSON con estos campos:
 - "narracion": tu respuesta como Maese Duncan (2 a 4 párrafos, en español, puedes usar **negrita** y *cursiva*).
-- "usaTirada": true si resolviste la acción con la tirada de d20 indicada; false si la ignoraste.
+- "usaTirada": true si devuelves una "prueba" para que el juego la tire; false si la acción no necesita tirada.
 - "danio": puntos de golpe que pierde ${name} por lo ocurrido (entero, 0 si nada).
 - "curacion": puntos de golpe que recupera (entero, 0 si nada).
 - "oro": monedas de oro que gana (positivo) o que gasta o pierde (negativo); 0 si nada.
@@ -507,6 +575,31 @@ export function cleanShopRequest(value) {
   return SHOP_REPLY_IDS[raw.trim().toLowerCase()] || null;
 }
 
+/**
+ * Validate the check of a reply ("prueba", see cleanCheckRequest in checks.js) and
+ * the numbers of each outcome, clamped as the rest of the reply. Null without a check.
+ * @returns {{ skillId, ability, label, dc, against, success, failure } | null}
+ *   success / failure: { text, damageTaken, healing, goldEarned, xpEarned, suggestedActions | null }
+ */
+export function cleanCheck(raw, character = {}) {
+  const check = cleanCheckRequest(raw);
+  if (!check) return null;
+  const maxHp = Number(character.maxHp) || 100;
+  const gold = Math.max(0, Number(character.gold) || 0);
+  const outcome = branch => {
+    const options = Array.isArray(branch.opciones) ? branch.opciones.filter(a => typeof a === 'string' && a.trim()) : [];
+    return {
+      text: typeof branch.narracion === 'string' ? branch.narracion.trim() : '',
+      damageTaken: toInt(branch.danio, 0, maxHp),
+      healing: toInt(branch.curacion, 0, maxHp),
+      goldEarned: toInt(branch.oro, -gold, 500),
+      xpEarned: toInt(branch.experiencia, 0, 300),
+      suggestedActions: options.length ? cleanActions(options) : null
+    };
+  };
+  return { ...check, success: outcome(check.success), failure: outcome(check.failure) };
+}
+
 function cleanActions(list) {
   const actions = (Array.isArray(list) ? list : [])
     .filter(a => typeof a === 'string')
@@ -551,7 +644,9 @@ export function parseDMReply(raw, character = {}) {
         questChanges: cleanQuestChanges(data.misiones),
         recruit: cleanRecruitOffer(data.reclutar),
         departure: cleanDeparture(data.abandona),
-        meetingHook: cleanMeetingHook(data.reunion)
+        meetingHook: cleanMeetingHook(data.reunion),
+        // A check for the game to roll (Duncan set its DC or who resists)
+        check: cleanCheck(data.prueba, character)
       };
     } catch {
       // Not valid JSON: treat it as plain text below
@@ -584,6 +679,8 @@ export function parseDMReply(raw, character = {}) {
     recruit: null,
     departure: null,
     meetingHook: null,
+    check: null,
+    plain: true,
     // Plain text can't tell us reliably; look for the dice marker the prompt asks for
     usedRoll: text.includes('🎲')
   };
