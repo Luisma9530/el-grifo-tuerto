@@ -6,6 +6,8 @@
 //  - The party apart (splitParty.js), each group a "system" of its own: a group's
 //    scene uses the keys lent by its players (and the host's, if the host plays in
 //    that group); a group whose players lent none uses the host's.
+//    If a group's lent keys fail (quota spent, a bad key) after the short retry,
+//    the host's keys take over so the player is never left waiting.
 //  - Without lent keys, everything uses the host's, as always.
 // More keys only add quota if they belong to different Google accounts.
 
@@ -60,3 +62,27 @@ export function lentKeysByScene({ groups = [], playerOf = () => null, lent = {},
 /** The keys lent by these players (for the party together), as [{ key, playerId }]. */
 export const sharedLentKeys = (lent = {}, playerIds = Object.keys(lent)) =>
   playerIds.filter(p => lent[p]).map(p => ({ key: lent[p], playerId: p }));
+
+/**
+ * The host's keys a scene may fall back on: the ones not in its pool already
+ * (a group apart that only has its players' lent keys). Empty when nothing to add.
+ */
+export function fallbackKeys(pool, hostKeys) {
+  const inPool = new Set((pool || []).map(k => keyText(k).trim()));
+  return uniqueKeys(hostKeys).filter(k => !inPool.has(keyText(k).trim()));
+}
+
+/**
+ * Ask Duncan with the scene's keys; if they could not answer (quota spent, a bad
+ * key... after the short retry), ask again with the host's keys so the player is
+ * never left waiting, and tell the scene (`onFallback`).
+ * @param ask (keys) => Promise<response> (generateDMResponse with those keys)
+ * @returns the reply with the host's keys when it worked, else the first one
+ */
+export async function askWithKeyFallback(ask, { keys, reserve = [], onFallback = () => {} }) {
+  const first = await ask(keys);
+  if (first?.source === 'gemini' || !first?.notice || !reserve.length) return first;
+  onFallback(first);
+  const second = await ask(reserve);
+  return second?.source === 'gemini' ? second : first;
+}

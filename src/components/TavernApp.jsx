@@ -59,7 +59,7 @@ import {
   readablePrologues, visibleScenes, placeNewMember, isOriginsCampaign
 } from '../utils/splitParty';
 import { sceneNoteFor, hookLabel, zonesFor, suggestZone, zoneIntro } from '../utils/origins';
-import { sceneApiKeys, lentKeysByScene, sharedLentKeys } from '../utils/sceneKeys';
+import { sceneApiKeys, lentKeysByScene, sharedLentKeys, fallbackKeys, askWithKeyFallback } from '../utils/sceneKeys';
 import { LOCAL_CONTROLLER } from '../utils/party';
 import { onlineConfig, roomLink } from '../online/transport';
 import { useHostRoom, wasOnline, storedPlayerName, storePlayerName } from '../online/useOnlineRoom';
@@ -426,6 +426,9 @@ export default function TavernApp({
         }) : null,
         sharedKeys: onlineRoom && !group ? sharedLentKeys(lent) : null
       });
+      // A group apart playing with its players' lent keys: if those fail, the host's keep it going
+      const reserveKeys = onlineRoom && group && duncanKeys !== currentKeys ? fallbackKeys(duncanKeys, currentKeys) : [];
+      const lenderNames = joinNames([...new Set(duncanKeys.map(k => k.playerId).filter(Boolean))].map(id => playerName(onlineRoom, id)));
 
       // A plain action outside combat may start a fight: Duncan gets a short list of creatures
       const mayStartFight = !encounter && !combatResult && !playerRoll && !spellCast && !rest && !weaponAttack && !meeting;
@@ -456,7 +459,7 @@ export default function TavernApp({
       const askHook = group && !group.hook && meetingNode && group.nodeId !== meetingNode.id && !combatResult && !meeting
         ? { place: meetingNode.name, names: groupNames(partyFull, group), force: (group.turns || 0) >= 1 }
         : null;
-      const response = await generateDMResponse({
+      const response = await askWithKeyFallback(apiKeys => generateDMResponse({
         playerAction: actionText,
         character: sheet,
         world,
@@ -464,7 +467,7 @@ export default function TavernApp({
         sceneNote: apart || meeting ? sceneNoteFor(partyFull, actorId, worldState, { meeting }) : '',
         meetingHook: askHook,
         meeting,
-        apiKeys: duncanKeys,
+        apiKeys,
         // Several scenes call at once: on the per-minute limit this one waits and tells its players
         onQuotaWait: apart ? seconds => pushSystemMessage(`⏳ Gemini ha llegado a su límite de peticiones por minuto: Duncan lo intenta de nuevo en ${seconds} s (las demás escenas siguen).`) : null,
         playerRoll,
@@ -489,6 +492,10 @@ export default function TavernApp({
         allowRecruit: mayStartFight && membersOf(partyFull).length < MAX_PARTY && !pendingRecruit,
         allowDeparture: !combatResult && !encounter && size > 1,
         lastWasAmbush: lastAmbush
+      }), {
+        keys: duncanKeys,
+        reserve: reserveKeys,
+        onFallback: () => pushSystemMessage(`🔑 La clave de ${lenderNames || 'tu grupo'} no responde ahora (sin cuota o con un error): Duncan sigue con las del anfitrión.`)
       });
       // A fight starts: the game resolves it, so nothing from this reply touches the sheet
       const fightGroups = response.combat && bestiaryModule
