@@ -70,9 +70,13 @@ El conjuro pasa de largo y deja una marca humeante en una viga del techo. Alguie
   }
 
   if (spell.kind === 'save') {
-    const saveTotal = enemyRoll + 1;
-    const saved = enemyRoll !== 1 && (enemyRoll === 20 || saveTotal >= cast.saveDC);
-    const tag = `[🎲 Salvación de ${abilityName(spell.save)} del objetivo D20: **${enemyRoll}** = ${saveTotal} vs CD ${cast.saveDC}]`;
+    // The game rolled the target's save with its own sheet when known (see rollTargetSave)
+    const own = cast.targetSave;
+    const saveTotal = own ? own.total : enemyRoll + 1;
+    const saved = own ? own.success : enemyRoll !== 1 && (enemyRoll === 20 || saveTotal >= cast.saveDC);
+    const tag = own
+      ? `[🎲 Salvación de ${abilityName(spell.save)} ${own.of} D20: **${own.raw}** ${own.bonus >= 0 ? '+' : '−'}${Math.abs(own.bonus)} = ${own.total} vs CD ${cast.saveDC}]`
+      : `[🎲 Salvación de ${abilityName(spell.save)} del objetivo D20: **${enemyRoll}** = ${saveTotal} vs CD ${cast.saveDC}]`;
     if (saved) {
       const partial = cast.damage && spell.half ? ` Aun así, se lleva **${Math.floor(cast.damage.total / 2)}** de daño ${cast.damage.type}.` : '';
       return {

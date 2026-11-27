@@ -66,9 +66,14 @@ describe('generateDMResponse (Gemini)', () => {
   });
   const payload = { narracion: 'Duncan ríe.', usaTirada: true, danio: 2, curacion: 0, oro: 5, opciones: ['Seguir'] };
 
-  it('rolls the d20 itself, sends it to the model and reports it when used', async () => {
+  it('asks for a check without the die, rolls it with the sheet and keeps the outcome Duncan wrote', async () => {
     forceD20(17);
-    const fetchMock = vi.fn().mockResolvedValue(geminiReply(payload));
+    const prueba = {
+      habilidad: 'Atletismo', cd: 20,
+      exito: { narracion: 'Llegas arriba.', oro: 5, opciones: ['Seguir'] },
+      fallo: { narracion: 'Te caes.', danio: 2 }
+    };
+    const fetchMock = vi.fn().mockResolvedValue(geminiReply({ ...payload, danio: 0, oro: 0, prueba }));
     vi.stubGlobal('fetch', fetchMock);
 
     const res = await generateDMResponse({ playerAction: 'Ataco', character, world, apiKeys: ['clave-de-prueba-123'] });
@@ -78,13 +83,19 @@ describe('generateDMResponse (Gemini)', () => {
     expect(url).not.toContain('clave-de-prueba-123'); // key goes in a header, not the URL
     expect(options.headers['x-goog-api-key']).toBe('clave-de-prueba-123');
     const body = JSON.parse(options.body);
-    expect(body.contents[0].parts[0].text).toContain('ha salido: 17');
+    expect(body.contents[0].parts[0].text).not.toContain('ha salido: 17');
     expect(body.generationConfig.responseMimeType).toBe('application/json');
+    expect(body.generationConfig.responseSchema.properties.prueba).toBeTruthy();
 
+    // 17 + 0 (no Strength bonus on this sheet) = 17 < DC 20: the failure Duncan wrote
     expect(res).toMatchObject({
-      text: 'Duncan ríe.', source: 'gemini', damageTaken: 2, healing: 0, goldEarned: 5,
-      roll: { sides: 20, value: 17 }, suggestedActions: ['Seguir']
+      source: 'gemini', damageTaken: 2, healing: 0, goldEarned: 0,
+      roll: { sides: 20, value: 17, dc: 20, success: false, against: 'CD 20 (difícil)' }
     });
+    expect(res.text).toContain('Duncan ríe.');
+    expect(res.text).toContain('Atletismo D20: **17** +0 = 17 contra CD 20 (difícil)');
+    expect(res.text).toContain('Te caes.');
+    expect(res.text).not.toContain('Llegas arriba.');
     vi.unstubAllGlobals();
   });
 
