@@ -3,6 +3,8 @@
 // - The Gemini keys never leave this browser: every message goes through
 //   `assertNoSecrets` before the transport sends it (the game state the host
 //   shares never holds them anyway, see snapshot.js; this is the safety net).
+//   The only way a key travels is a player lending it to the host, encrypted
+//   for the host alone (keyLending.js); never in clear.
 // - Players sign what they send: each browser keeps an ECDSA key pair per room
 //   and name. The host learns the public key when the player first enters and
 //   checks every intent with it, so nobody else in the channel can act for that
@@ -71,12 +73,34 @@ export async function verifyText(publicJwk, text, signature) {
   }
 }
 
+// Gemini keys that are not stored but must not leave this browser either: the
+// ones players lent to the host (held in memory, see keyLending.js) and the one a
+// player pasted to lend. Only in memory, like those keys.
+const memorySecrets = new Map(); // key -> how many holders
+
+/** This key must never leave the browser while it is held (memory only). */
+export function rememberSecret(key) {
+  if (typeof key !== 'string' || key.trim().length <= 10) return;
+  const k = key.trim();
+  memorySecrets.set(k, (memorySecrets.get(k) || 0) + 1);
+}
+/** One holder let go of the key. */
+export function forgetSecret(key) {
+  if (typeof key !== 'string') return;
+  const k = key.trim();
+  const n = (memorySecrets.get(k) || 0) - 1;
+  if (n > 0) memorySecrets.set(k, n);
+  else memorySecrets.delete(k);
+}
+/** For tests: how many keys are held in memory. */
+export const memorySecretCount = () => memorySecrets.size;
+
 /**
- * Does this text contain one of the Gemini keys stored in this browser?
- * (`keys` can be given for tests; by default the stored ones are read)
+ * Does this text contain one of the Gemini keys of this browser (stored, or held
+ * in memory)? (`keys` can be given for tests; by default those are read)
  */
 export function containsSecret(text, keys = null) {
-  const list = (keys || getStoredGeminiKeys().map(k => k.key)).filter(k => typeof k === 'string' && k.trim().length > 10);
+  const list = (keys || [...getStoredGeminiKeys().map(k => k.key), ...memorySecrets.keys()]).filter(k => typeof k === 'string' && k.trim().length > 10);
   return list.some(k => text.includes(k.trim()));
 }
 

@@ -10,7 +10,8 @@ import { whenIdle } from '../../utils/lazyWithPreload';
 import OnlineToast from './OnlineToast';
 import { useGuestRoom } from '../../online/useOnlineRoom';
 import { roomLink } from '../../online/transport';
-import { controllerOf, canControl, playerName, claimOf, unreadChatCount, lastChatAt } from '../../online/room';
+import { controllerOf, canControl, playerName, claimOf, unreadChatCount, lastChatAt, normalizeCode } from '../../online/room';
+import { getStoredGeminiKeys } from '../../utils/geminiKeys';
 import { useMediaQuery, WIDE_LAYOUT } from '../../hooks/useMediaQuery';
 import { sheetIntents } from '../../online/actions';
 import { isAtTavern } from '../../utils/shops';
@@ -33,8 +34,21 @@ const HOST_ONLY = 'Esto lo decide el anfitrión (descansos, tiendas, viajes, com
  * what this player sends (actions for the characters they play, combat turns,
  * votes, chat). Nothing is decided here: the host checks and plays everything.
  */
+// The host's fingerprint from the link (`&h=`), for this room only: a key is lent only to that host
+const linkPrint = code => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return normalizeCode(params.get('sala')) === normalizeCode(code) ? (params.get('h') || '').slice(0, 32) : '';
+  } catch {
+    return '';
+  }
+};
+
 export default function GuestTable({ code, name, kind, onLeave }) {
-  const room = useGuestRoom({ code, name, kind });
+  const [hostPrint] = useState(() => linkPrint(code));
+  const room = useGuestRoom({ code, name, kind, hostPrint });
+  // This player's own Gemini keys (only to lend one to the host, if they want)
+  const [storedKeys] = useState(() => getStoredGeminiKeys());
   // The combat view, leveling up, the sheet's tabs...: fetched while nothing happens
   useEffect(() => whenIdle(preloadGameParts), []);
   const { view, playerId } = room;
@@ -244,7 +258,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
               pendingRecruit={null}
               world={sceneWorldView}
               onSendAction={actFor(acts.text)}
-              onOpenGeminiConnect={() => setLocalNotice(meta.aiActive ? 'Duncan usa la clave de Gemini del anfitrión: tú no necesitas ninguna.' : 'El anfitrión juega con el motor local (sin IA). Si conecta su clave de Gemini, Duncan narrará para todos.')}
+              onOpenGeminiConnect={() => setLocalNotice(meta.aiActive ? 'Duncan usa la clave de Gemini del anfitrión: tú no necesitas ninguna (si tienes una, puedes prestársela desde «Sala y chat» para darle más cuota).' : 'El anfitrión juega con el motor local (sin IA). Si conecta su clave de Gemini, o alguien le presta la suya desde «Sala y chat», Duncan narrará para todos.')}
               keysCount={meta.aiActive ? 1 : 0}
               onQuickCheck={skillId => actFor(acts.check)({ skillId })}
               inputLocked={mine.length === 0}
@@ -270,7 +284,8 @@ export default function GuestTable({ code, name, kind, onLeave }) {
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto">
             {sideTab === 'room' ? (
-              <RoomPanel room={shared} me={playerId} characters={heroes} link={roomLink(shared.code, kind)} onIntent={send} />
+              <RoomPanel room={shared} me={playerId} characters={heroes} link={roomLink(shared.code, kind, undefined, room.lending?.print || hostPrint)} onIntent={send}
+                keys={{ lenders: view.lending?.lenders || [], lending: room.lending, storedKeys, onLend: room.lendKey, onWithdraw: room.withdrawKey }} />
             ) : (
               <WorldMapPanel
                 world={sceneWorldView}

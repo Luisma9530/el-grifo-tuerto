@@ -1,17 +1,62 @@
 // Which Gemini keys Duncan uses for each scene.
 //
-// Today every scene uses the host's keys. Prepared for the next step: while the
-// party is apart, each group (a "system" of its own, see splitParty.js) may call
-// Duncan with the key of one of its players. The caller passes those keys in
-// `keysByScene` ({ [groupId]: [{ key }, ...] }); a scene without keys of its own,
-// or the party together, falls back to the host's.
+// Online, players may lend their key to the host (see online/keyLending.js):
+//  - The party together: the keys lent by the players present join the host's in
+//    one pool, rotated by quota as usual (geminiClient / gameEngine).
+//  - The party apart (splitParty.js), each group a "system" of its own: a group's
+//    scene uses the keys lent by its players (and the host's, if the host plays in
+//    that group); a group whose players lent none uses the host's.
+//  - Without lent keys, everything uses the host's, as always.
+// More keys only add quota if they belong to different Google accounts.
+
+const keyText = k => (typeof k === 'string' ? k : k?.key || '');
+
+/** Keys without repeats or blanks, as [{ key }]. */
+export function uniqueKeys(list) {
+  const seen = new Set();
+  const out = [];
+  (list || []).forEach(k => {
+    const key = keyText(k).trim();
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      out.push(typeof k === 'string' ? { key } : k);
+    }
+  });
+  return out;
+}
 
 /**
  * @param hostKeys    the host's stored keys ([{ key }] or strings)
  * @param sceneId     the group whose scene calls Duncan (null: the party together)
- * @param keysByScene keys of the players of each group (not used yet by the game)
+ * @param keysByScene keys of the players of each group apart ({ [groupId]: [{ key }] })
+ * @param sharedKeys  keys lent by the players present, for the party together
  */
-export function sceneApiKeys(hostKeys, { sceneId = null, keysByScene = null } = {}) {
-  const own = sceneId ? keysByScene?.[sceneId] : null;
+export function sceneApiKeys(hostKeys, { sceneId = null, keysByScene = null, sharedKeys = null } = {}) {
+  if (!sceneId) return sharedKeys?.length ? uniqueKeys([...(hostKeys || []), ...sharedKeys]) : hostKeys;
+  const own = keysByScene?.[sceneId];
   return Array.isArray(own) && own.length ? own : hostKeys;
 }
+
+/**
+ * The lent keys of each group apart, from who plays its characters.
+ * @param groups   [{ id, memberIds }] (splitParty.js groupsOf)
+ * @param playerOf (characterId) => playerId who plays it (room.js controllerOf)
+ * @param lent     { [playerId]: key } the keys the host holds
+ * @param hostId   the host's player id (its own keys join a group it plays in)
+ * @param hostKeys the host's keys
+ * @returns { [groupId]: [{ key, playerId }] } (groups without lent keys left out)
+ */
+export function lentKeysByScene({ groups = [], playerOf = () => null, lent = {}, hostId = null, hostKeys = [] }) {
+  const out = {};
+  groups.forEach(group => {
+    const players = [...new Set((group.memberIds || []).map(playerOf).filter(Boolean))];
+    const theirs = players.filter(p => p !== hostId && lent[p]).map(p => ({ key: lent[p], playerId: p }));
+    if (!theirs.length) return;
+    out[group.id] = uniqueKeys([...(players.includes(hostId) ? hostKeys : []), ...theirs]);
+  });
+  return out;
+}
+
+/** The keys lent by these players (for the party together), as [{ key, playerId }]. */
+export const sharedLentKeys = (lent = {}, playerIds = Object.keys(lent)) =>
+  playerIds.filter(p => lent[p]).map(p => ({ key: lent[p], playerId: p }));

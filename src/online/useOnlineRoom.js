@@ -8,6 +8,7 @@ import { connectTransport } from './transport';
 import { createHostSession, createGuestSession } from './session';
 import { createRoom, restoreRoom, roomToSave, newRoomCode, normalizeCode, cleanName } from './room';
 import { createIdentity, randomId } from './security';
+import { keyPrint } from './keyLending';
 import { storedPlayerName } from './playerName';
 
 const HOST_KEY = campaignId => `grifo_online_host:${campaignId}`;
@@ -40,14 +41,17 @@ export const wasOnline = campaignId => Boolean(campaignId && read(HOST_KEY(campa
  * @param onDirect (direct, playerId) => void (see protocol.js applyIntent)
  */
 export function useHostRoom({ campaignId, kind, getGame, onCombat, onDirect = () => {} }) {
-  const [state, setState] = useState({ status: 'off', room: null, error: null });
+  const [state, setState] = useState({ status: 'off', room: null, error: null, lenders: [], print: '' });
   const sessionRef = useRef(null);
+  // The host's signing key (to sign its offer to receive lent keys), kept with the room
+  const signerRef = useRef(null);
   const callbacks = useRef({ getGame, onCombat, onDirect });
   callbacks.current = { getGame, onCombat, onDirect };
 
   const save = useCallback((room, identities, active = true) => {
     if (!campaignId) return;
-    write(HOST_KEY(campaignId), { room: roomToSave(room), identities, active });
+    // (never the lent keys: those live only in the session's memory)
+    write(HOST_KEY(campaignId), { room: roomToSave(room), identities, active, ...(signerRef.current ? { signer: signerRef.current } : {}) });
   }, [campaignId]);
 
   // hostName: the name typed when opening it (null when it reopens by itself: the saved one is kept)
@@ -58,6 +62,9 @@ export function useHostRoom({ campaignId, kind, getGame, onCombat, onDirect = ()
     const restored = saved?.room ? restoreRoom(saved.room, { hostName }) : null;
     const room = restored || createRoom({ code: newRoomCode(), hostId: randomId('h'), hostName: hostName || storedPlayerName() || 'Anfitrión' });
     try {
+      const signer = saved?.signer?.publicJwk && saved.signer.privateJwk ? saved.signer : await createIdentity('s');
+      signerRef.current = { publicJwk: signer.publicJwk, privateJwk: signer.privateJwk };
+      const print = await keyPrint(signer.publicJwk);
       const transport = await connectTransport({ kind, code: room.code, selfId: room.hostId, meta: { role: 'host' } });
       const session = createHostSession({
         transport,
@@ -69,14 +76,16 @@ export function useHostRoom({ campaignId, kind, getGame, onCombat, onDirect = ()
         onChange: (next, identities) => {
           setState(s => ({ ...s, room: next }));
           save(next, identities);
-        }
+        },
+        signer: signerRef.current,
+        onLending: lenders => setState(s => ({ ...s, lenders }))
       });
       sessionRef.current = session;
       save(room, session.identities);
-      setState({ status: 'open', room: session.room, error: null });
+      setState({ status: 'open', room: session.room, error: null, lenders: [], print });
     } catch (err) {
       console.error(err);
-      setState({ status: 'error', room: null, error: err?.message || 'No se pudo abrir la sala.' });
+      setState({ status: 'error', room: null, error: err?.message || 'No se pudo abrir la sala.', lenders: [], print: '' });
     }
   }, [kind, campaignId, save]);
 
@@ -86,7 +95,7 @@ export function useHostRoom({ campaignId, kind, getGame, onCombat, onDirect = ()
     save(session.room, session.identities, false);
     sessionRef.current = null;
     session.close();
-    setState({ status: 'off', room: null, error: null });
+    setState({ status: 'off', room: null, error: null, lenders: [], print: '' });
   }, [save]);
 
   // Leaving the campaign closes the room (it can be reopened with the same code)
@@ -105,7 +114,9 @@ export function useHostRoom({ campaignId, kind, getGame, onCombat, onDirect = ()
     publish: useCallback(sections => sessionRef.current?.publish(sections), []),
     submit: useCallback(intent => sessionRef.current?.submit(intent) || { ok: false, error: 'La sala está cerrada.' }, []),
     update: useCallback(fn => sessionRef.current?.update(fn), []),
-    notice: useCallback((to, text) => sessionRef.current?.notice(to, text), [])
+    notice: useCallback((to, text) => sessionRef.current?.notice(to, text), []),
+    /** The keys the players lent for this session: { [playerId]: key } (memory only, read when calling Duncan). */
+    lentKeys: useCallback(() => sessionRef.current?.lentKeys() || {}, [])
   };
 }
 
@@ -118,9 +129,9 @@ async function identityFor(code, name) {
   return identity;
 }
 
-/** A player's end: enter the room `code` as `name`. */
-export function useGuestRoom({ code, name, kind }) {
-  const [state, setState] = useState({ status: 'connecting', error: null, hostId: null, hostOnline: false, view: {}, notices: [] });
+/** A player's end: enter the room `code` as `name` (hostPrint: the host's fingerprint from the link). */
+export function useGuestRoom({ code, name, kind, hostPrint = '' }) {
+  const [state, setState] = useState({ status: 'connecting', error: null, hostId: null, hostOnline: false, view: {}, notices: [], lending: { ready: false, lent: false, sending: false } });
   const [playerId, setPlayerId] = useState(null);
   const sessionRef = useRef(null);
 
@@ -137,7 +148,7 @@ export function useGuestRoom({ code, name, kind }) {
           transport.close();
           return;
         }
-        session = createGuestSession({ transport, identity, name, onChange: next => setState(next) });
+        session = createGuestSession({ transport, identity, name, code: normalizeCode(code), hostPrint, onChange: next => setState(next) });
         sessionRef.current = session;
         setState(session.state);
       } catch (err) {
@@ -150,12 +161,14 @@ export function useGuestRoom({ code, name, kind }) {
       sessionRef.current = null;
       session?.close();
     };
-  }, [code, name, kind]);
+  }, [code, name, kind, hostPrint]);
 
   return {
     ...state,
     playerId,
     send: useCallback(intent => sessionRef.current?.send(intent), []),
-    dismissNotice: useCallback(() => sessionRef.current?.dismissNotice(), [])
+    dismissNotice: useCallback(() => sessionRef.current?.dismissNotice(), []),
+    lendKey: useCallback(key => sessionRef.current?.lendKey(key) || Promise.resolve({ ok: false, error: 'No estás en la sala.' }), []),
+    withdrawKey: useCallback(() => sessionRef.current?.withdrawKey(), [])
   };
 }

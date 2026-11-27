@@ -59,7 +59,7 @@ import {
   readablePrologues, visibleScenes, placeNewMember, isOriginsCampaign
 } from '../utils/splitParty';
 import { sceneNoteFor, hookLabel, zonesFor, suggestZone, zoneIntro } from '../utils/origins';
-import { sceneApiKeys } from '../utils/sceneKeys';
+import { sceneApiKeys, lentKeysByScene, sharedLentKeys } from '../utils/sceneKeys';
 import { LOCAL_CONTROLLER } from '../utils/party';
 import { onlineConfig, roomLink } from '../online/transport';
 import { useHostRoom, wasOnline, storedPlayerName, storePlayerName } from '../online/useOnlineRoom';
@@ -199,6 +199,8 @@ export default function TavernApp({
   const setMessages = next => setMessagesIn(chronicleKeyOf(partyRef.current), next);
   // The online room open now (for handlers that run after a reply)
   const roomRef = useRef(null);
+  // The Gemini keys lent by the players of the online room (memory only, see online/keyLending.js)
+  const lentKeysRef = useRef(() => ({}));
   // A line for a given scene (the one the spotlight passes to, for example)
   const pushSceneMessage = (key, text) => setMessagesState(prev => [...prev, { sender: 'system', text, timestamp: now(), ...(key ? { groupId: key } : {}) }]);
   // A line in the chronicle of a member's scene
@@ -413,6 +415,17 @@ export default function TavernApp({
     try {
       const currentKeys = getStoredGeminiKeys();
       setGeminiKeys(currentKeys);
+      // Online, the keys the players lent: their group's scene uses them while apart;
+      // together, they join the host's in one pool (see sceneKeys.js)
+      const onlineRoom = roomRef.current;
+      const lent = onlineRoom ? lentKeysRef.current() : {};
+      const duncanKeys = sceneApiKeys(currentKeys, {
+        sceneId: group?.id || null,
+        keysByScene: onlineRoom && group ? lentKeysByScene({
+          groups: groupsOf(partyFull), playerOf: cid => controllerOf(onlineRoom, cid), lent, hostId: onlineRoom.hostId, hostKeys: currentKeys
+        }) : null,
+        sharedKeys: onlineRoom && !group ? sharedLentKeys(lent) : null
+      });
 
       // A plain action outside combat may start a fight: Duncan gets a short list of creatures
       const mayStartFight = !encounter && !combatResult && !playerRoll && !spellCast && !rest && !weaponAttack && !meeting;
@@ -433,7 +446,7 @@ export default function TavernApp({
       // party is apart, Duncan sees only this scene's chronicle and the summary waits
       // until they are together (it would mix the scenes).
       const apart = isSplit(partyFull);
-      const requestSummary = !apart && currentKeys.length > 0 && needsSummary(newMsgList, summaryCoverage);
+      const requestSummary = !apart && duncanKeys.length > 0 && needsSummary(newMsgList, summaryCoverage);
       const history = apart
         ? historyForPrompt(sceneMessages(newMsgList, ownChronicle), 0)
         : historyForPrompt(newMsgList, summaryCoverage).filter(m => !m.groupId);
@@ -451,8 +464,7 @@ export default function TavernApp({
         sceneNote: apart || meeting ? sceneNoteFor(partyFull, actorId, worldState, { meeting }) : '',
         meetingHook: askHook,
         meeting,
-        // (prepared: each group may call Duncan with a key of its own, see sceneKeys.js)
-        apiKeys: sceneApiKeys(currentKeys, { sceneId: group?.id || null }),
+        apiKeys: duncanKeys,
         // Several scenes call at once: on the per-minute limit this one waits and tells its players
         onQuotaWait: apart ? seconds => pushSystemMessage(`⏳ Gemini ha llegado a su límite de peticiones por minuto: Duncan lo intenta de nuevo en ${seconds} s (las demás escenas siguen).`) : null,
         playerRoll,
@@ -1341,6 +1353,7 @@ export default function TavernApp({
   });
   const room = online.status === 'open' ? online.room : null;
   roomRef.current = room;
+  lentKeysRef.current = online.lentKeys;
   const [isRoomOpen, setIsRoomOpen] = useState(false);
   const [onlineNotice, setOnlineNotice] = useState(null);
   const [chatSeen, setChatSeen] = useState(0);
@@ -1487,11 +1500,11 @@ export default function TavernApp({
       title: campaignTitle, world: worldState, party, messages, suggestedActions, encounter: encounters[''] || null,
       encounters: Object.fromEntries(Object.entries(encounters).filter(([l]) => l)),
       lanes, isGenerating: Boolean(lanes['']?.generating), combatBusy: Boolean(lanes['']?.combat),
-      pendingRecruit, aiActive: geminiKeys.length > 0
+      pendingRecruit, aiActive: geminiKeys.length > 0 || online.lenders.length > 0
     }));
     // `online.publish` is stable; the room itself is added by the session
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomIsOpen, campaignTitle, worldState, party, messages, suggestedActions, encounters, quests, events, summary, lanes, pendingRecruit, geminiKeys.length]);
+  }, [roomIsOpen, campaignTitle, worldState, party, messages, suggestedActions, encounters, quests, events, summary, lanes, pendingRecruit, geminiKeys.length, online.lenders.length]);
 
   // Each member records who plays it (`controlledBy`): a player id, or the local one for the host
   const ownersKey = room ? heroIds.map(id => `${id}:${ownerOf(room, id)}`).join('|') : `off:${heroIds.join('|')}`;
@@ -1824,7 +1837,7 @@ export default function TavernApp({
               world={world}
               onSendAction={act.send}
               onOpenGeminiConnect={onOpenGeminiConnect}
-              keysCount={geminiKeys.length}
+              keysCount={geminiKeys.length + online.lenders.length}
               onDiceRoll={handleDiceRollToChat}
               onQuickCheck={act.quickCheck}
               actors={hostActors}
@@ -1891,7 +1904,18 @@ export default function TavernApp({
           onOpenRoom={openRoom}
           me={room?.hostId}
           characters={heroes}
-          link={room ? roomLink(room.code, onlineKind) : ''}
+          link={room ? roomLink(room.code, onlineKind, undefined, online.print) : ''}
+          keys={room ? {
+            lenders: online.lenders,
+            hostKeysCount: geminiKeys.length,
+            // While the party is apart: which keys each group's scene uses (see sceneKeys.js)
+            scenes: isSplit(party) ? groupsOf(party).map(g => {
+              const own = lentKeysByScene({
+                groups: [g], playerOf: cid => controllerOf(room, cid), lent: Object.fromEntries(online.lenders.map(id => [id, id])), hostId: room.hostId
+              })[g.id] || [];
+              return { id: g.id, label: groupNames(party, g), lenderIds: own.map(k => k.playerId), withHost: own.length > 0 && g.memberIds.some(cid => controllerOf(room, cid) === room.hostId) && geminiKeys.length > 0 };
+            }) : null
+          } : null}
           onIntent={submit}
           hostOps={hostOps}
         />

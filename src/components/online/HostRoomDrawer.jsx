@@ -37,7 +37,8 @@ export default function HostRoomDrawer({ isOpen, onClose, kind, online, defaultN
             <p>
               Abre una sala para esta campaña: tus amigos entran con su nombre y el código (hasta 4 jugadores) y cada uno
               juega con un personaje del grupo. Tu navegador lleva la partida: Duncan usa <strong>tu</strong> clave de Gemini,
-              que nunca se envía a nadie, y la campaña se sigue guardando aquí.
+              que nunca se envía a nadie, y la campaña se sigue guardando aquí. Si un amigo tiene clave, puede prestártela
+              para la sesión y Duncan tendrá más cuota.
             </p>
             {kind === 'local' && (
               <p className="text-xs text-amber-200 bg-amber-950/30 border border-amber-900/50 rounded-lg p-2">

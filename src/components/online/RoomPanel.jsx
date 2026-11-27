@@ -4,6 +4,7 @@ import {
   playerList, ownerOf, controllerOf, claimOf, leftoverCharacters, voteTally, isConnected, playerName
 } from '../../online/room';
 import { MAX_CHAT_TEXT } from '../../online/protocol';
+import KeyLendingPanel from './KeyLendingPanel';
 
 /**
  * The online room, for the host and the players alike: code and link, who is
@@ -12,8 +13,9 @@ import { MAX_CHAT_TEXT } from '../../online/protocol';
  *
  * onIntent(intent): what this player asks (the host's own go through the same checks).
  * hostOps (host only): { assign(characterId, playerId|null), breakTie, closeVote, remove(playerId), closeRoom(), setShareScenes(on) }
+ * keys: the Gemini keys lent to the host (see KeyLendingPanel), or null to leave it out
  */
-export default function RoomPanel({ room, me, isHost = false, characters = [], link = '', onIntent, hostOps = null, compact = false }) {
+export default function RoomPanel({ room, me, isHost = false, characters = [], link = '', onIntent, hostOps = null, compact = false, keys = null }) {
   const [copied, setCopied] = useState(false);
   const [text, setText] = useState('');
   const chatEnd = useRef(null);
@@ -81,6 +83,8 @@ export default function RoomPanel({ room, me, isHost = false, characters = [], l
           ))}
         </ul>
       </section>
+
+      {keys && <KeyLendingPanel room={room} me={me} isHost={isHost} {...keys} />}
 
       {/* Characters */}
       <section>
