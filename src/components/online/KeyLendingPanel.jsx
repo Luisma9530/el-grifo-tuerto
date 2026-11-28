@@ -41,7 +41,7 @@ export default function KeyLendingPanel({
     const fromStore = available.length > 0;
     const key = fromStore ? picked.key : typed.trim();
     if (!isPlausibleGeminiKey(key)) {
-      setError('Eso no parece una clave de Gemini (empiezan por «AIza…»).');
+      setError('Eso no parece una clave de Gemini (empiezan por «AIza…» o «AQ.…»).');
       return;
     }
     setError('');
@@ -141,7 +141,7 @@ export default function KeyLendingPanel({
                 </select>
               )}
               {available.length === 0 && (
-                <input type="password" value={typed} onChange={e => setTyped(e.target.value)} placeholder="Pega una clave (AIza…)" autoComplete="off"
+                <input type="password" value={typed} onChange={e => setTyped(e.target.value)} placeholder="Pega una clave (AIza… o AQ.…)" autoComplete="off"
                   aria-label="Clave de Gemini que prestas" spellCheck={false}
                   className="w-full bg-[#1a1523] border border-stone-700 focus:border-amber-500 rounded px-2 py-1 font-mono text-[11px] text-stone-100 focus:outline-none" />
               )}

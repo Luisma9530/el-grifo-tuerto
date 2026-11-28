@@ -10,7 +10,7 @@ import { SHOP_REPLY_IDS } from './shops';
 import { STORY_CONDITION_IDS, EXHAUSTION_MAX, describeConditionsForPrompt } from './conditions';
 import { characterLevel } from './characterLevel';
 import { QUEST_REPLY_ACTIONS, QUEST_IMPORTANCE, cleanQuestChanges, questGoldCap } from './quests';
-import { cleanRecruitOffer, cleanDeparture, RECRUIT_CLASS_NAMES } from './recruit';
+import { cleanRecruitOffer, cleanDeparture, RECRUIT_CLASS_NAMES, RECRUIT_SPECIES_NAMES } from './recruit';
 import { MAX_PARTY } from './party';
 import { SURPRISE_REPLY_SIDES } from './surprise';
 import { cleanMeetingHook } from './origins';
@@ -38,6 +38,41 @@ const CONDITION_CAUSE_MAX = 60;
 const HISTORY_MESSAGES = 14;
 const HISTORY_CHARS_PER_MESSAGE = 500;
 
+/** Limb changes of a reply (at the top, or in one outcome of a check). */
+const LIMBS_SCHEMA = {
+  type: 'ARRAY',
+  nullable: true,
+  description: 'Solo si en esta escena el personaje pierde, queda sin poder usar o recupera un brazo o una pierna. Casi siempre vacío.',
+  items: {
+    type: 'OBJECT',
+    properties: {
+      extremidad: { type: 'STRING', enum: Object.keys(LIMB_REPLY_IDS) },
+      estado: { type: 'STRING', enum: Object.keys(LIMB_REPLY_STATUSES) },
+      afectados: TARGETS_SCHEMA('Solo con grupo: a quién (nombres o "todos"). Vacío = quien actúa.')
+    },
+    required: ['extremidad', 'estado']
+  }
+};
+
+/** Condition changes of a reply (at the top, or in one outcome of a check). */
+const CONDITIONS_SCHEMA = {
+  type: 'ARRAY',
+  nullable: true,
+  description: 'Solo si la historia aplica o quita una condición al personaje (veneno, agotamiento, ceguera, un sanador...). Casi siempre vacío.',
+  items: {
+    type: 'OBJECT',
+    properties: {
+      condicion: { type: 'STRING', enum: STORY_CONDITION_IDS },
+      accion: { type: 'STRING', enum: Object.keys(CONDITION_REPLY_ACTIONS) },
+      duracion: { type: 'STRING', enum: Object.keys(CONDITION_REPLY_DURATIONS), nullable: true },
+      niveles: { type: 'INTEGER', nullable: true, description: 'Solo para agotamiento: niveles que se ganan o se quitan (1 a 6).' },
+      causa: { type: 'STRING', nullable: true, description: 'Causa breve: "veneno de la ciénaga".' },
+      afectados: TARGETS_SCHEMA('Solo con grupo: a quién (nombres o "todos"). Vacío = quien actúa.')
+    },
+    required: ['condicion', 'accion']
+  }
+};
+
 /** One outcome of a check Duncan asks for: what happens if it goes well (or badly). */
 const CHECK_OUTCOME_SCHEMA = description => ({
   type: 'OBJECT',
@@ -48,7 +83,9 @@ const CHECK_OUTCOME_SCHEMA = description => ({
     curacion: { type: 'INTEGER', nullable: true },
     oro: { type: 'INTEGER', nullable: true },
     experiencia: { type: 'INTEGER', nullable: true },
-    opciones: { type: 'ARRAY', nullable: true, items: { type: 'STRING' } }
+    opciones: { type: 'ARRAY', nullable: true, items: { type: 'STRING' } },
+    condiciones: CONDITIONS_SCHEMA,
+    extremidades: LIMBS_SCHEMA
   },
   required: ['narracion']
 });
@@ -99,37 +136,8 @@ export const DM_RESPONSE_SCHEMA = {
     experiencia: { type: 'INTEGER', description: 'Puntos de experiencia ganados por superar un reto (0 si ninguno).' },
     opciones: { type: 'ARRAY', items: { type: 'STRING' }, description: '3 o 4 sugerencias breves de acción.' },
     prueba: CHECK_SCHEMA,
-    extremidades: {
-      type: 'ARRAY',
-      nullable: true,
-      description: 'Solo si en esta escena el personaje pierde, queda sin poder usar o recupera un brazo o una pierna. Casi siempre vacío.',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          extremidad: { type: 'STRING', enum: Object.keys(LIMB_REPLY_IDS) },
-          estado: { type: 'STRING', enum: Object.keys(LIMB_REPLY_STATUSES) },
-          afectados: TARGETS_SCHEMA('Solo con grupo: a quién (nombres o "todos"). Vacío = quien actúa.')
-        },
-        required: ['extremidad', 'estado']
-      }
-    },
-    condiciones: {
-      type: 'ARRAY',
-      nullable: true,
-      description: 'Solo si la historia aplica o quita una condición al personaje (veneno, agotamiento, ceguera, un sanador...). Casi siempre vacío.',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          condicion: { type: 'STRING', enum: STORY_CONDITION_IDS },
-          accion: { type: 'STRING', enum: Object.keys(CONDITION_REPLY_ACTIONS) },
-          duracion: { type: 'STRING', enum: Object.keys(CONDITION_REPLY_DURATIONS), nullable: true },
-          niveles: { type: 'INTEGER', nullable: true, description: 'Solo para agotamiento: niveles que se ganan o se quitan (1 a 6).' },
-          causa: { type: 'STRING', nullable: true, description: 'Causa breve: "veneno de la ciénaga".' },
-          afectados: TARGETS_SCHEMA('Solo con grupo: a quién (nombres o "todos"). Vacío = quien actúa.')
-        },
-        required: ['condicion', 'accion']
-      }
-    },
+    extremidades: LIMBS_SCHEMA,
+    condiciones: CONDITIONS_SCHEMA,
     misiones: {
       type: 'ARRAY',
       nullable: true,
@@ -208,7 +216,7 @@ const RECRUIT_SCHEMA = {
   properties: {
     nombre: { type: 'STRING' },
     clase: { type: 'STRING', enum: RECRUIT_CLASS_NAMES },
-    especie: { type: 'STRING', nullable: true },
+    especie: { type: 'STRING', nullable: true, enum: RECRUIT_SPECIES_NAMES },
     motivo: { type: 'STRING', nullable: true, description: 'Por qué quiere acompañarlos, en una frase.' }
   },
   required: ['nombre', 'clase']
@@ -346,7 +354,7 @@ const PROFILE_HINTS = {
 function checkRules({ name, checkIntent, bestiary }) {
   const profiles = NPC_PROFILE_IDS.map(id => `"${id}" (${NPC_PROFILES[id].label}, ${PROFILE_HINTS[id]})`).join(', ');
   return `${checkIntent ? `${name} ha pedido hacer una prueba de ${checkIntent.label} desde su ficha: lo que intenta está en su acción y en la crónica reciente. Devuelve "prueba" con "habilidad": "${checkIntent.label}" y la CD (o el rival) que pida la situación.
-` : ''}- Si la acción tiene riesgo o un resultado incierto (trepar, convencer, mentir, esconderse, forzar una cerradura, recordar un saber...), NO la resuelvas tú: devuelve "prueba". El juego tira el d20 con la ficha de ${name}, lo compara y añade a tu narración el desenlace que salga. En "narracion" cuenta solo el intento, sin decir cómo acaba; en "prueba.exito" y "prueba.fallo" cuenta lo que pasa en cada caso, cada uno con su propio "danio", "oro", "experiencia" y "opciones" (los de fuera se ignoran). Marca "usaTirada": true.
+` : ''}- Si la acción tiene riesgo o un resultado incierto (trepar, convencer, mentir, esconderse, forzar una cerradura, recordar un saber...), NO la resuelvas tú: devuelve "prueba". El juego tira el d20 con la ficha de ${name}, lo compara y añade a tu narración el desenlace que salga. En "narracion" cuenta solo el intento, sin decir cómo acaba; en "prueba.exito" y "prueba.fallo" cuenta lo que pasa en cada caso, cada uno con su propio "danio", "oro", "experiencia" y "opciones" (los de fuera se ignoran), y también sus "condiciones" y "extremidades": un veneno que resiste o una trampa que esquiva no le dejan nada, así que van solo en "fallo". Marca "usaTirada": true.
 - "habilidad": la habilidad o característica que corresponde (Atletismo para trepar o nadar, Engaño para mentir, Sigilo para esconderse, Destreza para una cerradura, Historia o Arcanos para recordar...).
 - "cd": la Clase de Dificultad según la situación, con la escala de las reglas: ${DC_SCALE.map(s => `${s.dc} ${s.name}`).join(', ')}. Si dudas, 15. Ejemplos: saltar un arroyo 5; trepar una tapia con buenos asideros 10; un muro liso bajo la lluvia 20; forzar un candado oxidado 10, la cerradura de la cámara de un banquero enano 25; recordar una leyenda que se cuenta en todas las tabernas 10, un rito olvidado hace siglos 20; abrir a empujones una puerta atrancada 15; cruzar a nado un río crecido en plena tormenta 25.
 - "contra": si alguien se opone, en vez de una CD fija: engañar, persuadir o intimidar se tiran contra su Perspicacia; esconderse o robarle, contra su Percepción pasiva; agarrarlo o derribarlo, contra su Atletismo o Acrobacias. No es lo mismo engañar a un niño que a un erudito: ${bestiary ? 'si es una criatura de la lista de criaturas, pon su id en "criatura"; si es ' : 'si es '}una persona corriente, pon su "perfil": ${profiles}. Añade su "nombre" si lo tiene. El juego usa sus valores.
@@ -402,7 +410,7 @@ export function buildDMPrompt({
 
   const diceRules = combatResult
     ? `El combate ya ha terminado y lo ha resuelto el juego con sus propias tiradas. Resultado: ${combatResult}
-Narra el desenlace (cómo queda el lugar, qué hacen los que se rindieron o huyeron) sin cambiar nada de lo ocurrido ni tirar dados. El botín del resultado lo ha calculado el juego y ya está en la mochila: descríbelo cuando registre a los caídos, sin añadir otros objetos ni monedas. "usaTirada": false, "danio": 0, "curacion": 0, "oro": 0 y "experiencia": 0 (ya está aplicado todo).`
+Narra el desenlace (cómo queda el lugar, qué hacen los que se rindieron o huyeron) sin cambiar nada de lo ocurrido ni tirar dados. ${/Botín/.test(combatResult) ? 'El botín del resultado lo ha calculado el juego y ya está en la mochila: descríbelo cuando registre a los caídos, sin añadir otros objetos ni monedas.' : 'No hay botín: no describas monedas ni objetos que se lleven.'}${/Rescate/.test(combatResult) ? ' El grupo ha perdido y el juego ya ha aplicado el rescate que dice el resultado: cuéntalo tal cual (dónde despiertan, cómo están y lo que pagan). No digas que les roban equipo o dinero, que están atados o presos ni que tienen heridas en brazos o piernas: nada de eso ha pasado.' : ''} "usaTirada": false, "danio": 0, "curacion": 0, "oro": 0 y "experiencia": 0 (ya está aplicado todo).`
     : attackDone
     ? 'El juego YA ha resuelto este ataque con sus propias tiradas, que aparecen en la acción del jugador: narra exactamente esos impactos, fallos y el daño que sufre el enemigo, sin cambiar ningún número ni tirar dados ("usaTirada": false). Tú solo decides cómo reacciona el enemigo: si está muy herido, si huye o se rinde, o si contraataca (en ese caso pon en "danio" lo que pierde el personaje).'
     : noRoll
@@ -438,16 +446,16 @@ ${bestiary ? `
 - "combate": SOLO si en esta escena empieza una pelea (alguien ataca al héroe, o el héroe ataca a alguien). En ese caso NO resuelvas la pelea: narra solo cómo aparecen los enemigos (sin golpes, aciertos, daño ni tiradas), pon "usaTirada": false y "danio": 0, y devuelve los enemigos; el juego llevará el combate con sus propias tiradas. Usa únicamente estas criaturas: ${describeBestiary(bestiary)}. Para ${group ? `el grupo de ${partySize}` : `${name} solo`}, un combate normal suma unos ${bestiary.budget.moderate} PX (fácil ${bestiary.budget.low}, duro ${bestiary.budget.high}). Puedes dar a un único enemigo un "nombre" propio y un "rasgo" breve, y marcarlo "elite" si es un jefe. Si no empieza ninguna pelea, omite "combate".
   · Si la pelea empieza porque ${name} ataca a alguien ("ataco al guardia", "le clavo la daga al tabernero"), pon "ataqueDelHeroe": true y en "objetivo" el id de esa criatura. Ese primer golpe lo resuelve el juego con sus dados antes de la iniciativa: NO digas si acierta, si hiere o si mata, ni cifras de daño; narra solo el instante en que ${name} se lanza y cómo reaccionan los demás.
   · "sorpresa": {"quien": "enemigos" | "grupo" | "nadie", "afectados": [...], "tirada": "sigilo" | "engano", "motivo"}. "enemigos" si ${name} ataca sin que lo esperen (en mitad de una conversación, por la espalda, sin haber sacado el arma); "grupo" solo si los enemigos tienden una emboscada ${group ? 'al grupo' : `a ${name}`} (nunca si ${name} es quien ataca); "nadie" si la tensión ya era evidente o se ven venir. Los sorprendidos tiran la iniciativa con desventaja. Pon "tirada" solo si el bando oculto se acerca a escondidas ("sigilo") o ataca con un engaño en plena charla ("engano"): el juego la tira contra la Percepción pasiva de cada uno y los que se den cuenta no quedan sorprendidos.` : ''}${allowShop ? `
-- "tienda": SOLO si ${name} entra en una tienda, va al mercado o habla con un mercader para comprar o vender: {"tipo": "herrero" (armas y armaduras) | "alquimista" (pociones) | "general" (equipo de aventurero)}. El juego abrirá la tienda con sus propios precios y su género: tú no cobras ni pagas nada ("oro": 0), no inventas precios ni das objetos; narra solo la llegada y al tendero. ${shopsHere || 'Aquí no hay tiendas fijas: sería un buhonero o un puesto improvisado.'} Si el jugador intenta comprar o vender equipo, usa "tienda" en vez de "oro". Si no, omite "tienda".` : ''}
+- "tienda": SOLO si ${name} entra en una tienda, va al mercado o habla con un mercader para comprar o vender: {"tipo": "herrero" (armas y armaduras) | "alquimista" (pociones) | "general" (equipo de aventurero)}. El juego abrirá la tienda con sus propios precios y su género: tú no cobras ni pagas nada ("oro": 0), no inventas precios ni das objetos; narra solo la llegada y al tendero. ${shopsHere || 'Aquí no hay tiendas fijas: sería un buhonero o un puesto improvisado.'} Si el jugador intenta comprar o vender equipo, usa "tienda" en vez de "oro". No la abras solo porque salga un mercader o un tendero (si ofrece un encargo, un rumor o una charla, no es una compra). Si no, omite "tienda".` : ''}
 ${allowRecruit ? `
-- "reclutar": SOLO si en esta escena un personaje no jugador se ofrece de verdad a unirse al grupo (lo contratan, le salvan la vida, comparte su causa...): {"nombre", "clase": ${RECRUIT_CLASS_NAMES.map(c => `"${c}"`).join(' | ')}, "especie", "motivo"}. No lo sumes tú: el juego pregunta al jugador si acepta y crea su ficha con las reglas. El grupo tiene ${partySize} de ${MAX_PARTY} miembros. Raro: no más de uno cada muchas escenas. Si no, omite "reclutar".` : ''}${allowDeparture ? `
+- "reclutar": SOLO si en esta escena un personaje no jugador se ofrece de verdad a unirse al grupo (lo contratan, le salvan la vida, comparte su causa...): {"nombre", "clase": ${RECRUIT_CLASS_NAMES.map(c => `"${c}"`).join(' | ')}, "especie": ${RECRUIT_SPECIES_NAMES.map(c => `"${c}"`).join(' | ')} (la que dices en la narración; si no está, la más parecida), "motivo"}. No lo sumes tú: el juego pregunta al jugador si acepta y crea su ficha con las reglas. El grupo tiene ${partySize} de ${MAX_PARTY} miembros. Raro: no más de uno cada muchas escenas. Si no, omite "reclutar".` : ''}${allowDeparture ? `
 - "abandona": SOLO si la historia hace que un compañero deje el grupo (traición, una deuda, una despedida, lo raptan): {"nombre": uno de los compañeros, "motivo"}. Muy raro; nunca por capricho. Si no, omite "abandona".` : ''}${meetingPlace ? `
 - "reunion": los de esta escena aún no tienen motivo para ir a ${meetingPlace}, donde la historia juntará al grupo. En esta escena o en la siguiente, haz que surja de forma natural un motivo ligado a lo que está pasando (una misión que alguien les encarga, un rumor que oyen, un encargo que aceptan) y devuélvelo: {"tipo": "mision" | "rumor" | "encargo", "motivo": "una o dos frases"}. Nárralo también. El juego no los mueve: irán cuando el jugador decida viajar. Si en esta escena aún no encaja, omite "reunion".` : ''}
 
 - "misiones": casi siempre una lista vacía. Las misiones solo nacen y terminan en la historia, nunca porque el jugador lo pida fuera de ella.
-  · "abrir": cuando alguien encarga de verdad un trabajo a ${name} y lo acepta (un PNJ, un tablón de anuncios, un contrato): {"accion": "abrir", "titulo", "quienEncarga", "lugar", "objetivo", "recompensa": {"oro", "objeto", "experiencia": true, "importancia": "menor" | "normal" | "mayor"}} o {"soloHistoria": true} si no hay pago. Para el nivel ${characterLevel(character)} el oro más el valor del objeto no pasa de ${formatCoins(questGoldCap(characterLevel(character)))}; el juego ajusta lo que se pase y calcula la experiencia por la importancia. Promete en la narración lo mismo que pongas aquí.
+  · "abrir": cuando alguien encarga de verdad un trabajo a ${name} y lo acepta (un PNJ, un tablón de anuncios, un contrato): {"accion": "abrir", "titulo", "quienEncarga", "lugar", "objetivo", "recompensa": {"oro", "objeto", "experiencia": true, "importancia": "menor" | "normal" | "mayor"}} o {"soloHistoria": true} si no hay pago. Para el nivel ${characterLevel(character)} el oro más el valor del objeto no pasa de ${formatCoins(questGoldCap(characterLevel(character)))}; el juego ajusta lo que se pase y calcula la experiencia por la importancia. Promete en la narración lo mismo que pongas aquí. Si en esta escena ${name} acepta un encargo (aunque la paga sea un objeto, un favor o nada), ábrelo en ESTA respuesta: si no lo devuelves, el juego no lo apunta en el diario ni paga la recompensa al cumplirlo.
   · "actualizar": {"accion": "actualizar", "id", "nota"} cuando hay un avance o una pista, o con "objetivo" si el encargo cambia.
-  · "cumplir" / "fallar": {"accion": "cumplir" | "fallar", "id", "nota"} cuando la historia la resuelve. Al cumplirla el juego entrega la recompensa prometida: narra que la recibe, pero no la sumes a "oro" ni a "experiencia".
+  · "cumplir" / "fallar": {"accion": "cumplir" | "fallar", "id", "nota"} cuando la historia la resuelve: "cumplir" solo si en tu narración el objetivo de esa misión queda hecho de verdad (la entrega en manos del destinatario, la criatura vencida, la persona a salvo), no por acercarse a él. Al cumplirla el juego entrega la recompensa prometida: narra que la recibe, pero no la sumes a "oro" ni a "experiencia".
   ${quests ? `Misiones activas (usa SOLO estos ids, no inventes otros): ${quests}.` : 'Ahora no hay misiones activas: no uses "actualizar", "cumplir" ni "fallar".'}
 Lo que cuentes en la narración debe coincidir con "danio", "curacion" y "oro".`
     : `Al final de tu respuesta, en una línea separada que empiece con "OPCIONES:", proporciona 3 o 4 sugerencias breves de acción separadas por una pleca "|". Por ejemplo: OPCIONES: Sacar el arma | Negociar con el tabernero | Escabullirse por la puerta trasera.
@@ -579,7 +587,7 @@ export function cleanShopRequest(value) {
  * Validate the check of a reply ("prueba", see cleanCheckRequest in checks.js) and
  * the numbers of each outcome, clamped as the rest of the reply. Null without a check.
  * @returns {{ skillId, ability, label, dc, against, success, failure } | null}
- *   success / failure: { text, damageTaken, healing, goldEarned, xpEarned, suggestedActions | null }
+ *   success / failure: { text, damageTaken, healing, goldEarned, xpEarned, suggestedActions | null, conditionChanges, limbChanges }
  */
 export function cleanCheck(raw, character = {}) {
   const check = cleanCheckRequest(raw);
@@ -594,7 +602,9 @@ export function cleanCheck(raw, character = {}) {
       healing: toInt(branch.curacion, 0, maxHp),
       goldEarned: toInt(branch.oro, -gold, 500),
       xpEarned: toInt(branch.experiencia, 0, 300),
-      suggestedActions: options.length ? cleanActions(options) : null
+      suggestedActions: options.length ? cleanActions(options) : null,
+      conditionChanges: cleanConditionChanges(branch.condiciones),
+      limbChanges: cleanLimbChanges(branch.extremidades)
     };
   };
   return { ...check, success: outcome(check.success), failure: outcome(check.failure) };
@@ -649,7 +659,11 @@ export function parseDMReply(raw, character = {}) {
         check: cleanCheck(data.prueba, character)
       };
     } catch {
-      // Not valid JSON: treat it as plain text below
+      // Broken JSON (cut short, a stray character): never show it to the player.
+      // Keep the narration if it came whole, without any effect; else nothing usable.
+      const narration = salvageNarration(jsonText);
+      if (!narration) return null;
+      return { ...plainReply(narration, []), usedRoll: false, salvaged: true };
     }
   }
 
@@ -661,6 +675,22 @@ export function parseDMReply(raw, character = {}) {
     options = parts[1].split('|');
   }
   if (!text) return null;
+  return plainReply(text, options);
+}
+
+/** The "narracion" of a broken JSON reply, when its string came whole; '' otherwise. */
+function salvageNarration(jsonText) {
+  const match = jsonText.match(/"narracion"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (!match) return '';
+  try {
+    return String(JSON.parse(`"${match[1]}"`)).trim();
+  } catch {
+    return '';
+  }
+}
+
+/** A reply with a narration and no effects (the legacy plain-text format). */
+function plainReply(text, options) {
   return {
     text,
     suggestedActions: cleanActions(options),

@@ -40,7 +40,7 @@ import { skillModifier, getSkill } from '../utils/characterBuilder';
 import {
   openShop, shopKey, currentNode, isAtTavern, shopsAt, buyItem, sellItem, describeTrade, describeShopsForPrompt, normalizeShops, SHOP_TYPES
 } from '../utils/shops';
-import { drinkPotion, healingDice } from '../utils/items';
+import { drinkPotion, healingDice, formatCoins } from '../utils/items';
 import { generateLoot, describeLoot } from '../utils/loot';
 import {
   normalizeQuests, applyQuestChanges, abandonQuest, describeQuestChange, questFact, unseenQuestCount
@@ -625,16 +625,16 @@ export default function TavernApp({
         recordEvent(`${name} se desplomó de agotamiento y Duncan lo recogió`);
         pushSystemMessage(`💀 ${name} llega al sexto nivel de agotamiento y se desploma. Maese Duncan lo recoge y lo mete en un catre: sigue con agotamiento de nivel 5.`);
       });
-      if (conditionResult.goldLost > 0) pushSystemMessage(`🪙 Los cuidados de Duncan cuestan ${conditionResult.goldLost} monedas de oro de la bolsa.`);
+      if (conditionResult.goldLost > 0) pushSystemMessage(`🪙 Los cuidados de Duncan cuestan ${formatCoins(conditionResult.goldLost)} de la bolsa.`);
 
       ready.forEach(name => pushSystemMessage(levelReadyLine(name)));
 
       // Dropping to 0 HP: Duncan patches the hero up... at a price (paid once from the purse)
       scene.knockedOut.forEach(k => {
         recordEvent(`${k.name} cayó inconsciente y Duncan lo curó`);
-        pushSystemMessage(`💀 ${k.name} cae inconsciente. Maese Duncan lo arrastra junto a la chimenea y lo remienda: despierta con ${k.hp} HP.`);
+        pushSystemMessage(`💀 ${k.name} cae inconsciente. Maese Duncan se encarga de remendarle junto a la chimenea: despierta con ${k.hp} PG.`);
       });
-      if (scene.goldLost > 0) pushSystemMessage(`🪙 Los cuidados de Duncan cuestan ${scene.goldLost} monedas de oro de la bolsa.`);
+      if (scene.goldLost > 0) pushSystemMessage(`🪙 Los cuidados de Duncan cuestan ${formatCoins(scene.goldLost)} de la bolsa.`);
 
       // A companion offers to join: the game builds the sheet, the player decides
       if (response.recruit && !fightGroups.length) {
@@ -784,7 +784,8 @@ export default function TavernApp({
     const surprise = start?.surprise || null;
     // How the fight starts (the whole party), kept so it can be fought again in the simulator
     const snapshot = makeSnapshot({ party: heroes, groups, world, place: currentNode(world)?.name || '', byDuncan, surprise: surprise?.side || null });
-    let next = { ...createEncounter(groups, heroes, combatDie, { surprise }), byDuncan, narrated: 0, snapshotId: snapshot.id };
+    // `returnTo`: who was acting before the fight (the acting member follows the turns meanwhile)
+    let next = { ...createEncounter(groups, heroes, combatDie, { surprise }), byDuncan, narrated: 0, snapshotId: snapshot.id, returnTo: who0 };
     // The attack the player wrote is played before the initiative (asked in the combat view when unclear)
     const attacker = start?.heroAttacks ? heroes.find(h => h.id === actorId) : null;
     const opening = attacker ? detectOpeningStrike(actionText, attacker, next.enemies, { targetId: start.targetId }) : null;
@@ -965,15 +966,19 @@ export default function TavernApp({
       }
     }
     ready.forEach(name => pushSystemMessage(levelReadyLine(name)));
+    let rescueLine = '';
     if (result.rescue) {
       const who = group ? 'todo el grupo' : heroes[0]?.name || character.name;
       recordEvent(`${group ? 'El grupo cayó' : `${heroes[0]?.name || character.name} cayó`} en combate y Duncan ${group ? 'los' : 'lo'} curó`);
-      pushSystemMessage(`💀 Cae ${who}. Maese Duncan ${group ? 'los arrastra' : 'lo arrastra'} junto a la chimenea y ${group ? 'los remienda' : 'lo remienda'}: ${group ? 'despiertan' : 'despierta'} con la mitad de sus PG${result.rescue.goldLost > 0 ? ` y ${result.rescue.goldLost} monedas de oro menos en la bolsa por los cuidados` : ''}.`);
+      rescueLine = `💀 Cae ${who}. Maese Duncan ${group ? 'los arrastra' : 'lo arrastra'} junto a la chimenea y ${group ? 'los remienda' : 'lo remienda'}: ${group ? 'despiertan' : 'despierta'} con la mitad de sus PG${result.rescue.goldLost > 0 ? ` y ${formatCoins(result.rescue.goldLost)} menos en la bolsa por los cuidados` : ''}.`;
+      pushSystemMessage(rescueLine);
     }
+    // The acting member followed the turns of the fight: back to whoever was acting before it
+    if (followsTurns() && encounter.returnTo && membersOf(next).some(m => m.id === encounter.returnTo)) next = setActiveMember(next, encounter.returnTo);
     setSceneParty(fighterId, next);
     setEncounterIn(lane, null);
-    // Duncan narrates the outcome (and any loot) from the result the game computed
-    handleSendAction('Narra el final del combate', { sheet: activeSheet(next), combatResult: `${line}${questLine}`, loot: won ? loot : null });
+    // Duncan narrates the outcome (and any loot, or the rescue) from the result the game computed
+    handleSendAction('Narra el final del combate', { sheet: activeSheet(next), combatResult: `${line}${questLine}${rescueLine ? ` Rescate (ya aplicado): ${rescueLine}` : ''}`, loot: won ? loot : null });
   };
 
   // Paralyzed, stunned, petrified...: no attacks or spells outside a fight either

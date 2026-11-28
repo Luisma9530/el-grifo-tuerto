@@ -70,7 +70,7 @@ describe("Duncan's check field (prueba)", () => {
       fallo: { narracion: 'Caes.', danio: 500, experiencia: -3 }
     }), hero);
     expect(parsed.check).toMatchObject({ skillId: 'athletics', ability: 'fue', dc: 30, against: null });
-    expect(parsed.check.success).toEqual({ text: 'Subes.', damageTaken: 0, healing: 0, goldEarned: 500, xpEarned: 0, suggestedActions: ['Mirar'] });
+    expect(parsed.check.success).toEqual({ text: 'Subes.', damageTaken: 0, healing: 0, goldEarned: 500, xpEarned: 0, suggestedActions: ['Mirar'], conditionChanges: [], limbChanges: [] });
     expect(parsed.check.failure).toMatchObject({ text: 'Caes.', damageTaken: 20, xpEarned: 0, suggestedActions: null });
   });
 

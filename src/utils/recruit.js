@@ -29,16 +29,20 @@ export function classIdFrom(value) {
   return found?.id || null;
 }
 
-/** Species name -> species id ("Enana", "elfo", "dwarf"); null when unknown. */
+/** Species name -> species id ("Enana", "elfo", "dwarf"); null when unknown.
+ * Older half-species ("semielfa", "semiorco") are the species they come from. */
 export function speciesIdFrom(value) {
-  const wanted = fold(value);
-  if (!wanted) return null;
-  const found = SPECIES.find(s => s.id === wanted || fold(s.name) === wanted || fold(s.name).replace(/o$/, 'a') === wanted);
+  const folded = fold(value);
+  if (!folded) return null;
+  const find = wanted => SPECIES.find(s => s.id === wanted || fold(s.name) === wanted || fold(s.name).replace(/o$/, 'a') === wanted);
+  const found = find(folded) || (folded.startsWith('semi') ? find(folded.slice(4)) : null);
   return found?.id || null;
 }
 
 /** The class names, for the prompt. */
 export const RECRUIT_CLASS_NAMES = CLASSES.map(c => c.name);
+/** Species a companion may have (Duncan picks one of these names). */
+export const RECRUIT_SPECIES_NAMES = SPECIES.map(s => s.name);
 
 /**
  * Validate a companion offer from Duncan's reply. Needs a name and a known class;

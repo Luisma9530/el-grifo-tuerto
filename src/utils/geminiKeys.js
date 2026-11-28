@@ -45,7 +45,7 @@ export async function testGeminiKey(key) {
   if (result.ok) return { success: true, reply: result.text.trim() || '¡Conexión verificada con éxito!' };
 
   // An overloaded service says nothing about the key: don't reject a good key for that
-  if (result.reason === 'overloaded' || result.reason === 'network') {
+  if (result.reason === 'overloaded' || result.reason === 'network' || result.reason === 'timeout') {
     return {
       success: false,
       error: 'Google Gemini está saturado o no responde en este momento. La clave puede ser correcta: espera un minuto y vuelve a intentarlo.'

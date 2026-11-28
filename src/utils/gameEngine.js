@@ -47,6 +47,8 @@ function localXp({ text, rest, spellXp, isCrit, isCritFail, isHighRoll }) {
 const AI_FAILURE_NOTICES = {
   overloaded: 'Gemini está saturado ahora mismo: Duncan improvisa con el motor local en este turno.',
   network: 'No hay conexión con Gemini: Duncan improvisa con el motor local en este turno.',
+  timeout: 'Gemini está tardando demasiado en contestar: Duncan improvisa con el motor local en este turno.',
+  'bad-reply': 'Gemini ha devuelto una respuesta rota: Duncan improvisa con el motor local en este turno.',
   quota: 'Has alcanzado el límite gratuito de Gemini: Duncan sigue con el motor local hasta que se renueve.',
   key: 'Tu clave de Gemini no es válida o ha sido revocada: revísala en "Conectar IA". Duncan usa el motor local.',
   'bad-request': 'Gemini rechazó la petición: Duncan improvisa con el motor local en este turno.'
@@ -186,7 +188,7 @@ async function dmResponse({
             const shop = allowShop && !startsFight ? parsed.shop : null;
             // A check: Duncan set the DC (or who resists), the game rolls it and keeps his outcome
             const rolled = !needsNoRoll && !playerRoll && !startsFight && !combatResult
-              ? rollSceneCheck(parsed.check, { character, intent, getMonster, playerAction, contextText, sceneText, die })
+              ? rollSceneCheck(parsed.check, { character, intent, getMonster, playerAction, contextText, sceneText, die, topChanges: parsed })
               : null;
             if (rolled) Object.assign(parsed, rolled.effects);
             return {
@@ -213,8 +215,9 @@ async function dmResponse({
               conditionChanges: combatResult || startsFight ? [] : parsed.conditionChanges || [],
               // Quests opened, updated or closed by the story (the game pays the rewards)
               questChanges: parsed.questChanges || [],
-              // A companion offers to join, or a member leaves (the game validates and asks the player)
-              recruit: allowRecruit && !startsFight && !combatResult ? parsed.recruit : null,
+              // A companion offers to join, or a member leaves (the game validates and asks the player);
+              // nobody offers to join after a failed check (persuading them did not work)
+              recruit: allowRecruit && !startsFight && !combatResult && !(rolled && !rolled.check.success) ? parsed.recruit : null,
               departure: allowDeparture && !combatResult ? parsed.departure : null,
               meetingHook: parsed.meetingHook || null,
               // The check the game rolled for Duncan (none when a fight starts: the game rolls it)
@@ -227,13 +230,13 @@ async function dmResponse({
               totalKeys: pool.length
             };
           }
-          aiFailure = 'overloaded'; // answered, but with nothing usable
+          aiFailure = 'bad-reply'; // answered, but with nothing usable (broken JSON, no narration)
         } else {
           aiFailure = reply.reason;
           if (reply.retryAfterMs) retryAfterMs = reply.retryAfterMs;
           console.warn(`[Duncan Engine] Clave ${activeIdx + 1}/${pool.length} falló (${reply.reason}, HTTP ${reply.status}).`);
           // Google's side is saturated or unreachable: the other keys won't fare better
-          if (reply.reason === 'overloaded' || reply.reason === 'network') break;
+          if (reply.reason === 'overloaded' || reply.reason === 'network' || reply.reason === 'timeout') break;
         }
       } catch (e) {
         aiFailure = 'network';
@@ -551,7 +554,7 @@ export function checkRoll(check) {
  * Returns null when the scene has no check; else { check, outcome, effects }, with
  * `effects` the numbers of the outcome that replace those of the reply.
  */
-function rollSceneCheck(request, { character, intent, getMonster, playerAction, contextText, sceneText, die }) {
+function rollSceneCheck(request, { character, intent, getMonster, playerAction, contextText, sceneText, die, topChanges }) {
   if (!request && !intent) return null;
   if (!request) {
     // He set no DC for the check the player asked for: the local table does
@@ -569,7 +572,22 @@ function rollSceneCheck(request, { character, intent, getMonster, playerAction, 
     outcome,
     effects: {
       damageTaken: outcome.damageTaken, healing: outcome.healing, goldEarned: outcome.goldEarned, xpEarned: outcome.xpEarned,
-      ...(outcome.suggestedActions ? { suggestedActions: outcome.suggestedActions } : {})
+      ...(outcome.suggestedActions ? { suggestedActions: outcome.suggestedActions } : {}),
+      ...outcomeChanges(request, check.success, topChanges)
     }
   };
+}
+
+/**
+ * Conditions and limbs of a scene with a check: those of the outcome that came up.
+ * When Duncan put them outside the outcomes (at the top of the reply), harm is
+ * the price of failing (a poison he resists or a trap he dodges leaves no mark)
+ * and a cure the prize of succeeding (an antidote that works, a limb set right).
+ */
+export function outcomeChanges(request, success, { conditionChanges = [], limbChanges = [] } = {}) {
+  const outcome = success ? request.success : request.failure;
+  const inOutcomes = key => (request.success?.[key]?.length || 0) + (request.failure?.[key]?.length || 0) > 0;
+  const cure = { conditionChanges: c => c.action === 'remove', limbChanges: c => c.status === 'ok' };
+  const pick = (key, top) => (inOutcomes(key) ? outcome[key] || [] : top.filter(c => cure[key](c) === success));
+  return { conditionChanges: pick('conditionChanges', conditionChanges), limbChanges: pick('limbChanges', limbChanges) };
 }

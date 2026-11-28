@@ -89,7 +89,7 @@ describe('requestGemini', () => {
     const pending = requestGemini('k', { prompt: 'p' });
     await vi.advanceTimersByTimeAsync(60000);
     const res = await pending;
-    expect(res).toMatchObject({ ok: false, reason: 'network' });
+    expect(res).toMatchObject({ ok: false, reason: 'timeout' });
     expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(GEMINI_MODELS.length * 2);
   });
 });

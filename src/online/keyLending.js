@@ -37,8 +37,9 @@ const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
 /** Largest encrypted key accepted (base64 characters). */
 export const MAX_SEALED_CT = 200;
 
-/** A Gemini API key looks like this (Google's are 39 characters, "AIza…"). */
-export const isPlausibleGeminiKey = text => typeof text === 'string' && /^[A-Za-z0-9_-]{30,60}$/.test(text.trim());
+/** A Gemini API key looks like this: the classic ones are 39 characters ("AIza…"); the
+ * newer ones are longer and carry a dot ("AQ.…"). */
+export const isPlausibleGeminiKey = text => typeof text === 'string' && /^[A-Za-z0-9_.-]{30,100}$/.test(text.trim());
 
 const purpose = (code, playerId) => new TextEncoder().encode(`grifo-tuerto:prestamo:${code}:${playerId}`);
 const keyText = jwk => JSON.stringify({ kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y });
