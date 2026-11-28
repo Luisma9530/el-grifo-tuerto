@@ -28,9 +28,13 @@ export function onlineConfig(env = import.meta.env, search = typeof window !== '
   return { kind: null };
 }
 
-/** The link to share: this page with the room code (and the local transport if it is the one in use). */
-export function roomLink(code, kind, origin = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '') {
-  return `${origin}?sala=${encodeURIComponent(code)}${kind === 'local' ? '&transporte=local' : ''}`;
+/**
+ * The link to share: this page with the room code (and the local transport if it
+ * is the one in use). `print`: the host's fingerprint (`&h=`), so whoever comes in
+ * by the link lends a key only to the real host (see keyLending.js).
+ */
+export function roomLink(code, kind, origin = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '', print = '') {
+  return `${origin}?sala=${encodeURIComponent(code)}${kind === 'local' ? '&transporte=local' : ''}${print ? `&h=${encodeURIComponent(print)}` : ''}`;
 }
 
 /** Shared listeners and the safety checks of both transports. */
