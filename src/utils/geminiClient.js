@@ -11,6 +11,7 @@ export const GEMINI_MODELS = ['gemini-flash-latest', 'gemini-flash-lite-latest']
 const REQUEST_TIMEOUT_MS = 20000; // a single overloaded request can otherwise hang for minutes
 const TOTAL_BUDGET_MS = 40000; // never keep the player waiting longer than this
 const RETRY_DELAY_MS = 1200;
+const TIMEOUT_MESSAGE = 'Tiempo de espera agotado';
 const PREFER_FALLBACK_MS = 5 * 60 * 1000;
 
 // When the main model is overloaded, start with the model that last worked for a while
@@ -32,7 +33,7 @@ async function postOnce(model, key, body, timeoutMs) {
     return { status: response.status, data };
   } catch (error) {
     // Network failure or timeout
-    return { status: 0, data: { error: { message: error?.name === 'AbortError' ? 'Tiempo de espera agotado' : error?.message } } };
+    return { status: 0, data: { error: { message: error?.name === 'AbortError' ? TIMEOUT_MESSAGE : error?.message } } };
   } finally {
     clearTimeout(timer);
   }
@@ -44,14 +45,15 @@ async function postOnce(model, key, body, timeoutMs) {
  * - 'quota': rate limit / daily quota reached for this key (try another key)
  * - 'bad-request': the request format was rejected (retry with a simpler format)
  * - 'overloaded': Google's side is saturated or down (other keys won't help)
- * - 'network': no connection or timeout
+ * - 'timeout': Gemini took too long to answer (it is up, but slow)
+ * - 'network': no connection
  */
 export function classifyGeminiError(status, message = '') {
   const text = String(message).toLowerCase();
   if (status === 401 || status === 403 || text.includes('api key')) return 'key';
   if (status === 429) return 'quota';
   if (status === 400) return 'bad-request';
-  if (status === 0) return 'network';
+  if (status === 0) return message === TIMEOUT_MESSAGE ? 'timeout' : 'network';
   return 'overloaded'; // 404 (model retired), 500, 503...
 }
 
@@ -107,8 +109,8 @@ export async function requestGemini(key, { prompt, generationConfig }) {
       failure = { status, reason, error, ...(retryAfterMs ? { retryAfterMs } : {}) };
       // The key or the request itself is the problem: another model won't fix it
       if (reason === 'key' || reason === 'bad-request') return { ok: false, ...failure };
-      if (reason === 'overloaded' || reason === 'network') sawTransient = true;
-      // 'quota', 'overloaded' and 'network' fall through to the next model
+      if (reason === 'overloaded' || reason === 'network' || reason === 'timeout') sawTransient = true;
+      // 'quota', 'overloaded', 'timeout' and 'network' fall through to the next model
     }
 
     // Every model failed. Retry once only if something looked temporary.

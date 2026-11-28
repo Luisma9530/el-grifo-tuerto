@@ -174,7 +174,7 @@ export function buildMomentPrompt({ moments, encounter, character, world }) {
 Héroe: ${character.name} (${character.hp}/${character.maxHp} PG). Enemigos: ${enemies}.
 Acaba de pasar: ${moments.map(m => m.text).join(' ')}
 ${standing.length ? `Siguen en pie: ${standing.join(', ')}.` : 'No queda nadie en pie.'}
-Narra ese momento en 1 o 2 frases, en español y en segunda persona, sin inventar daños, muertes ni tiradas nuevas, y sin preguntar al jugador. Devuelve JSON con "narracion".`;
+Narra ese momento en 1 o 2 frases, en español y en segunda persona, sin inventar daños, muertes ni tiradas nuevas, sin repetir cifras de daño ni de puntos de golpe (el registro del combate ya las muestra) y sin preguntar al jugador. Devuelve JSON con "narracion".`;
 }
 
 /**
@@ -190,7 +190,12 @@ export async function narrateMoment(key, context) {
     });
     if (!reply.ok) return null;
     let text = reply.text;
-    try { text = JSON.parse(reply.text).narracion; } catch { /* plain text answer */ }
+    try {
+      text = JSON.parse(reply.text).narracion;
+    } catch {
+      // A plain text answer is fine; broken JSON is never shown in the fight log
+      if (reply.text.trim().startsWith('{')) return null;
+    }
     text = typeof text === 'string' ? text.trim().replace(/\s+/g, ' ').slice(0, 400) : '';
     return text || null;
   } catch {
