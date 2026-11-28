@@ -8,7 +8,7 @@
 // (party.js, partyActions.js, encounter.js), which check the rules again.
 
 import { cleanDraft } from './newHero';
-import { cleanSealed } from './keyLending';
+import { cleanSealed, isSlotId } from './keyLending';
 import { MAX_PARTY } from '../utils/party';
 import {
   isConnected, canControl, claimOf, claimCharacter, releaseCharacter, castVote, restartVotes,
@@ -106,11 +106,14 @@ export function sanitizeIntent(raw) {
     case 'lend': {
       // A Gemini key lent to the host, encrypted for the host alone (keyLending.js):
       // the session opens it, it never reaches the room or the game
+      // (slot: the player's name for this key, to take it back later; several keys per player)
       const sealed = cleanSealed(raw.sealed);
-      return sealed ? { ok: true, intent: { type: 'lend', sealed } } : bad;
+      return sealed && isSlotId(raw.slot) ? { ok: true, intent: { type: 'lend', sealed, slot: raw.slot } } : bad;
     }
     case 'unlend':
-      return { ok: true, intent: { type: 'unlend' } };
+      // One key (its slot) or, without a slot, all of the player's
+      if (raw.slot != null && !isSlotId(raw.slot)) return bad;
+      return { ok: true, intent: raw.slot ? { type: 'unlend', slot: raw.slot } : { type: 'unlend' } };
     case 'finish':
       // A finished fight of the player's group (a party apart): the host closes it
       return characterId ? { ok: true, intent: { type: 'finish', characterId } } : bad;

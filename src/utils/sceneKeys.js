@@ -39,11 +39,14 @@ export function sceneApiKeys(hostKeys, { sceneId = null, keysByScene = null, sha
   return Array.isArray(own) && own.length ? own : hostKeys;
 }
 
+/** A player's lent keys as [{ key, playerId }]. */
+const keysOfPlayer = (lent, playerId) => [].concat(lent?.[playerId] || []).filter(Boolean).map(key => ({ key, playerId }));
+
 /**
  * The lent keys of each group apart, from who plays its characters.
  * @param groups   [{ id, memberIds }] (splitParty.js groupsOf)
  * @param playerOf (characterId) => playerId who plays it (room.js controllerOf)
- * @param lent     { [playerId]: key } the keys the host holds
+ * @param lent     { [playerId]: [key, ...] } the keys the host holds (several per player; a single key is fine too)
  * @param hostId   the host's player id (its own keys join a group it plays in)
  * @param hostKeys the host's keys
  * @returns { [groupId]: [{ key, playerId }] } (groups without lent keys left out)
@@ -52,16 +55,16 @@ export function lentKeysByScene({ groups = [], playerOf = () => null, lent = {},
   const out = {};
   groups.forEach(group => {
     const players = [...new Set((group.memberIds || []).map(playerOf).filter(Boolean))];
-    const theirs = players.filter(p => p !== hostId && lent[p]).map(p => ({ key: lent[p], playerId: p }));
+    // Each player's keys, all of them: the scene rotates through them by quota
+    const theirs = players.filter(p => p !== hostId).flatMap(p => keysOfPlayer(lent, p));
     if (!theirs.length) return;
     out[group.id] = uniqueKeys([...(players.includes(hostId) ? hostKeys : []), ...theirs]);
   });
   return out;
 }
 
-/** The keys lent by these players (for the party together), as [{ key, playerId }]. */
-export const sharedLentKeys = (lent = {}, playerIds = Object.keys(lent)) =>
-  playerIds.filter(p => lent[p]).map(p => ({ key: lent[p], playerId: p }));
+/** The keys lent by these players (for the party together, all of them), as [{ key, playerId }]. */
+export const sharedLentKeys = (lent = {}, playerIds = Object.keys(lent)) => uniqueKeys(playerIds.flatMap(p => keysOfPlayer(lent, p)));
 
 /**
  * The host's keys a scene may fall back on: the ones not in its pool already

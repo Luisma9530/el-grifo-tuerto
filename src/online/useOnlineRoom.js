@@ -41,7 +41,7 @@ export const wasOnline = campaignId => Boolean(campaignId && read(HOST_KEY(campa
  * @param onDirect (direct, playerId) => void (see protocol.js applyIntent)
  */
 export function useHostRoom({ campaignId, kind, getGame, onCombat, onDirect = () => {} }) {
-  const [state, setState] = useState({ status: 'off', room: null, error: null, lenders: [], print: '' });
+  const [state, setState] = useState({ status: 'off', room: null, error: null, lenders: [], lentCounts: {}, print: '' });
   const sessionRef = useRef(null);
   // The host's signing key (to sign its offer to receive lent keys), kept with the room
   const signerRef = useRef(null);
@@ -78,14 +78,14 @@ export function useHostRoom({ campaignId, kind, getGame, onCombat, onDirect = ()
           save(next, identities);
         },
         signer: signerRef.current,
-        onLending: lenders => setState(s => ({ ...s, lenders }))
+        onLending: (lenders, lentCounts) => setState(s => ({ ...s, lenders, lentCounts }))
       });
       sessionRef.current = session;
       save(room, session.identities);
-      setState({ status: 'open', room: session.room, error: null, lenders: [], print });
+      setState({ status: 'open', room: session.room, error: null, lenders: [], lentCounts: {}, print });
     } catch (err) {
       console.error(err);
-      setState({ status: 'error', room: null, error: err?.message || 'No se pudo abrir la sala.', lenders: [], print: '' });
+      setState({ status: 'error', room: null, error: err?.message || 'No se pudo abrir la sala.', lenders: [], lentCounts: {}, print: '' });
     }
   }, [kind, campaignId, save]);
 
@@ -95,7 +95,7 @@ export function useHostRoom({ campaignId, kind, getGame, onCombat, onDirect = ()
     save(session.room, session.identities, false);
     sessionRef.current = null;
     session.close();
-    setState({ status: 'off', room: null, error: null, lenders: [], print: '' });
+    setState({ status: 'off', room: null, error: null, lenders: [], lentCounts: {}, print: '' });
   }, [save]);
 
   // Leaving the campaign closes the room (it can be reopened with the same code)
@@ -131,7 +131,7 @@ async function identityFor(code, name) {
 
 /** A player's end: enter the room `code` as `name` (hostPrint: the host's fingerprint from the link). */
 export function useGuestRoom({ code, name, kind, hostPrint = '' }) {
-  const [state, setState] = useState({ status: 'connecting', error: null, hostId: null, hostOnline: false, view: {}, notices: [], lending: { ready: false, lent: false, sending: false } });
+  const [state, setState] = useState({ status: 'connecting', error: null, hostId: null, hostOnline: false, view: {}, notices: [], lending: { ready: false, lent: 0, sending: false, mine: [] } });
   const [playerId, setPlayerId] = useState(null);
   const sessionRef = useRef(null);
 
@@ -168,7 +168,7 @@ export function useGuestRoom({ code, name, kind, hostPrint = '' }) {
     playerId,
     send: useCallback(intent => sessionRef.current?.send(intent), []),
     dismissNotice: useCallback(() => sessionRef.current?.dismissNotice(), []),
-    lendKey: useCallback(key => sessionRef.current?.lendKey(key) || Promise.resolve({ ok: false, error: 'No estás en la sala.' }), []),
-    withdrawKey: useCallback(() => sessionRef.current?.withdrawKey(), [])
+    lendKey: useCallback((key, label) => sessionRef.current?.lendKey(key, label) || Promise.resolve({ ok: false, error: 'No estás en la sala.' }), []),
+    withdrawKey: useCallback(slot => sessionRef.current?.withdrawKey(slot), [])
   };
 }

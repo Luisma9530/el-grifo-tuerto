@@ -14,6 +14,8 @@ import { sceneApiKeys, lentKeysByScene, sharedLentKeys } from '../utils/sceneKey
 const ANA_KEY = 'AIzaFAKE-ana-0000000000000000000000';
 const BEA_KEY = 'AIzaFAKE-bea-1111111111111111111111';
 const HOST_KEY = 'AIzaFAKE-host-222222222222222222222';
+// Ana has two Google accounts: a key from each
+const ANA_KEY_2 = 'AIzaFAKE-ana2-333333333333333333333';
 
 const flush = async (n = 10) => {
   for (let i = 0; i < n; i++) await new Promise(r => setTimeout(r, 0));
@@ -62,21 +64,35 @@ describe('the encryption of a lent key', () => {
   it('the intent carries only the sealed key, with its sizes checked', async () => {
     const { offer } = await createLendingOffer(await createIdentity('s'));
     const sealed = await sealKey(offer.hostKey, ANA_KEY, { code: 'A', playerId: 'p' });
-    expect(sanitizeIntent({ type: 'lend', sealed, key: ANA_KEY })).toEqual({ ok: true, intent: { type: 'lend', sealed } });
-    expect(sanitizeIntent({ type: 'lend', sealed: { ...sealed, ct: 'x'.repeat(500) } }).ok).toBe(false);
-    expect(sanitizeIntent({ type: 'lend', key: ANA_KEY }).ok).toBe(false);
-    expect(sanitizeIntent({ type: 'unlend' }).ok).toBe(true);
+    expect(sanitizeIntent({ type: 'lend', sealed, slot: 'k1-abcd', key: ANA_KEY })).toEqual({ ok: true, intent: { type: 'lend', sealed, slot: 'k1-abcd' } });
+    expect(sanitizeIntent({ type: 'lend', sealed }).ok).toBe(false); // each key needs its slot
+    expect(sanitizeIntent({ type: 'lend', sealed, slot: '<script>' }).ok).toBe(false);
+    expect(sanitizeIntent({ type: 'lend', sealed: { ...sealed, ct: 'x'.repeat(500) }, slot: 'k1-abcd' }).ok).toBe(false);
+    expect(sanitizeIntent({ type: 'lend', key: ANA_KEY, slot: 'k1-abcd' }).ok).toBe(false);
+    expect(sanitizeIntent({ type: 'unlend' })).toEqual({ ok: true, intent: { type: 'unlend' } });
+    expect(sanitizeIntent({ type: 'unlend', slot: 'k1-abcd' })).toEqual({ ok: true, intent: { type: 'unlend', slot: 'k1-abcd' } });
   });
 
   it('the vault keeps the keys in memory only, and they are secrets while held', () => {
-    const vault = createKeyVault();
-    vault.put('p_ana', ANA_KEY);
-    vault.put('p_bea', BEA_KEY);
+    const vault = createKeyVault({ maxPerPlayer: 2 });
+    expect(vault.put('p_ana', 's1', ANA_KEY)).toBe('added');
+    expect(vault.put('p_ana', 's2', ANA_KEY_2)).toBe('added');
+    expect(vault.put('p_ana', 's3', ANA_KEY)).toBe('same'); // the same key twice counts once
+    expect(vault.put('p_ana', 's4', 'AIzaFAKE-ana3-444444444444444444444')).toBe('full');
+    expect(vault.put('p_bea', 's1', BEA_KEY)).toBe('added');
     expect(containsSecret(`hola ${ANA_KEY}`)).toBe(true);
+    expect(containsSecret(`hola ${ANA_KEY_2}`)).toBe(true);
     expect(vault.lenders()).toEqual(['p_ana', 'p_bea']);
-    expect(vault.keepOnly(['p_bea'])).toBe(true);
-    expect(vault.all()).toEqual({ p_bea: BEA_KEY });
+    // What may be shared: the slots, never the keys
+    expect(vault.slots()).toEqual({ p_ana: ['s1', 's2'], p_bea: ['s1'] });
+    expect(JSON.stringify(vault.slots())).not.toContain('AIza');
+    // One key taken back: the other stays
+    expect(vault.drop('p_ana', 's1')).toBe(true);
+    expect(vault.all()).toEqual({ p_ana: [ANA_KEY_2], p_bea: [BEA_KEY] });
     expect(containsSecret(`hola ${ANA_KEY}`)).toBe(false);
+    expect(vault.keepOnly(['p_bea'])).toBe(true);
+    expect(vault.all()).toEqual({ p_bea: [BEA_KEY] });
+    expect(containsSecret(`hola ${ANA_KEY_2}`)).toBe(false);
     vault.clear();
     expect(memorySecretCount()).toBe(0);
   });
@@ -109,6 +125,7 @@ describe('lending a key in a room (local transport)', () => {
   let lenders;
   let transports;
   let sessions;
+  let signer;
   const tab = selfId => {
     const t = createLocalTransport({ code: 'ABC123', selfId, makeChannel: bus, heartbeatMs: 60_000 });
     transports.push(t);
@@ -135,7 +152,7 @@ describe('lending a key in a room (local transport)', () => {
       transport: tab('h'),
       room: createRoom({ code: 'ABC123', hostId: 'h', hostName: 'Luisma' }),
       getGame: () => ({ characterIds: ['brena', 'tobias'], names: { brena: 'Brena', tobias: 'Tobías' } }),
-      signer: await createIdentity('s'),
+      signer: (signer = await createIdentity('s')),
       onLending: ids => { lenders = ids; },
       throttleMs: 0
     });
@@ -156,14 +173,14 @@ describe('lending a key in a room (local transport)', () => {
     expect(ana.session.state.lending.ready).toBe(true);
 
     // Ana pasted her key (it is not in this browser's storage)
-    expect(await ana.session.lendKey(ANA_KEY)).toEqual({ ok: true });
+    expect(await ana.session.lendKey(ANA_KEY)).toMatchObject({ ok: true });
     await flush();
     await host.settle();
     await flush();
 
-    expect(host.lentKeys()).toEqual({ [ana.identity.id]: ANA_KEY });
+    expect(host.lentKeys()).toEqual({ [ana.identity.id]: [ANA_KEY] });
     expect(lenders).toEqual([ana.identity.id]);
-    expect(ana.session.state.lending.lent).toBe(true);
+    expect(ana.session.state.lending.lent).toBe(1);
     // The others see who lent one, never the key
     expect(bea.session.state.view.lending.lenders).toEqual([ana.identity.id]);
     expect(JSON.stringify(bea.session.state)).not.toContain(ANA_KEY);
@@ -210,8 +227,8 @@ describe('lending a key in a room (local transport)', () => {
     await flush();
     await host.settle();
     await flush();
-    expect(host.lentKeys()).toEqual({ [ana.identity.id]: ANA_KEY });
-    expect(bea.session.state.lending.lent).toBe(false);
+    expect(host.lentKeys()).toEqual({ [ana.identity.id]: [ANA_KEY] });
+    expect(bea.session.state.lending.lent).toBe(0);
 
     // Ana closes her tab: the host forgets her key
     ana.session.close();
@@ -239,7 +256,7 @@ describe('lending a key in a room (local transport)', () => {
     await flush();
     await host.settle();
     await flush();
-    expect(host.lentKeys()).toEqual({ [bea.identity.id]: BEA_KEY });
+    expect(host.lentKeys()).toEqual({ [bea.identity.id]: [BEA_KEY] });
     host.close();
     expect(host.lentKeys()).toEqual({});
     bea.session.close();
@@ -256,13 +273,88 @@ describe('lending a key in a room (local transport)', () => {
     await host.settle();
     // Eve copies Ana's sealed key from the channel and sends it signed by herself
     const anaIntent = log.map(m => JSON.parse(m)).find(m => m.d && JSON.parse(m.d).t === 'intent' && JSON.parse(JSON.parse(m.d).b).type === 'lend');
-    const sealed = JSON.parse(JSON.parse(anaIntent.d).b).sealed;
-    await eve.session.send({ type: 'lend', sealed });
+    const { sealed, slot } = JSON.parse(JSON.parse(anaIntent.d).b);
+    await eve.session.send({ type: 'lend', sealed, slot });
     await flush();
     await host.settle();
     await flush();
     expect(Object.keys(host.lentKeys())).toEqual([ana.identity.id]);
     expect(eve.session.state.notices.at(-1).text).toMatch(/no llegó bien/);
+  });
+
+  it('several keys of one player: each sealed for the host alone, counted, never in clear, and taken back one by one', async () => {
+    const ana = await guest('Ana');
+    const bea = await guest('Bea');
+    await flush();
+    expect((await ana.session.lendKey(ANA_KEY, 'Cuenta personal')).ok).toBe(true);
+    expect((await ana.session.lendKey(ANA_KEY_2, 'Cuenta del trabajo')).ok).toBe(true);
+    // The same key again is refused on her side
+    expect((await ana.session.lendKey(ANA_KEY)).ok).toBe(false);
+    await flush();
+    await host.settle();
+    await flush();
+
+    expect(host.lentKeys()).toEqual({ [ana.identity.id]: [ANA_KEY, ANA_KEY_2] });
+    expect(ana.session.state.lending.lent).toBe(2);
+    expect(ana.session.state.lending.mine.map(m => [m.label, m.confirmed])).toEqual([['Cuenta personal', true], ['Cuenta del trabajo', true]]);
+    // Bea sees how many, never which
+    expect(bea.session.state.view.lending.slots[ana.identity.id]).toHaveLength(2);
+    for (const key of [ANA_KEY, ANA_KEY_2]) {
+      expect(JSON.stringify(bea.session.state)).not.toContain(key);
+      expect(JSON.stringify(ana.session.state)).not.toContain(key);
+      expect(log.some(m => m.includes(key))).toBe(false);
+      expect(allStorage()).not.toContain(key);
+      expect(containsSecret(`x ${key}`)).toBe(true);
+    }
+    // Labels stay on Ana's screen: they never travel either
+    expect(log.some(m => m.includes('Cuenta personal'))).toBe(false);
+
+    // She takes back the first one: the second stays
+    const [first] = ana.session.state.lending.mine;
+    await ana.session.withdrawKey(first.slot);
+    await flush();
+    await host.settle();
+    await flush();
+    expect(host.lentKeys()).toEqual({ [ana.identity.id]: [ANA_KEY_2] });
+    expect(ana.session.state.lending.lent).toBe(1);
+    expect(containsSecret(`x ${ANA_KEY}`)).toBe(false);
+
+    // She leaves: the host forgets the rest
+    ana.session.close();
+    await flush();
+    expect(host.lentKeys()).toEqual({});
+    expect(containsSecret(`x ${ANA_KEY_2}`)).toBe(false);
+    bea.session.close();
+    expect(memorySecretCount()).toBe(0);
+  });
+
+  it('the host comes back: the player lends all their keys again', async () => {
+    const ana = await guest('Ana');
+    await flush();
+    await ana.session.lendKey(ANA_KEY);
+    await ana.session.lendKey(ANA_KEY_2);
+    await flush();
+    await host.settle();
+    await flush();
+    expect(host.lentKeys()[ana.identity.id]).toHaveLength(2);
+    // The host's tab reloads: a new session (the keys in memory are gone), same signing key
+    host.close();
+    await flush();
+    host = createHostSession({
+      transport: tab('h'),
+      room: createRoom({ code: 'ABC123', hostId: 'h', hostName: 'Luisma' }),
+      getGame: () => ({ characterIds: ['brena'], names: { brena: 'Brena' } }),
+      signer,
+      throttleMs: 0
+    });
+    host.publish(buildSections({ title: 'Prueba', party: { members: [] }, messages: [] }));
+    expect(host.lentKeys()).toEqual({});
+    // Ana's tab notices the host is back and lends both again
+    for (let i = 0; i < 6; i++) {
+      await flush();
+      await host.settle();
+    }
+    expect(host.lentKeys()).toEqual({ [ana.identity.id]: [ANA_KEY, ANA_KEY_2] });
   });
 
   it('a player that came by the link lends only to the host of that link', async () => {
@@ -281,11 +373,12 @@ describe('lending a key in a room (local transport)', () => {
 
 describe('which keys Duncan uses', () => {
   const host = [{ key: 'host-1' }, { key: 'host-2' }];
-  const lent = { p_ana: 'ana-k', p_bea: 'bea-k' };
+  const lent = { p_ana: ['ana-k', 'ana-k2'], p_bea: ['bea-k'] };
   const playerOf = cid => ({ brena: 'h', tobias: 'p_ana', ilsa: 'p_bea', kael: 'p_cid' }[cid]);
 
   it('together: the lent keys join the host\'s pool', () => {
-    expect(sceneApiKeys(host, { sharedKeys: sharedLentKeys(lent) }).map(k => k.key)).toEqual(['host-1', 'host-2', 'ana-k', 'bea-k']);
+    // (all of each player's keys)
+    expect(sceneApiKeys(host, { sharedKeys: sharedLentKeys(lent) }).map(k => k.key)).toEqual(['host-1', 'host-2', 'ana-k', 'ana-k2', 'bea-k']);
     expect(sceneApiKeys(host, { sharedKeys: [] })).toBe(host);
     // The same key twice counts once
     expect(sceneApiKeys(host, { sharedKeys: [{ key: 'host-1' }] }).length).toBe(2);
@@ -294,11 +387,12 @@ describe('which keys Duncan uses', () => {
   it('apart: each group uses the keys of its players; without, the host\'s', () => {
     const groups = [{ id: 'g1', memberIds: ['tobias'] }, { id: 'g2', memberIds: ['brena', 'ilsa'] }, { id: 'g3', memberIds: ['kael'] }];
     const byScene = lentKeysByScene({ groups, playerOf, lent, hostId: 'h', hostKeys: host });
-    expect(byScene.g1.map(k => k.key)).toEqual(['ana-k']);
+    // Ana apart: her two keys, rotated by quota (the host's only as a reserve, see quotaRetry.test.js)
+    expect(byScene.g1.map(k => k.key)).toEqual(['ana-k', 'ana-k2']);
     // The host plays in g2: its keys and Bea's
     expect(byScene.g2.map(k => k.key)).toEqual(['host-1', 'host-2', 'bea-k']);
     expect(byScene.g3).toBeUndefined();
-    expect(sceneApiKeys(host, { sceneId: 'g1', keysByScene: byScene }).map(k => k.key)).toEqual(['ana-k']);
+    expect(sceneApiKeys(host, { sceneId: 'g1', keysByScene: byScene }).map(k => k.key)).toEqual(['ana-k', 'ana-k2']);
     expect(sceneApiKeys(host, { sceneId: 'g3', keysByScene: byScene })).toBe(host);
   });
 

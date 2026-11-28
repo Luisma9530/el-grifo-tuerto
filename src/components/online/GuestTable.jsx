@@ -285,7 +285,7 @@ export default function GuestTable({ code, name, kind, onLeave }) {
           <div className="flex-1 min-h-0 overflow-y-auto">
             {sideTab === 'room' ? (
               <RoomPanel room={shared} me={playerId} characters={heroes} link={roomLink(shared.code, kind, undefined, room.lending?.print || hostPrint)} onIntent={send}
-                keys={{ lenders: view.lending?.lenders || [], lending: room.lending, storedKeys, onLend: room.lendKey, onWithdraw: room.withdrawKey }} />
+                keys={{ lenders: view.lending?.lenders || [], counts: Object.fromEntries(Object.entries(view.lending?.slots || {}).map(([id, list]) => [id, Array.isArray(list) ? list.length : 0])), lending: room.lending, storedKeys, onLend: room.lendKey, onWithdraw: room.withdrawKey }} />
             ) : (
               <WorldMapPanel
                 world={sceneWorldView}

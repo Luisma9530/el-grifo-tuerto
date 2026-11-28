@@ -117,28 +117,59 @@ export async function openSealedKey(privateKey, sealed, { code, playerId }) {
   }
 }
 
+/** Most keys one player may lend (one per Google account is what adds quota). */
+export const MAX_LENT_PER_PLAYER = 5;
+
+/** A slot: the name a player gives to each key they lend (random, says nothing of the key). */
+export const isSlotId = value => typeof value === 'string' && /^[\w-]{4,24}$/.test(value);
+
 /**
- * Where the host keeps the lent keys: memory only, one per player.
+ * Where the host keeps the lent keys: memory only, several per player, each in a
+ * slot named by the player (so they can take back one without the key travelling).
  * Each key held is also a secret the transport refuses to send.
  */
-export function createKeyVault() {
-  const keys = new Map(); // playerId -> key
-  const drop = id => {
-    const key = keys.get(id);
+export function createKeyVault({ maxPerPlayer = MAX_LENT_PER_PLAYER } = {}) {
+  const keys = new Map(); // playerId -> Map(slot -> key)
+  const held = () => [...keys.values()].flatMap(m => [...m.values()]);
+  const release = key => {
+    if (!held().includes(key)) forgetSecret(key);
+  };
+  const dropSlot = (id, slot) => {
+    const mine = keys.get(id);
+    const key = mine?.get(slot);
     if (key === undefined) return false;
+    mine.delete(slot);
+    if (!mine.size) keys.delete(id);
+    release(key);
+    return true;
+  };
+  const drop = id => {
+    const mine = keys.get(id);
+    if (!mine) return false;
     keys.delete(id);
-    if (![...keys.values()].includes(key)) forgetSecret(key);
+    [...mine.values()].forEach(release);
     return true;
   };
   return {
-    put(id, key) {
-      if (keys.get(id) === key) return false;
-      drop(id);
-      keys.set(id, key);
+    /**
+     * Keep a key in a player's slot.
+     * @returns 'added' | 'same' (already there) | 'full' (too many keys)
+     */
+    put(id, slot, key) {
+      const mine = keys.get(id) || new Map();
+      if (mine.get(slot) === key) return 'same';
+      // The same key in another slot of this player: one is enough
+      if ([...mine.entries()].some(([s, k]) => s !== slot && k === key)) return 'same';
+      if (!mine.has(slot) && mine.size >= maxPerPlayer) return 'full';
+      if (mine.has(slot)) dropSlot(id, slot);
+      const fresh = keys.get(id) || mine;
+      fresh.set(slot, key);
+      keys.set(id, fresh);
       rememberSecret(key);
-      return true;
+      return 'added';
     },
-    drop,
+    /** Take back one slot, or all of the player's keys without a slot. @returns whether any went */
+    drop: (id, slot = null) => (slot ? dropSlot(id, slot) : drop(id)),
     /** Keep only the keys of these players (the ones still in the room). @returns whether any went */
     keepOnly(ids) {
       const keep = new Set(ids);
@@ -147,7 +178,9 @@ export function createKeyVault() {
     clear() { [...keys.keys()].forEach(drop); },
     has: id => keys.has(id),
     lenders: () => [...keys.keys()].sort(),
-    /** { [playerId]: key } (a copy) */
-    all: () => Object.fromEntries(keys)
+    /** { [playerId]: [slot, ...] } who lent what (no keys: it can be shared) */
+    slots: () => Object.fromEntries([...keys.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([id, m]) => [id, [...m.keys()]])),
+    /** { [playerId]: [key, ...] } (a copy) */
+    all: () => Object.fromEntries([...keys.entries()].map(([id, m]) => [id, [...m.values()]]))
   };
 }

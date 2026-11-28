@@ -101,6 +101,32 @@ describe('reserva: las claves del anfitrión cuando falla la prestada de un grup
     expect(used.indexOf(HOST)).toBeGreaterThan(used.lastIndexOf(ANA));
   });
 
+  it('con varias claves prestadas, rota entre ellas antes de usar la reserva', async () => {
+    const ANA2 = 'AIzaFAKE-ana2-333333333333333333333';
+    // La primera de Ana sin cuota, la segunda responde: ni reserva ni aviso
+    const fetchMock = vi.fn().mockImplementation(async (url, init) => (init.headers['x-goog-api-key'] === ANA ? quota('5s') : ok()));
+    vi.stubGlobal('fetch', fetchMock);
+    const told = [];
+    const own = [{ key: ANA, playerId: 'p_ana' }, { key: ANA2, playerId: 'p_ana' }];
+    const res = await askWithKeyFallback(apiKeys => generateDMResponse({ playerAction: 'Miro', character, world, apiKeys, onQuotaWait: () => {}, quotaSleep: async () => {} }),
+      { keys: own, reserve: fallbackKeys(own, host), onFallback: () => told.push(1) });
+    expect(res.source).toBe('gemini');
+    expect(told).toEqual([]);
+    expect(fetchMock.mock.calls.map(keyOf)).not.toContain(HOST);
+
+    // Las dos sin cuota: entonces la del anfitrión
+    const both = vi.fn().mockImplementation(async (url, init) => (init.headers['x-goog-api-key'] === HOST ? ok() : quota('5s')));
+    vi.stubGlobal('fetch', both);
+    const res2 = await askWithKeyFallback(apiKeys => generateDMResponse({ playerAction: 'Miro', character, world, apiKeys, onQuotaWait: () => {}, quotaSleep: async () => {} }),
+      { keys: own, reserve: fallbackKeys(own, host), onFallback: () => told.push(2) });
+    expect(res2.source).toBe('gemini');
+    expect(told).toEqual([2]);
+    const used = both.mock.calls.map(keyOf);
+    expect(used).toContain(ANA);
+    expect(used).toContain(ANA2);
+    expect(used.indexOf(HOST)).toBeGreaterThan(Math.max(used.lastIndexOf(ANA), used.lastIndexOf(ANA2)));
+  });
+
   it('una clave prestada inválida también pasa a la reserva', async () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url, init) => (init.headers['x-goog-api-key'] === ANA
       ? { ok: false, status: 400, json: async () => ({ error: { message: 'API key not valid.' } }) }

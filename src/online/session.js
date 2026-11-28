@@ -16,9 +16,9 @@
 
 import { joinPlayer, setPresence, roomToSave, playerName } from './room';
 import { sanitizeIntent, applyIntent, MAX_INTENT_BYTES } from './protocol';
-import { publicOnly, sameKey, verifyText, signText, createRateLimiter } from './security';
+import { publicOnly, sameKey, verifyText, signText, createRateLimiter, randomId } from './security';
 import { changedSections, publicRoom } from './snapshot';
-import { createLendingOffer, verifyLendingOffer, sealKey, openSealedKey, createKeyVault, isPlausibleGeminiKey, keyPrint } from './keyLending';
+import { createLendingOffer, verifyLendingOffer, sealKey, openSealedKey, createKeyVault, isPlausibleGeminiKey, keyPrint, MAX_LENT_PER_PLAYER } from './keyLending';
 import { rememberSecret, forgetSecret } from './security';
 
 export const STATE_THROTTLE_MS = 300;
@@ -33,7 +33,7 @@ export const HELLO_RETRY_MS = 2000;
  * @param onDirect (direct, playerId) => void: equipment or level up of the player's own character
  * @param onChange (room, identities) => void: the room changed (to render and save it)
  * @param signer { publicJwk, privateJwk } the host's signing key (to offer key lending; without it, no lending)
- * @param onLending (lenderIds) => void: who has lent a key changed
+ * @param onLending (lenderIds, counts) => void: who has lent keys (and how many each) changed
  */
 export function createHostSession({
   transport, room: initialRoom, identities: savedIdentities = {}, getGame, onCombat = () => {}, onDirect = () => {}, onChange = () => {},
@@ -51,12 +51,13 @@ export function createHostSession({
   // Lent keys: only here, in memory (see keyLending.js)
   const vault = createKeyVault();
   let lendingOffer = null; // { privateKey, offer } once made
-  const lendingSection = () => (lendingOffer ? { ...lendingOffer.offer, lenders: vault.lenders() } : null);
+  // (who lent and the name of each slot: never the keys)
+  const lendingSection = () => (lendingOffer ? { ...lendingOffer.offer, lenders: vault.lenders(), slots: vault.slots() } : null);
   const lendingChanged = () => {
-    onLending(vault.lenders());
+    onLending(vault.lenders(), Object.fromEntries(Object.entries(vault.slots()).map(([id, list]) => [id, list.length])));
     schedule();
   };
-  // A player gone from the room (left, removed, disconnected) takes their key with them
+  // A player gone from the room (left, removed, disconnected) takes their keys with them
   const dropAbsentLenders = () => {
     const stay = Object.keys(room.players).filter(id => room.players[id]?.connected);
     if (vault.keepOnly(stay)) lendingChanged();
@@ -124,23 +125,25 @@ export function createHostSession({
     identity.seq = seq;
     const clean = sanitizeIntent(body);
     if (!clean.ok) return notice(msg.id, clean.error);
-    if (clean.intent.type === 'lend') return handleLend(msg.id, clean.intent.sealed);
+    if (clean.intent.type === 'lend') return handleLend(msg.id, clean.intent.sealed, clean.intent.slot);
     if (clean.intent.type === 'unlend') {
-      if (vault.drop(msg.id)) lendingChanged();
+      if (vault.drop(msg.id, clean.intent.slot)) lendingChanged();
       return;
     }
     apply(msg.id, clean.intent);
   };
 
   // A Gemini key lent by a player: opened here and kept only in memory
-  const handleLend = async (playerId, sealed) => {
+  const handleLend = async (playerId, sealed, slot) => {
     if (playerId === room.hostId || !room.players[playerId]?.connected) return;
     if (!lendingOffer) return notice(playerId, 'El anfitrión aún no puede recibir claves: inténtalo en unos segundos.');
     const key = await openSealedKey(lendingOffer.privateKey, sealed, { code: room.code, playerId });
     if (closed) return;
     if (!key) return notice(playerId, 'La clave no llegó bien o no parece una clave de Gemini.');
     if (!room.players[playerId]?.connected) return;
-    if (vault.put(playerId, key)) lendingChanged();
+    const put = vault.put(playerId, slot, key);
+    if (put === 'added') lendingChanged();
+    else if (put === 'full') notice(playerId, `Ya has prestado ${MAX_LENT_PER_PLAYER} claves: retira una para prestar otra.`);
   };
 
   const apply = (playerId, intent) => {
@@ -250,17 +253,25 @@ export function createHostSession({
  *     lending: { ready, lent, sending } }   ready: the host can receive a key; lent: the host holds mine
  */
 export function createGuestSession({ transport, identity, name, code = '', hostPrint = '', onChange = () => {}, helloRetryMs = HELLO_RETRY_MS }) {
-  let state = { status: 'joining', error: null, hostId: null, hostOnline: false, view: {}, notices: [], lending: { ready: false, lent: false, sending: false } };
+  let state = { status: 'joining', error: null, hostId: null, hostOnline: false, view: {}, notices: [], lending: { ready: false, lent: 0, sending: false, mine: [] } };
   let lastSeq = 0;
   let closed = false;
   let gotFull = false;
   let present = [];
   // Lending (keyLending.js): the host's signing key trusted, its verified ECDH key,
-  // and the key this player chose to lend (only in memory, to lend it again if the
-  // host reloads)
+  // and the keys this player chose to lend, each in a slot (only in memory, to lend
+  // them again if the host reloads)
   let pinned = null;
   let hostKey = null;
-  let lentKey = null;
+  let lent = []; // [{ slot, label, key }]
+  let slotCount = 0;
+  // What the screen may show: the slots and their labels, never the keys
+  const mineFrom = confirmed => lent.map(({ slot, label }) => ({ slot, label, confirmed: confirmed.includes(slot) }));
+  const confirmedSlots = view => (hostKey ? view?.lending?.slots?.[identity.id] || [] : []);
+  const lendingState = (patch = {}, view = state.view) => {
+    const confirmed = confirmedSlots(view);
+    return { ...state.lending, mine: mineFrom(confirmed), lent: confirmed.length, ...patch };
+  };
   let checking = Promise.resolve();
 
   const set = patch => {
@@ -291,7 +302,7 @@ export function createGuestSession({ transport, identity, name, code = '', hostP
       if (state.status !== 'joined') return;
       if (msg.full) gotFull = true;
       const view = { ...state.view, ...msg.s };
-      set({ view, lending: { ...state.lending, lent: Boolean(hostKey && (view.lending?.lenders || []).includes(identity.id)) } });
+      set({ view, lending: lendingState({}, view) });
       if (!gotFull) send({ t: 'sync', id: identity.id });
       if ('lending' in msg.s) checking = checking.then(() => checkOffer(msg.s.lending)).catch(err => console.error(err));
     } else if (msg.t === 'notice' && msg.to === identity.id && typeof msg.text === 'string') {
@@ -303,7 +314,7 @@ export function createGuestSession({ transport, identity, name, code = '', hostP
     if (closed) return;
     if (!offer) {
       hostKey = null;
-      set({ lending: { ...state.lending, ready: false, lent: false } });
+      set({ lending: lendingState({ ready: false }) });
       return;
     }
     const ok = await verifyLendingOffer(offer, { pinned, print: hostPrint });
@@ -314,20 +325,23 @@ export function createGuestSession({ transport, identity, name, code = '', hostP
     pinned = ok.signKey;
     const renewed = !hostKey || hostKey.x !== ok.hostKey.x || hostKey.y !== ok.hostKey.y;
     hostKey = ok.hostKey;
-    const lent = (offer.lenders || []).includes(identity.id);
-    set({ lending: { ...state.lending, ready: true, lent } });
-    // The host came back with a new room session: lend it again (the player had chosen to)
-    if (renewed && lentKey && !lent) await sendKey(lentKey);
+    set({ lending: lendingState({ ready: true }) });
+    // The host came back with a new room session: lend them again (the player had chosen to)
+    const held = offer.slots?.[identity.id] || [];
+    if (renewed) {
+      for (const item of lent.filter(l => !held.includes(l.slot))) await sendKey(item);
+    }
   };
-  const sendKey = async key => {
+  const sendKey = async ({ slot, key }) => {
     set({ lending: { ...state.lending, sending: true } });
     try {
       const sealed = await sealKey(hostKey, key, { code, playerId: identity.id });
-      return await signedSend({ type: 'lend', sealed });
+      return await signedSend({ type: 'lend', sealed, slot });
     } finally {
       set({ lending: { ...state.lending, sending: false } });
     }
   };
+  const newSlot = () => `k${++slotCount}-${randomId('s').slice(2, 10)}`;
   const signedSend = async intent => {
     if (closed || state.status !== 'joined') return false;
     lastSeq = Math.max(Date.now(), lastSeq + 1);
@@ -356,34 +370,38 @@ export function createGuestSession({ transport, identity, name, code = '', hostP
     /** Send an intent to the host, signed. */
     send: intent => signedSend(intent),
     /**
-     * Lend a Gemini key to the host for this session (encrypted for the host alone).
-     * @returns {Promise<{ ok: boolean, error?: string }>}
+     * Lend one more Gemini key to the host for this session (encrypted for the host alone).
+     * @param label how this player calls it on their screen (never sent)
+     * @returns {Promise<{ ok: boolean, error?: string, slot?: string }>}
      */
-    async lendKey(key) {
+    async lendKey(key, label = '') {
       if (!isPlausibleGeminiKey(key)) return { ok: false, error: 'Eso no parece una clave de Gemini.' };
       await checking;
       if (!hostKey) return { ok: false, error: 'El anfitrión aún no puede recibir claves.' };
       const clean = key.trim();
-      if (lentKey !== clean) {
-        if (lentKey) forgetSecret(lentKey);
-        rememberSecret(clean);
-        lentKey = clean;
-      }
-      const sent = await sendKey(clean);
-      return sent ? { ok: true } : { ok: false, error: 'No estás en la sala.' };
+      if (lent.some(l => l.key === clean)) return { ok: false, error: 'Esa clave ya la has prestado.' };
+      if (lent.length >= MAX_LENT_PER_PLAYER) return { ok: false, error: `Como mucho ${MAX_LENT_PER_PLAYER} claves por jugador.` };
+      const item = { slot: newSlot(), label: String(label || `Clave ${lent.length + 1}`).slice(0, 40), key: clean };
+      rememberSecret(clean);
+      lent = [...lent, item];
+      set({ lending: lendingState() });
+      const sent = await sendKey(item);
+      return sent ? { ok: true, slot: item.slot } : { ok: false, error: 'No estás en la sala.' };
     },
-    /** Take the key back: the host forgets it. */
-    async withdrawKey() {
-      if (lentKey) forgetSecret(lentKey);
-      lentKey = null;
-      return signedSend({ type: 'unlend' });
+    /** Take back one key (its slot), or all of them without a slot: the host forgets them. */
+    async withdrawKey(slot = null) {
+      const going = slot ? lent.filter(l => l.slot === slot) : lent;
+      going.forEach(l => forgetSecret(l.key));
+      lent = lent.filter(l => !going.includes(l));
+      set({ lending: lendingState() });
+      return signedSend(slot ? { type: 'unlend', slot } : { type: 'unlend' });
     },
     dismissNotice() { set({ notices: state.notices.slice(1) }); },
     close() {
       if (closed) return;
       closed = true;
-      if (lentKey) forgetSecret(lentKey);
-      lentKey = null;
+      lent.forEach(l => forgetSecret(l.key));
+      lent = [];
       clearInterval(retry);
       offMessage();
       offPresence();

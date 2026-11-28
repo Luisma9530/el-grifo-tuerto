@@ -432,7 +432,8 @@ export default function TavernApp({
       });
       // A group apart playing with its players' lent keys: if those fail, the host's keep it going
       const reserveKeys = onlineRoom && group && duncanKeys !== currentKeys ? fallbackKeys(duncanKeys, currentKeys) : [];
-      const lenderNames = joinNames([...new Set(duncanKeys.map(k => k.playerId).filter(Boolean))].map(id => playerName(onlineRoom, id)));
+      const lentHere = duncanKeys.filter(k => k.playerId);
+      const lenderNames = joinNames([...new Set(lentHere.map(k => k.playerId))].map(id => playerName(onlineRoom, id)));
 
       // A plain action outside combat may start a fight: Duncan gets a short list of creatures
       const mayStartFight = !encounter && !combatResult && !playerRoll && !spellCast && !rest && !weaponAttack && !meeting && !checkIntent;
@@ -505,7 +506,7 @@ export default function TavernApp({
       }), {
         keys: duncanKeys,
         reserve: reserveKeys,
-        onFallback: () => pushSystemMessage(`🔑 La clave de ${lenderNames || 'tu grupo'} no responde ahora (sin cuota o con un error): Duncan sigue con las del anfitrión.`)
+        onFallback: () => pushSystemMessage(`🔑 ${lentHere.length > 1 ? 'Las claves' : 'La clave'} de ${lenderNames || 'tu grupo'} no ${lentHere.length > 1 ? 'responden' : 'responde'} ahora (sin cuota o con un error): Duncan sigue con las del anfitrión.`)
       });
       // A fight starts: the game resolves it, so nothing from this reply touches the sheet
       const fightGroups = response.combat && bestiaryModule
@@ -1367,6 +1368,7 @@ export default function TavernApp({
   const room = online.status === 'open' ? online.room : null;
   roomRef.current = room;
   lentKeysRef.current = online.lentKeys;
+  const lentTotal = Object.values(online.lentCounts || {}).reduce((a, b) => a + b, 0);
   const [isRoomOpen, setIsRoomOpen] = useState(false);
   const [onlineNotice, setOnlineNotice] = useState(null);
   const [chatSeen, setChatSeen] = useState(0);
@@ -1850,7 +1852,7 @@ export default function TavernApp({
               world={world}
               onSendAction={act.send}
               onOpenGeminiConnect={onOpenGeminiConnect}
-              keysCount={geminiKeys.length + online.lenders.length}
+              keysCount={geminiKeys.length + lentTotal}
               onDiceRoll={handleDiceRollToChat}
               onQuickCheck={act.quickCheck}
               actors={hostActors}
@@ -1920,11 +1922,12 @@ export default function TavernApp({
           link={room ? roomLink(room.code, onlineKind, undefined, online.print) : ''}
           keys={room ? {
             lenders: online.lenders,
+            counts: online.lentCounts,
             hostKeysCount: geminiKeys.length,
             // While the party is apart: which keys each group's scene uses (see sceneKeys.js)
             scenes: isSplit(party) ? groupsOf(party).map(g => {
               const own = lentKeysByScene({
-                groups: [g], playerOf: cid => controllerOf(room, cid), lent: Object.fromEntries(online.lenders.map(id => [id, id])), hostId: room.hostId
+                groups: [g], playerOf: cid => controllerOf(room, cid), lent: Object.fromEntries(online.lenders.map(id => [id, `${id}`])), hostId: room.hostId
               })[g.id] || [];
               return { id: g.id, label: groupNames(party, g), lenderIds: own.map(k => k.playerId), withHost: own.length > 0 && g.memberIds.some(cid => controllerOf(room, cid) === room.hostId) && geminiKeys.length > 0 };
             }) : null
